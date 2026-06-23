@@ -1,0 +1,132 @@
+================================================================================
+WHAT GETS REPLAYED VIA THE MASK-OVERLAP QUERY?
+  Investigation of train.py (DDPG) and train_grid_dqn_async.py (DQN)
+================================================================================
+
+SHORT ANSWER
+------------
+Yes — the FTN component DOES do mask-overlap-filtered replay in both files.
+
+The unit that gets replayed is the INDIVIDUAL TRANSITION TUPLE
+(s, a, r, s', done), sampled uniformly at random.
+
+It is NOT episodes, NOT complete episodes, and NOT "complete episodes where
+reward was observed." It is a flat pool of single transitions, drawn from the
+ENTIRE task phase — including failed exploration episodes — with episode
+boundaries discarded (they survive only implicitly as the `done` column).
+
+So of your multiple-choice options, the answer is:
+  -> "batches of tuples but not necessarily complete episodes"
+and additionally, the pool those tuples come from is everything collected
+during the task (exploration successes AND failures AND all exploitation
+episodes), not a reward-filtered subset.
+
+
+WHERE THE MECHANISM LIVES
+-------------------------
+DDPG (train.py):
+  - Buffer:        MaskedReplayBufferDDPG          (lines 373-488)
+  - Query:         sample_filtered(...)            (lines 455-488)
+  - Archive:       archive_phase(m_a, m_c)         (lines 438-453)
+  - Called from:   main loop                       (lines 1020-1036, 1071)
+
+DQN async (train_grid_dqn_async.py):
+  - Buffer:        MaskedReplayBufferDQN           (lines 283-399)
+  - Query:         sample_filtered(...)            (lines 371-399)
+  - Archive:       archive_phase(m)                (lines 356-369)
+  - Called from:   main loop                       (lines 953-967, 1006)
+
+The two are structurally identical; DDPG carries two masks per phase
+(actor m_a, critic m_c), DQN carries one (m).
+
+
+HOW DATA IS STORED, STEP BY STEP
+--------------------------------
+1. At the start of each task phase, the current-phase ring buffer is wiped:
+      replay.clear_current()
+   (train.py:946 / async:900). This only resets ptr/size; the underlying
+   arrays are reused.
+
+2. EVERY episode collected during the phase is flattened transition-by-
+   transition into that ring buffer via add_episode():
+     - All EXPLORATION episodes — successful AND unsuccessful — are pushed
+       (train.py:997-998 / async:934-936).
+     - All K EXPLOITATION episodes are pushed, regardless of outcome
+       (train.py:1008-1009 / async:945-947).
+   _collect_episode / _collect_episode_dqn store every step of the rollout;
+   the per-episode `success` flag is recorded but is NOT used to gate storage
+   (train.py:687-711 / async:580-609). There is no reward/success filtering of
+   what enters the buffer.
+
+3. add_episode() does a bulk copy of the episode's (obs, act, rew, next_obs,
+   done) arrays into the ring buffer (train.py:392-422 / async:309-340). Once
+   in the buffer, transitions are an undifferentiated flat pool — episode
+   identity is gone. The only residue of episode structure is the `done`
+   column (1.0 on the last step of each episode).
+
+4. At phase end, archive_phase() snapshots the WHOLE current ring buffer
+   (self.obs[:size], etc.) as a single "past phase" record, tagged with the
+   mask(s) that were active AT ARCHIVE TIME — i.e. the final mask of the phase
+   (train.py:438-453 / async:356-369). A stacked tensor of all past-phase
+   masks is cached for vectorized overlap.
+
+
+HOW THE QUERY SELECTS WHAT TO REPLAY
+------------------------------------
+During exploitation, after each ordinary DDPG/DQN update, the code does
+mask_replay_n_per_step extra updates on past data (train.py:1024-1036 /
+async:957-967). Each call to sample_filtered:
+
+  a) Computes overlap rho between the CURRENT mask and each archived phase's
+     mask:   rho = (m_past * m_cur).sum() / m_cur.sum()
+     (fraction of the current active neurons that the past phase also used).
+     DDPG computes this for both actor and critic.
+
+  b) Keeps a phase as a candidate iff rho in (rho_low, rho_high]
+     (defaults 0.2, 0.8). DDPG keeps a phase if EITHER actor OR critic mask
+     overlaps in-range (train.py:469-471 / async:382).
+
+  c) Picks ONE qualifying phase at random, then samples `n` transitions
+     UNIFORMLY AT RANDOM from that phase's entire transition pool
+     (train.py:476-487 / async:387-398).
+
+  d) Returns (batch, m_old [+ m_c_old]) so the replay gradient step is run
+     under the OLD phase's mask, not the current one
+     (train.py:1036 / async:967).
+
+So a single replay step = n random transitions from one partially-overlapping
+past task, evaluated under that task's stored mask.
+
+
+CAVEATS / THINGS YOU MAY OR MAY NOT HAVE INTENDED
+-------------------------------------------------
+* MASK/DATA MISMATCH WITHIN A PHASE. archive_phase tags the buffer with the
+  FINAL phase mask only. But the buffer also holds transitions collected under
+  earlier masks: the exploration episodes (collected under the prior/exploration
+  mask, before the boundary reconfig at train.py:983) and any transitions from
+  before each mid-phase reconfig (train.py:1052 / async:991, reconfig_every_trials).
+  All of these are later replayed as if collected under the single final mask.
+  If reconfig moves the mask much during a phase, the stored (transitions, mask)
+  pairing is approximate.
+
+* NO REWARD FILTERING. Failed exploration rollouts (which can be the large
+  majority — exploration runs until only n_successful_explore rewards) are
+  stored and replayed with equal weight to successful ones. If you wanted the
+  cross-task replay to consolidate *competent* behavior, it currently does not;
+  it replays the whole behavioral mixture of the past task.
+
+* RING-BUFFER TRUNCATION. The archive is a snapshot of the ring buffer, capped
+  at replay_capacity. If a phase's total steps exceed capacity, the earliest
+  transitions are overwritten before archiving, so the archive holds only the
+  most recent <=capacity transitions of that phase. DDPG capacity is 200k
+  (unlikely to bite); the DQN grid episodes are short, also unlikely. Worth
+  knowing it's "last N transitions of the phase," not "all of them," in the
+  limit.
+
+* `done` INCLUDES TRUNCATION. d_buf stores float(term or trunc)
+  (async:595; same pattern in train.py). Truncated-but-not-terminal final steps
+  are marked done=1, which zeros the bootstrap term in the TD target for those
+  transitions. Standard DDPG/DQN subtlety, independent of the replay question,
+  but it rides along in every replayed batch.
+
+================================================================================

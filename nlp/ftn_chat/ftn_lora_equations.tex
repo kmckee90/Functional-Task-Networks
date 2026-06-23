@@ -1,0 +1,100 @@
+% ============================================================
+%  FTN-LoRA: prompt-perplexity-routed LoRA atom bank
+%  Transcribed from model.py / lora_bank.py / perplexity_configurer.py
+%  / spatial.py / train.py
+% ============================================================
+
+% ---- Notation ----------------------------------------------
+% Frozen backbone phi (Qwen2.5-7B-Instruct), params theta frozen.
+% Bank attached to every target linear l in {q,k,v,o,up,gate,down}_proj.
+% H = g^2 atoms on a g x g grid (g = grid_dim = 48, H = 2304).
+% k active atoms (k = 128), rank r (=1), scale alpha (=16).
+
+\newcommand{\kwta}{\mathrm{kWTA}_k}
+\newcommand{\sg}{\mathrm{sg}}        % stop-gradient
+\newcommand{\softmax}{\mathrm{softmax}}
+
+% ---- 1. Banked-LoRA layer (BankedLinear.forward) -----------
+% Per target linear l: frozen W_l in R^{out x in}, atom bank
+% A_l in R^{H x in x r}, B_l in R^{H x r x out}, shared mask m.
+\begin{equation}
+  y_\ell \;=\; W_\ell\, x \;+\; \frac{\alpha}{k}
+  \sum_{j=1}^{H} m_j \,\bigl(\,\mathrm{drop}(x)^{\!\top} A_{\ell,j}\,\bigr)\, B_{\ell,j},
+  \qquad m \in \{0,1\}^{H},\ \ \|m\|_1 = k .
+\end{equation}
+% Equivalently, with the live active set S(m) = { j : m_j = 1 }:
+\begin{equation}
+  y_\ell \;=\; W_\ell\, x \;+\; \frac{\alpha}{k}
+  \sum_{j \in S(m)} \bigl(\mathrm{drop}(x)^{\!\top} A_{\ell,j}\bigr) B_{\ell,j}.
+\end{equation}
+% The frozen backbone shares one mask m across all layers l, so a
+% single selection drives the whole model.
+
+% ---- 2. k-winners-take-all (spatial.kwta) ------------------
+\begin{equation}
+  \bigl[\kwta(z)\bigr]_j \;=\;
+  \begin{cases}
+    1, & j \in \mathrm{Top}\text{-}k(z) \\
+    0, & \text{otherwise.}
+  \end{cases}
+\end{equation}
+
+% ---- 3. Prompt-perplexity reconfiguration ------------------
+% (PerplexityConfigurer.iterate) -- the core routing mechanism.
+% Given prompt tokens u = (u_1,...,u_T), optimise mask logits z in R^H
+% to MINIMISE the self-supervised next-token NLL, theta and {A,B} frozen.
+\begin{equation}
+  \mathcal{L}_{\mathrm{ppl}}(m) \;=\;
+  -\frac{1}{T}\sum_{t=1}^{T} \log p_{\theta,\,m}\!\bigl(u_t \mid u_{<t}\bigr).
+\end{equation}
+
+% AnnealSTE inner loop, step s = 0,...,N-1 (only z receives gradient):
+\begin{align}
+  \tau_s      &= \operatorname{std}(z)\cdot \exp\!\Bigl(-\,s \big/ \tfrac{N}{4}\Bigr),
+                 &\varepsilon_s &\sim \mathcal{N}(0,\tau_s^2 I), \\
+  m_s         &= \kwta(z + \varepsilon_s) \;+\; \sigma(z) - \sg\!\bigl(\sigma(z)\bigr),
+                 &&\text{(hard forward, straight-through grad)}\\
+  z           &\leftarrow z - \eta\,\mathrm{Adam}\!\bigl(\nabla_z \mathcal{L}_{\mathrm{ppl}}(m_s)\bigr),
+\end{align}
+% with the best hard mask kept by NLL:
+\begin{equation}
+  m^\star = \kwta(z_{s^\star}), \qquad
+  s^\star = \argmin_{s} \mathcal{L}_{\mathrm{ppl}}\!\bigl(\kwta(z_s)\bigr).
+\end{equation}
+% Optional warm start (mid-rollout): z_0 = a\, m_{\text{init}} + b\,\xi, \xi ~ N(0,I).
+
+% ---- 4. Lateral smoothing -> contiguous blobs --------------
+% Atoms reshaped to the g x g grid; C is a fixed 3x3 box conv
+% (circular padding iff torus). Iterate n_lat times then re-kWTA:
+\begin{align}
+  m &\leftarrow \rho\, m + (1-\rho)\,\mathrm{vec}\!\bigl(C * \mathrm{grid}(m)\bigr),
+     \qquad t = 1,\dots,n_{\mathrm{lat}}, \\
+  m_{\mathrm{final}} &= \kwta(m).
+\end{align}
+
+% ---- 5. Per-task reference mask (build_ref_and_buffer) -----
+% Accumulate masks over the support reconfigs of task c, then kWTA:
+\begin{equation}
+  m^{\mathrm{ref}}_c \;=\; \kwta\!\Bigl( \textstyle\sum_{e \in \mathrm{supp}(c)} m_e \Bigr),
+  \qquad
+  o(m, m') = \frac{\langle m, m'\rangle}{k} \in [0,1].
+\end{equation}
+
+% ---- 6. Continual training objective (train_block) ---------
+% Block-sequential: for task c, freeze theta; for each batch B_c first
+% reconfigure m on one random member's prompt (Sec. 3), then update
+% ONLY the active atoms on the causal-LM loss. m_j = 0 zeroes atom j's
+% contribution => its gradient is 0, so untouched atoms are protected.
+\begin{equation}
+  \min_{A,B}\;
+  \underbrace{\frac{1}{|B_c|}\sum_{(u,y)\in B_c} \mathrm{CE}\bigl(y, p_{\theta,m}(\cdot\mid u)\bigr)}_{\text{current task, under fixed }m}
+  \;+\;
+  \mathbb{1}[r<p_{\mathrm{rep}}]\cdot
+  \underbrace{\mathrm{CE}\bigl(y', p_{\theta,m'}(\cdot\mid u')\bigr)}_{\text{replayed prior example, under its stored }m'} .
+\end{equation}
+% Replay candidates are filtered to mid-band mask overlap with the
+% current selection (the retention mechanism):
+\begin{equation}
+  (u', y', m')\ \text{drawn from prior buffers with}\quad
+  0.1 \;<\; o(m', m) \;\le\; 0.8 .
+\end{equation}

@@ -1,0 +1,171 @@
+\begin{thebibliography}{24}
+\providecommand{\natexlab}[1]{#1}
+\providecommand{\url}[1]{\texttt{#1}}
+\expandafter\ifx\csname urlstyle\endcsname\relax
+  \providecommand{\doi}[1]{doi: #1}\else
+  \providecommand{\doi}{doi: \begingroup \urlstyle{rm}\Url}\fi
+
+\bibitem[Abati et~al.(2020)Abati, Tomczak, Blankevoort, Calderara, Cucchiara,
+  and Bejnordi]{abati2020conditional}
+Abati, D., Tomczak, J., Blankevoort, T., Calderara, S., Cucchiara, R., and
+  Bejnordi, B.~E.
+\newblock Conditional channel gated networks for task-aware continual learning.
+\newblock In \emph{IEEE/CVF Conference on Computer Vision and Pattern
+  Recognition (CVPR)}, 2020.
+
+\bibitem[Amari(1977)]{amari1977dynamics}
+Amari, S.-i.
+\newblock Dynamics of pattern formation in lateral-inhibition type neural
+  fields.
+\newblock \emph{Biological Cybernetics}, 27\penalty0 (2):\penalty0 77--87,
+  1977.
+
+\bibitem[Bengio et~al.(2013)Bengio, L{\'e}onard, and
+  Courville]{bengio2013estimating}
+Bengio, Y., L{\'e}onard, N., and Courville, A.
+\newblock Estimating or propagating gradients through stochastic neurons for
+  conditional computation.
+\newblock \emph{arXiv preprint arXiv:1308.3432}, 2013.
+
+\bibitem[Beniaguev et~al.(2021)Beniaguev, Segev, and
+  London]{beniaguev2021single}
+Beniaguev, D., Segev, I., and London, M.
+\newblock Single cortical neurons as deep artificial neural networks.
+\newblock \emph{Neuron}, 109\penalty0 (17):\penalty0 2727--2739, 2021.
+
+\bibitem[Chaudhry et~al.(2019)Chaudhry, Ranzato, Rohrbach, and
+  Elhoseiny]{chaudhry2018efficient}
+Chaudhry, A., Ranzato, M., Rohrbach, M., and Elhoseiny, M.
+\newblock Efficient lifelong learning with a-{GEM}.
+\newblock In \emph{International Conference on Learning Representations
+  (ICLR)}, 2019.
+
+\bibitem[Fedus et~al.(2022)Fedus, Zoph, and Shazeer]{fedus2022switch}
+Fedus, W., Zoph, B., and Shazeer, N.
+\newblock Switch transformers: Scaling to trillion parameter models with simple
+  and efficient sparsity.
+\newblock \emph{Journal of Machine Learning Research}, 23:\penalty0 1--39,
+  2022.
+
+\bibitem[French(1999)]{french1999catastrophic}
+French, R.~M.
+\newblock Catastrophic forgetting in connectionist networks.
+\newblock \emph{Trends in cognitive sciences}, 3\penalty0 (4):\penalty0
+  128--135, 1999.
+
+\bibitem[Gururangan et~al.(2020)Gururangan, Marasovi{\'c}, Swayamdipta, Lo,
+  Beltagy, Downey, and Smith]{gururangan2020dontstop}
+Gururangan, S., Marasovi{\'c}, A., Swayamdipta, S., Lo, K., Beltagy, I.,
+  Downey, D., and Smith, N.~A.
+\newblock Don't stop pretraining: Adapt language models to domains and tasks.
+\newblock In \emph{Annual Meeting of the Association for Computational
+  Linguistics (ACL)}, 2020.
+
+\bibitem[Hu et~al.(2022)Hu, Shen, Wallis, Allen-Zhu, Li, Wang, Wang, and
+  Chen]{hu2022lora}
+Hu, E.~J., Shen, Y., Wallis, P., Allen-Zhu, Z., Li, Y., Wang, S., Wang, L., and
+  Chen, W.
+\newblock {LoRA}: Low-rank adaptation of large language models.
+\newblock In \emph{International Conference on Learning Representations
+  (ICLR)}, 2022.
+
+\bibitem[Jang et~al.(2017)Jang, Gu, and Poole]{jang2017categorical}
+Jang, E., Gu, S., and Poole, B.
+\newblock Categorical reparameterization with gumbel-softmax.
+\newblock In \emph{International Conference on Learning Representations
+  (ICLR)}, 2017.
+
+\bibitem[Lopez-Paz \& Ranzato(2017)Lopez-Paz and Ranzato]{lopez2017gradient}
+Lopez-Paz, D. and Ranzato, M.
+\newblock Gradient episodic memory for continual learning.
+\newblock \emph{Advances in neural information processing systems}, 30, 2017.
+
+\bibitem[Maass(2000)]{maass2000computational}
+Maass, W.
+\newblock On the computational power of winner-take-all.
+\newblock \emph{Neural computation}, 12\penalty0 (11):\penalty0 2519--2535,
+  2000.
+
+\bibitem[Maddison et~al.(2017)Maddison, Mnih, and Teh]{maddison2017concrete}
+Maddison, C.~J., Mnih, A., and Teh, Y.~W.
+\newblock The concrete distribution: A continuous relaxation of discrete random
+  variables.
+\newblock In \emph{International Conference on Learning Representations
+  (ICLR)}, 2017.
+
+\bibitem[Mallya \& Lazebnik(2018)Mallya and Lazebnik]{mallya2018packnet}
+Mallya, A. and Lazebnik, S.
+\newblock Packnet: Adding multiple tasks to a single network by iterative
+  pruning.
+\newblock In \emph{IEEE Conference on Computer Vision and Pattern Recognition
+  (CVPR)}, 2018.
+
+\bibitem[McCloskey \& Cohen(1989)McCloskey and
+  Cohen]{mccloskey1989catastrophic}
+McCloskey, M. and Cohen, N.~J.
+\newblock Catastrophic interference in connectionist networks: The sequential
+  learning problem.
+\newblock \emph{Psychology of learning and motivation}, 24:\penalty0 109--165,
+  1989.
+
+\bibitem[Mink(1996)]{mink1996basal}
+Mink, J.~W.
+\newblock The basal ganglia: focused selection and inhibition of competing
+  motor programs.
+\newblock \emph{Progress in Neurobiology}, 50\penalty0 (4):\penalty0 381--425,
+  1996.
+
+\bibitem[O'Reilly \& Frank(2006)O'Reilly and Frank]{oreilly2006making}
+O'Reilly, R.~C. and Frank, M.~J.
+\newblock Making working memory work: A computational model of learning in the
+  prefrontal cortex and basal ganglia.
+\newblock \emph{Neural Computation}, 18\penalty0 (2):\penalty0 283--328, 2006.
+
+\bibitem[Poirazi et~al.(2003)Poirazi, Brannon, and Mel]{poirazi2003pyramidal}
+Poirazi, P., Brannon, T., and Mel, B.~W.
+\newblock Pyramidal neuron as two-layer neural network.
+\newblock \emph{Neuron}, 37\penalty0 (6):\penalty0 989--999, 2003.
+
+\bibitem[Rusu et~al.(2016)Rusu, Rabinowitz, Desjardins, Soyer, Kirkpatrick,
+  Kavukcuoglu, Pascanu, and Hadsell]{rusu2016progressive}
+Rusu, A.~A., Rabinowitz, N.~C., Desjardins, G., Soyer, H., Kirkpatrick, J.,
+  Kavukcuoglu, K., Pascanu, R., and Hadsell, R.
+\newblock Progressive neural networks.
+\newblock \emph{arXiv preprint arXiv:1606.04671}, 2016.
+
+\bibitem[Schultz et~al.(1997)Schultz, Dayan, and Montague]{schultz1997neural}
+Schultz, W., Dayan, P., and Montague, P.~R.
+\newblock A neural substrate of prediction and reward.
+\newblock \emph{Science}, 275\penalty0 (5306):\penalty0 1593--1599, 1997.
+
+\bibitem[Serra et~al.(2018)Serra, Suris, Miron, and
+  Karatzoglou]{serra2018overcoming}
+Serra, J., Suris, D., Miron, M., and Karatzoglou, A.
+\newblock Overcoming catastrophic forgetting with hard attention to the task.
+\newblock In \emph{International Conference on Machine Learning}, pp.\
+  4548--4557. PMLR, 2018.
+
+\bibitem[Shazeer et~al.(2017)Shazeer, Mirhoseini, Maziarz, Davis, Le, Hinton,
+  and Dean]{shazeer2017outrageously}
+Shazeer, N., Mirhoseini, A., Maziarz, K., Davis, A., Le, Q., Hinton, G., and
+  Dean, J.
+\newblock Outrageously large neural networks: The sparsely-gated
+  mixture-of-experts layer.
+\newblock \emph{ICLR}, 2017.
+
+\bibitem[Wortsman et~al.(2020)Wortsman, Ramanujan, Liu, Kembhavi, Rastegari,
+  Yosinski, and Farhadi]{wortsman2020supermasks}
+Wortsman, M., Ramanujan, V., Liu, R., Kembhavi, A., Rastegari, M., Yosinski,
+  J., and Farhadi, A.
+\newblock Supermasks in superposition.
+\newblock \emph{Advances in Neural Information Processing Systems},
+  33:\penalty0 15173--15184, 2020.
+
+\bibitem[Y{\i}ld{\i}z et~al.(2024)Y{\i}ld{\i}z, Ravichandran, Bhat,
+  et~al.]{yildiz2024investigating}
+Y{\i}ld{\i}z, {\c{C}}., Ravichandran, N., Bhat, A., et~al.
+\newblock Investigating continual pretraining in large language models:
+  Insights and implications.
+\newblock \emph{arXiv preprint arXiv:2402.17400}, 2024.
+
+\end{thebibliography}

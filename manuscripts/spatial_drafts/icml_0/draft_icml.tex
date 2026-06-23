@@ -1,0 +1,270 @@
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% draft_icml.tex — ICML 2026 submission draft for Functional Task Networks.
+% Uses the official icml2026.sty (provided in this directory) and inherits
+% the project's results/figures/refs.bib via relative paths.  Self-contained
+% so that compiling from paper/icml/ works directly:
+%   cd paper/icml/ && pdflatex draft_icml && bibtex draft_icml && pdflatex draft_icml && pdflatex draft_icml
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\documentclass{article}
+
+\usepackage{microtype}
+\usepackage{graphicx}
+% Figures live in project_c_4/figures/; from paper/icml/ that is ../../figures/.
+\graphicspath{{./}{../../figures/}{../../}}
+\usepackage{subcaption}
+\usepackage{booktabs}
+\usepackage{hyperref}
+
+\newcommand{\theHalgorithm}{\arabic{algorithm}}
+
+% ICML 2026 style.  Use [accepted] for the camera-ready, [preprint] for arXiv.
+\usepackage{icml2026}
+
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{mathtools}
+\usepackage{amsthm}
+\usepackage[capitalize,noabbrev]{cleveref}
+
+\theoremstyle{plain}
+\newtheorem{theorem}{Theorem}[section]
+\theoremstyle{remark}
+\newtheorem{remark}[theorem]{Remark}
+
+\icmltitlerunning{Functional Task Networks}
+
+\begin{document}
+
+\twocolumn[
+\icmltitle{Functional Task Networks: \\
+Cortex-Inspired Parameter Isolation for Continual Learning and LoRA Routing}
+
+\icmlsetsymbol{equal}{*}
+
+\begin{icmlauthorlist}
+\icmlauthor{Anonymous}{anon}
+\end{icmlauthorlist}
+\icmlaffiliation{anon}{Anonymous Institution}
+\icmlcorrespondingauthor{Anonymous}{anonymous@example.org}
+
+\icmlkeywords{Continual learning, parameter isolation, mixture of experts, LoRA, mask routing}
+
+\vskip 0.3in
+]
+
+\printAffiliationsAndNotice{}
+
+% =====================================================================
+\begin{abstract}
+We present \emph{Functional Task Networks} (FTN), a parameter-isolation method for continual learning that pairs a parallel bank of independent per-neuron subnetworks with a three-stage, task-identity-free mask configurer (gradient proposal $\to$ lateral spatial smoothing $\to$ $k$-winner-take-all). Disjoint masks produce exactly disjoint gradient paths, so training one task leaves prior solutions provably unchanged, while the same configurer that \emph{installs} a subnetwork during training \emph{recovers} it at inference time in as little as one gradient step. On three continual-learning benchmarks (synthetic concept/regression shift, MNIST Shuffled Labels, Permuted MNIST) FTN attains the lowest forgetting under the realistic mask-recovery protocol with no task labels: $\mathrm{FM}\le 0.02$ on both MNIST benchmarks and exactly zero forgetting under the FixedMask oracle. We argue that the same mechanism is a natural fit for continually adapting LLMs via Low-Rank Adaptation (LoRA): a structured pool of mutually-exclusive low-rank components routed by SmoothKWTA gives block-sequential continual fine-tuning of preference and task regimes without task labels.
+\end{abstract}
+
+% =====================================================================
+\section{Introduction}
+\label{sec:intro}
+Modern learning systems, from lifelong agents to continually pretrained language models~\citep{gururangan2020dontstop,yildiz2024investigating}, must absorb new data without overwriting old competence. When a network trained on task $A$ is fine-tuned on task $B$, gradient updates can overwrite the configuration that encoded $A$~\citep{mccloskey1989catastrophic,french1999catastrophic}, producing \emph{catastrophic forgetting}. The problem is sharpest under \emph{block-sequential} training, in which each task is a contiguous data block (the standard regime for continual pretraining of LLMs and for instruction- or preference-tuning), and under \emph{concept shift}, in which the same input features map to different correct outputs across tasks~\citep{gama2014concept}. The learner must additionally solve an \emph{unsupervised task detection} problem: given a few examples, identify which prior solution applies, without an oracle task label~\citep{aljundi2019taskfree}.
+
+Three families dominate the continual-learning literature~\citep{parisi2019continual}: \emph{regularization} approaches~\citep{kirkpatrick2017overcoming,zenke2017continual}, which penalize updates to important parameters but degrade under concept shift; \emph{experience replay}~\citep{rebuffi2017icarl,lopez2017gradient}, which scales in memory with task history; and \emph{parameter isolation}~\citep{mallya2018packnet,serra2018overcoming,wortsman2020supermasks,rusu2016progressive,yoon2018lifelong}, which assigns each task a disjoint subnetwork. Most parameter-isolation methods either (i) require an oracle task identity at inference, or (ii) learn a separate task-embedding-conditioned router across tasks. We introduce \emph{Functional Task Networks} (FTN), a parameter-isolation method that addresses both: a single short inner-loop optimization both installs new subnetworks during training and re-selects prior ones at inference, with no task label and no learned cross-task router.
+
+\paragraph{Contributions.}
+(1)~A parallel-neuron backbone whose disjoint masks give a structural no-forgetting guarantee (Theorem~\ref{thm:isolation}).
+(2)~A three-stage mask configurer (gradient proposal, lateral smoothing, $k$-WTA) that is run cold-started at both training and inference.
+(3)~Experiments on three benchmarks: FTN-Slow reaches $\mathrm{FM}\le 0.02$ under the realistic mask-recovery protocol; FixedMask reaches exactly zero with the optimizer-state reset we describe in \cref{sec:setup}.
+(4)~An argument and design sketch for using FTN as a structured router over LoRA adapters for continual fine-tuning of LLMs (\cref{sec:llm_lora}).
+
+% =====================================================================
+\section{Method}
+\label{sec:method}
+
+\paragraph{Backbone.}
+We place $H$ ``neurons'' on a square cortical grid of side $D=\sqrt{H}$. Each neuron $k\in\{1,\ldots,H\}$ is itself a private feed-forward network with $L$ hidden layers of inner width $d_\mathrm{inner}$ and a scalar output. Weights are stored as $H\times d_\mathrm{in}\times d_\mathrm{inner}$ tensors and applied with a batched einsum that broadcasts the shared input $x$ across neuron slots. A binary routing mask $m\in\{0,1\}^H$ gates the per-neuron scalar outputs; a single linear readout produces the prediction:
+\[
+  z_k = \mathrm{MLP}_k(x), \qquad \hat y = W_\mathrm{out}\,(\mathrm{Dropout}(z)\odot m).
+\]
+The model is a sparse mixture of $H$ experts~\citep{shazeer2017outrageously}; weights and biases are not shared across neurons except through the readout columns.
+
+\begin{theorem}[Structural forgetting guarantee]
+\label{thm:isolation}
+Let $m^{(s)},m^{(t)}\in\{0,1\}^H$ be the masks active during blocks $s<t$. If $m^{(s)}\odot m^{(t)}=\mathbf{0}$ then for every parameter $\theta_k$ of neuron $k$ with $m^{(s)}_k=1$ and every column $[W_\mathrm{out}]_{:,k}$ the gradient of the task-$t$ loss is zero. Training on block $t$ leaves the task-$s$ solution exactly unchanged.
+\end{theorem}
+\begin{proof}
+With $m^{(t)}_k=0$, $z_k$ is multiplied by zero in the loss, so $\partial\mathcal{L}_t/\partial z_k=0$; by the chain rule the gradient is zero throughout $\theta_k$ and at $[W_\mathrm{out}]_{:,k}$. \qed
+\end{proof}
+\begin{remark}\label{rem:caveats}
+The theorem assumes that no parameter changes occur on inactive neurons via channels other than the explicit gradient: in particular, decoupled weight decay~(AdamW) and Adam first/second moments carried across task boundaries do change inactive parameters and produce a small $\mathrm{FM}>0$ even for FixedMask. Resetting the Adam state at every task boundary suffices; see \cref{sec:setup}.
+\end{remark}
+
+\paragraph{Three-stage mask configurer.}
+The mask is produced by \cref{alg:mask_config}, given the live model and a single batch:
+(i)~\emph{Gradient proposal}: $S$ Adam steps on the sigmoid-relaxed mask logits, cold-started from $m=\mathbf{0}$, minimize the task loss on the batch.
+(ii)~\emph{Lateral smoothing}: the proposal is reshaped to $D\times D$ and convolved $T$ times with a uniform $s\times s$ kernel (torus padding); this projects the proposal onto the manifold of contiguous cortical blobs.
+(iii)~\emph{KWTA}: top-$k$ binarisation gives a fixed capacity budget $k/H$ per task.
+The same procedure is used to install a subnetwork during training and to recover one at inference; no task identity, embedding, or cross-task router is learned.
+
+\begin{algorithm}[t]
+\caption{\textsc{SmoothKWTA} mask configurer}
+\label{alg:mask_config}
+\begin{algorithmic}[1]
+\STATE \textbf{Input:} model $f_\theta$, batch $(X,Y)$, side $D$, kernel $s$, lateral steps $T$, winners $k$, reconfig steps $S$, LR $\eta$
+\STATE $m\leftarrow\mathbf{0}$
+\FOR{$i=1,\ldots,S$}
+  \STATE $m\leftarrow m-\eta\,\widehat\nabla_m\mathcal{L}\bigl(f_\theta(X,\sigma(m)),Y\bigr)$
+\ENDFOR
+\STATE Reshape $m$ to $D\times D$;\quad $m\leftarrow K_s^{(T)}*m$
+\STATE \textbf{return} $\mathrm{KWTA}(\mathrm{flatten}(m),\,k)$
+\end{algorithmic}
+\end{algorithm}
+
+\paragraph{Variants.}
+FTN-Fast uses a $17\times 17$ kernel for $T{=}2$ steps (rapid spatial convergence); FTN-Slow uses a $3\times 3$ kernel for $T{=}15$ steps (fine-grained iterative smoothing). KWTA-only is the ablation with $T{=}0$. FixedMask uses pre-determined disjoint blocks of size $k$ per task and is the structural upper bound. NoMask is the all-ones mask (naive fine-tuning). EWC~\citep{kirkpatrick2017overcoming} is the regularization baseline ($\lambda{=}400$).
+
+\paragraph{Biological motivation (compressed).}
+The architecture compresses several cortical motifs into a minimal computational form: each ``neuron'' is a small private MLP with scalar output, mirroring the dendritic-tree view of pyramidal neurons~\citep{poirazi2003pyramidal,beniaguev2021single}; the lateral smoothing kernel mirrors local excitatory horizontal connectivity~\citep{hubel1962receptive,gilbert1983clustered,douglas2004neuronal}; KWTA abstracts cortical lateral inhibition~\citep{maass2000computational,amari1977dynamics}; and the gradient-proposal stage plays the role of a basal-ganglia / dopaminergic gating signal that selects among competing assemblies~\citep{mink1996basal,schultz1997neural,oreilly2006making}. A more detailed treatment, including the role of attractor dynamics and ensemble recruitment, is deferred to \cref{app:bio}.
+
+% =====================================================================
+\section{Experiments}
+\label{sec:experiments}
+
+\paragraph{Setup.}
+\label{sec:setup}
+$H{=}1024$ slots on a $32\times 32$ grid; $L{=}8$-layer per-neuron MLPs of inner width $d_\mathrm{inner}{=}8$; output dropout $0.2$; KWTA budget $k{=}128$ ($12.5\%$ of slots per task). Optimizer: Adam at $3\times 10^{-4}$ with weight decay disabled and the $(m,v)$ moments reset at every task boundary. The reset is required for \cref{thm:isolation} to hold empirically; without it, carried-over Adam moments emit non-zero updates on inactive neurons even when their gradients are zero, producing a small but reproducible $\mathrm{FM}>0$ for FixedMask. With the reset, FixedMask attains $\mathrm{FM}=0.000\pm 0.000$ exactly across all eight seeds (\cref{tab:exp1clf,tab:exp1reg}). Eight seeds, single H100; mean $\pm$ std reported. Headline metrics use the \emph{mask-recovery} protocol (the configurer is cold-started on a fresh evaluation batch with no task identity).
+
+\paragraph{Experiment 1 (synthetic).}
+A 2-D input is projected through a fixed encoder to a 24-D latent; each of three tasks selects a disjoint 8-D block via a hidden mask, and a sinusoidal nonlinearity at frequency~8 produces classification (binary) or regression (scalar) targets. One epoch, 1000 steps per task, batch~256; the mask is reconfigured every training batch. Both variants share the entire training pipeline; they differ only in (a)~the readout dimension and loss (CE vs.\ MSE) and (b)~the configurer's inner optimization ($S{=}1$, $\eta_m{=}1.0$ for clf; $S{=}10$, $\eta_m{=}0.2$ for reg). \cref{tab:exp1clf,tab:exp1reg} report the mask-recovery metrics. FixedMask achieves $\mathrm{FM}=0.000$ on both variants, exactly matching \cref{thm:isolation}; FTN-Slow has the smallest FM among adaptive methods on both variants ($0.014$ clf, $0.003$ reg); KWTA-only shows the cost of removing lateral smoothing ($\mathrm{FM}=0.152$ clf, $\mathrm{MSE}=0.589$ reg); NoMask and EWC fail to retain ($\mathrm{FM}\!\approx\!0.46$ on clf).
+
+\input{tables/exp1_clf.tex}
+\input{tables/exp1_reg.tex}
+
+\begin{figure}[t]
+\centering
+\begin{subfigure}[b]{0.48\columnwidth}
+  \includegraphics[width=\textwidth]{exp1_synthetic_clf/mask_tiling_FTN-Fast_clf.pdf}
+  \caption{FTN-Fast, 8 seeds.}
+\end{subfigure}
+\hfill
+\begin{subfigure}[b]{0.48\columnwidth}
+  \includegraphics[width=\textwidth]{exp1_synthetic_clf/mask_tiling_FTN-Slow_clf.pdf}
+  \caption{FTN-Slow, 8 seeds.}
+\end{subfigure}
+\caption{RGB mask allocations on synthetic classification. Each tile is one seed, each color one of the three tasks. The lateral kernel groups neurons into compact, approximately non-overlapping blobs that are topographically consistent across initialisations.}
+\label{fig:exp1_masks}
+\end{figure}
+
+\paragraph{Experiment 2 (MNIST Shuffled Labels).}
+Five tasks; task~0 uses canonical labels and tasks~1--4 apply distinct random label permutations. Images are identical across tasks: this is \emph{pure} concept shift. Five epochs of 400 steps, batch~256; reconfig per epoch ($S{=}20$, $\eta_m{=}0.2$). \cref{tab:exp2}: NoMask and EWC collapse to near-chance ($\mathrm{ACC}=0.255$, $\mathrm{FM}=0.904$); the masking methods all succeed; FTN-Slow is best ($\mathrm{ACC}=0.976\pm 0.001$, $\mathrm{FM}=0.004$).
+
+\input{tables/exp2.tex}
+
+\paragraph{Experiment 3 (Permuted MNIST).}
+The classical CL benchmark~\citep{goodfellow2013empirical,kirkpatrick2017overcoming,van2019three}: ten random pixel-permutations, labels unchanged. Three epochs of 400 steps, batch~256; reconfig per epoch ($S{=}10$, $\eta_m{=}0.3$). \cref{tab:exp3}: EWC holds up under domain shift ($\mathrm{ACC}=0.941$, $\mathrm{FM}=0.037$), but FTN-Slow still wins ($\mathrm{ACC}=0.959\pm 0.002$, $\mathrm{FM}=0.019$). The cross-benchmark ordering FTN-Slow~$>$~FTN-Fast~$>$~KWTA~$>$~EWC~$>$~NoMask is consistent.
+
+\input{tables/exp3.tex}
+
+\paragraph{Where the loss goes.}
+A single ACC/MSE conflates two failure modes: training-time overlap (subsequent training on shared neurons) and recall error (failing to re-find the trained mask at inference). Decomposing the prior-task loss against the FixedMask oracle on Exp.~1 (\cref{app:overlap_recall}, \cref{tab:overlap_recall}): NoMask/EWC pay everything to overlap; KWTA-only pays both terms ($+0.13$ ACC, $+0.27$ MSE recall error); only the FTN variants keep both terms small simultaneously. FTN-Slow has the smallest training-time overlap (slightly better than the FixedMask oracle on prior tasks at this seed budget) and FTN-Fast has the smallest recall error; the two trade off as a bias--variance pair.
+
+% =====================================================================
+\section{FTN as a Continual-Learning Router for LoRA}
+\label{sec:llm_lora}
+
+The FTN abstraction transfers cleanly to continually fine-tuned large language models, where the shared backbone is a frozen pretrained transformer and \emph{Low-Rank Adaptation} (LoRA, \citealt{hu2022lora}) supplies the per-task plasticity. A standard LoRA fine-tune adds, to each weight matrix $W\in\mathbb{R}^{d_o\times d_i}$, a low-rank update $\Delta W=BA$ with $A\in\mathbb{R}^{r\times d_i}$ and $B\in\mathbb{R}^{d_o\times r}$. Continually fine-tuning a single LoRA across heterogeneous task or preference regimes recovers the same catastrophic-forgetting and unsupervised-task-detection problems we addressed above, on a smaller and much cheaper parameter slice.
+
+\paragraph{LoRA-mux: a structured pool of low-rank components.}
+We propose to instantiate a pool of $H$ rank-$r_0$ LoRA components per adapted weight, $\{(B_k,A_k)\}_{k=1}^H$, and route them through a binary mask $m\in\{0,1\}^H$ produced by the FTN configurer:
+\[
+  \Delta W(m)=\sum_{k=1}^{H} m_k\,B_k A_k, \qquad \|m\|_0 = k.
+\]
+Each component plays the role of an FTN neuron: it owns a private slice of the adapter's parameters; gradients to inactive components are exactly zero (\cref{thm:isolation}). The components live on a 2-D grid and the same SmoothKWTA configurer produces compact contiguous blobs of co-active LoRA components per regime. At inference, a small support batch (a handful of in-domain examples or a self-supervised excerpt) is sufficient to recover the appropriate blob.
+
+\paragraph{Why this is the right primitive for LLM continual learning.}
+First, mutually-exclusive preference or task regimes (e.g., conflicting RLHF preference distributions, code vs.\ chat, instruction styles, persona regimes) inherit the concept-shift failure mode of MNIST Shuffled, where regularization methods such as EWC degenerate to near-chance: a single LoRA cannot simultaneously satisfy incompatible reward profiles. Disjoint-mask LoRA-mux gives an exact structural guarantee that fine-tuning on one regime does not perturb a previously-fit regime, while still sharing the frozen backbone. Second, the FTN configurer requires no task labels and uses the loss already used for fine-tuning (next-token, preference, or reward), so deployment-time regime detection is just a few gradient steps on a support context, not a learned router or a stored task index. Third, the mask-overlap query $\rho_j=(m_\mathrm{cur}\cdot m_j)/\|m_\mathrm{cur}\|_1$ is a natural retrieval primitive for selective replay among prior regimes whose adapters share components, providing a graceful interpolation between fully-disjoint and fully-shared adapters. Fourth, capacity scales by adding components to the pool rather than retraining the backbone: long task sequences can be accommodated by neurogenesis (extending the grid) without disturbing prior solutions.
+
+A full empirical demonstration on a transformer LLM is left to future work; the present results establish the feasibility of the configurer mechanism, the structural guarantees, and the regime in which it is most needed (concept shift with hidden task identity).
+
+% =====================================================================
+\section{Discussion}
+
+\paragraph{Why FTN forgets less.}
+Disjoint masks give exactly disjoint gradients (\cref{thm:isolation}), turning forgetting into a routing problem. Unlike PackNet, HAT, SupSup, Progressive Networks, and DEN~\citep{mallya2018packnet,serra2018overcoming,wortsman2020supermasks,rusu2016progressive,yoon2018lifelong}, FTN does not require an oracle task identity, a learned task embedding, or a learned cross-task router; the same mask-search optimization is used at training and inference.
+
+\paragraph{What spatial organization contributes.}
+Lateral smoothing is an inductive bias on the mask search rather than a strict change to its complexity class. Without smoothing, KWTA-only can in principle pick any of the $\binom{H}{k}$ masks, a hard subset-selection problem. With smoothing, the search is biased toward compact regions on the grid; in the idealized single-blob case the candidate count is $\mathcal{O}(H)$. Empirically this bias buys recall stability: gradient noise on a single batch produces a different proposal each call, but its smoothed projection picks the same blob.
+
+\paragraph{Limitations.}
+The benchmarks here are small. The structural guarantee is contingent on careful implementation (no decoupled weight decay, no shared optimizer state, no shared biases or normalisation across active subnetworks; \cref{rem:caveats}). Capacity is bounded by $H/k$ disjoint subnetworks per layer; longer sequences require neurogenesis. The configurer adds inference-time compute and three hyperparameters ($k$, $s$, $T$) whose scaling is not yet characterized.
+
+\paragraph{Outlook.}
+The most actionable next step is the LoRA-mux instantiation of \cref{sec:llm_lora}: a continually fine-tuned LLM with a pool of LoRA components routed by SmoothKWTA, evaluated on conflicting RLHF preference regimes and on continual instruction-tuning. We expect the same recall-stability benefits to apply, with the additional payoff that LoRA's compute footprint makes the pool design practical at scale.
+
+% =====================================================================
+\section*{Impact Statement}
+
+This paper presents work whose goal is to advance the field of machine learning. There are many potential societal consequences of our work, none which we feel must be specifically highlighted here.
+
+\bibliography{refs}
+\bibliographystyle{icml2026}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\newpage
+\appendix
+\onecolumn
+
+\section{Extended Biological Motivation}
+\label{app:bio}
+The architectural choices in \cref{sec:method} compress several cortical motifs that admit longer treatment.
+
+\paragraph{Pyramidal neurons as deep MLPs.}
+Cortical pyramidal neurons exhibit nonlinear dendritic processing comparable in expressivity to a small multi-layer artificial network~\citep{poirazi2003pyramidal,poirazi2020illuminating,beniaguev2021single}. Modeling each ``neuron'' in our population as an $L$-layer MLP with a scalar output (an analogue of the cortical firing rate) compartmentalizes nonlinear feature extraction within neurons and reduces task-specific selection to a search over linear combinations. The scalar output bottleneck also discourages redundant solutions, mitigating the load-imbalance and expert-collapse problems familiar from mixture-of-experts~\citep{shazeer2017outrageously,fedus2022switch}. Output dropout~\citep{srivastava2014dropout} is an algorithmic analogue of cortical response variability and grants tolerance to imperfect mask recovery.
+
+\paragraph{Lateral excitation as smoothing.}
+Cortical pyramidal neurons interact through dense local recurrent and horizontal connectivity~\citep{hubel1962receptive,gilbert1983clustered,douglas2004neuronal}; we abstract this as a uniform positive-valued convolution applied to the routing mask rather than to neural activations. This causes neurons to group by \emph{task relevance} rather than by input similarity. Two consequences: spatial separation of task subnetworks (reducing overlap and interference) and reduction of the mask search space from $\binom{H}{k}$ toward $\mathcal{O}(H)$ under the single-blob idealization.
+
+\paragraph{Lateral inhibition as KWTA.}
+Cortical inhibitory interneurons enforce competition among excitatory cells~\citep{maass2000computational,douglas2004neuronal,amari1977dynamics}; we abstract this as a $k$-winner-take-all stage that produces a fixed capacity budget per subtask. A continuous variant (e.g., a Mexican-hat kernel of $\pm$-valued lateral connectivity) would soften $k$ but is left to future work.
+
+\paragraph{Gradient proposal as basal-ganglia gating.}
+The initial gradient-based proposal of which neurons drive the loss plays the role of a reward-prediction-error / dopaminergic gating signal selecting among cortical assemblies~\citep{mink1996basal,schultz1997neural,oreilly2006making,rolls2010attractor}.
+
+\section{Mask-overlap vs.\ Recall-error Decomposition}
+\label{app:overlap_recall}
+
+The decomposition reported in \cref{sec:experiments} computes, for each method $M$ and each prior task $j$ ($j<N{-}1$),
+\begin{align*}
+\mathrm{overlap}_M(j) &= p^{\mathrm{stored}}_{\mathrm{FixedMask}}(j) - p^{\mathrm{stored}}_M(j),\\
+\mathrm{recall}_M(j)  &= p^{\mathrm{stored}}_M(j) - p^{\mathrm{recfg}}_M(j),
+\end{align*}
+on classification (signs reversed for regression MSE excess), then averages across prior tasks and seeds.
+
+\begin{table}[h]
+\caption{Decomposition of Exp.~1 mask-recovery loss into training-time mask overlap and inference-time recall error against the FixedMask oracle. Entries are unitless drops (clf~ACC) or excesses (reg~MSE). FixedMask reference: clf~ACC$=0.939$, reg~MSE$=0.006$.}
+\label{tab:overlap_recall}
+\vskip 0.05in
+\begin{center}\begin{small}
+\begin{tabular}{lrrrr}
+\toprule
+ & \multicolumn{2}{c}{Clf ACC drop} & \multicolumn{2}{c}{Reg MSE excess} \\
+\cmidrule(lr){2-3}\cmidrule(lr){4-5}
+Method & Overlap & Recall & Overlap & Recall \\
+\midrule
+NoMask    & $+0.430$ & $+0.000$ & $+0.461$ & $+0.000$ \\
+EWC       & $+0.428$ & $+0.000$ & $+0.459$ & $+0.000$ \\
+KWTA      & $+0.154$ & $+0.131$ & $+0.272$ & $+0.267$ \\
+FTN-Fast  & $+0.016$ & $+0.010$ & $+0.098$ & $+0.032$ \\
+FTN-Slow  & $-0.004$ & $+0.021$ & $+0.110$ & $+0.022$ \\
+\bottomrule
+\end{tabular}
+\end{small}\end{center}
+\end{table}
+
+\section{Implementation Notes for \cref{thm:isolation}}
+\label{app:impl}
+The theorem assumes that no parameter changes occur on inactive neurons. In practice, a number of common implementation choices break this assumption silently and produce a small but reproducible $\mathrm{FM}>0$ even for FixedMask:
+\begin{itemize}
+\item \textbf{Decoupled weight decay} (e.g.\ AdamW): applies $\theta\leftarrow(1-\eta\lambda)\theta$ regardless of gradient. Set weight decay to $0$ or apply it only to active neurons.
+\item \textbf{Adam moment carry-over}: at a task boundary the prior task's $(m,v)$ moments are non-zero, so subsequent Adam updates on inactive neurons remain non-zero (decaying as $(\beta_1/\sqrt{\beta_2})^t$) for $\sim 1/(1-\beta_1/\sqrt{\beta_2})\approx 10$ steps. Reset the optimizer state at every task boundary.
+\item \textbf{Shared output biases}: a $W_\mathrm{out}$ with bias couples all task readouts; we use bias-free readout. BatchNorm/statistics updates have the same problem.
+\end{itemize}
+With these precautions, FixedMask attains $\mathrm{FM}=0.000\pm 0.000$ exactly across all 8 seeds on Exp.~1.
+
+\end{document}

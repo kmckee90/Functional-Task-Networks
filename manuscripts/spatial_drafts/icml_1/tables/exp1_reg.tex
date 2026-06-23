@@ -1,0 +1,22 @@
+\begin{table}[t]
+\caption{Experiment 1 (synthetic), regression variant; mean $\pm$ std over 8 seeds, mask-recovery protocol. MSE: lower is better; FM is the average peak-MSE minus final-MSE on prior tasks.}
+\label{tab:exp1reg}
+\vskip 0.05in
+\begin{center}\begin{small}\begin{sc}
+\begin{tabular}{lrr}
+\toprule
+Method & MSE$\downarrow$ & FM$\downarrow$ \\
+\midrule
+NoMask & $0.312\pm0.050$ & $0.054\pm0.071$ \\
+FixedMask & $0.006\pm0.002$ & $0.000\pm0.000$ \\
+KWTA & $0.589\pm0.316$ & $0.028\pm0.038$ \\
+FTN-Fast & $0.126\pm0.057$ & $0.013\pm0.017$ \\
+\textbf{FTN-Slow} & $0.167\pm0.075$ & $0.003\pm0.007$ \\
+EWC & $0.311\pm0.050$ & $0.054\pm0.071$ \\
+SupSup & $0.206\pm0.029$ & $0.000\pm0.000$ \\
+SupSup-Wide & $0.216\pm0.027$ & $0.101\pm0.123$ \\
+\bottomrule
+\end{tabular}
+\end{sc}\end{small}\end{center}
+\vskip -0.1in
+\end{table}

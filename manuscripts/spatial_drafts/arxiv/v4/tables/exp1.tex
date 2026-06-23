@@ -1,0 +1,20 @@
+\begin{table}[h]
+\centering
+\caption{Experiment 1 (Synthetic CL, 3 tasks; mask-recovery eval protocol).  Mean $\pm$ std over 8 seeds (clf) / 8 seeds (reg).  Regression columns report MSE (lower is better); the regression FM is the average (peak MSE $-$ final MSE) across earlier tasks (lower is better); BWT is the average (final MSE $-$ first-trained MSE) across earlier tasks (lower is better, since rising MSE signals forgetting).}
+\label{tab:exp1}
+\small
+\begin{tabular}{l rrr rrr}
+\toprule
+ & \multicolumn{3}{c}{Classification} & \multicolumn{3}{c}{Regression} \\
+\cmidrule(lr){2-4}\cmidrule(lr){5-7}
+Method & ACC$\uparrow$ & FM$\downarrow$ & BWT$\uparrow$ & MSE$\downarrow$ & FM$\downarrow$ & BWT$\downarrow$ \\
+\midrule
+NoMask & $0.666\pm0.031$ & $0.466\pm0.046$ & $-0.466\pm0.046$ & $0.312\pm0.050$ & $0.054\pm0.071$ & $0.463\pm0.075$ \\
+FixedMask & $0.938\pm0.014$ & $0.000\pm0.000$ & $0.000\pm0.000$ & $0.006\pm0.002$ & $0.000\pm0.000$ & $0.000\pm0.000$ \\
+KWTA & $0.640\pm0.062$ & $0.152\pm0.052$ & $-0.146\pm0.061$ & $0.589\pm0.316$ & $0.028\pm0.038$ & $0.248\pm0.247$ \\
+FTN-Fast & $0.899\pm0.037$ & $0.042\pm0.045$ & $-0.034\pm0.047$ & $0.126\pm0.057$ & $0.013\pm0.017$ & $0.051\pm0.046$ \\
+FTN-Slow & $0.896\pm0.025$ & $0.014\pm0.025$ & $0.005\pm0.034$ & $0.167\pm0.075$ & $0.003\pm0.007$ & $0.067\pm0.070$ \\
+EWC & $0.665\pm0.031$ & $0.463\pm0.046$ & $-0.463\pm0.046$ & $0.311\pm0.050$ & $0.054\pm0.071$ & $0.461\pm0.075$ \\
+\bottomrule
+\end{tabular}
+\end{table}

@@ -1,0 +1,716 @@
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% draft_kt.tex — ICML 2026 submission draft.
+% Build:
+%   cd paper/icml/ && pdflatex draft_kt && bibtex draft_kt && pdflatex draft_kt && pdflatex draft_kt
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\documentclass{article}
+
+\usepackage{microtype}
+\usepackage{graphicx}
+% Figures live at <project>/figures/
+\graphicspath{{./}{../../figures/}{../../}}
+\usepackage{subcaption}
+\usepackage{booktabs}
+\usepackage{hyperref}
+
+\newcommand{\theHalgorithm}{\arabic{algorithm}}
+
+\usepackage{icml2026}
+
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{mathtools}
+\usepackage{amsthm}
+\usepackage[capitalize,noabbrev]{cleveref}
+
+\theoremstyle{plain}
+\newtheorem{theorem}{Theorem}[section]
+\theoremstyle{remark}
+\newtheorem{remark}[theorem]{Remark}
+
+\icmltitlerunning{Mask Optimisation as a Knowledge-Transfer Mechanism}
+
+\begin{document}
+
+\twocolumn[
+\icmltitle{Optimising the Routing Mask Alone:\\
+A Continual Knowledge-Transfer Mechanism for Sparse Subnetwork Models}
+
+\icmlsetsymbol{equal}{*}
+
+\begin{icmlauthorlist}
+\icmlauthor{Anonymous}{anon}
+\end{icmlauthorlist}
+\icmlaffiliation{anon}{Anonymous Institution}
+\icmlcorrespondingauthor{Anonymous}{anonymous@example.org}
+
+\icmlkeywords{Continual learning, knowledge transfer, sparse routing, k-winner-take-all, mixture of experts}
+
+\vskip 0.3in
+]
+
+\printAffiliationsAndNotice{}
+
+% =====================================================================
+\begin{abstract}
+A sparse subnetwork model that gates a bank of independent neurons by a
+binary routing mask is one of the simplest available substrates for
+continual learning: training only the active subnetwork prevents
+catastrophic interference, and re-selecting a previously trained mask at
+inference recovers the corresponding solution. We ask whether the same
+mask-selection step, applied with significantly more compute, can also
+serve as a \emph{knowledge transfer} mechanism: by thoroughly
+optimising the binary mask on a fresh batch from a new task while the
+neuron weights are still frozen, can the model exploit shared latent
+structure with previously trained tasks? We isolate this question by
+removing all spatial and regularisation-based prior knowledge from the
+mask configurer and comparing three principled binary-mask optimisers
+on a fixed neuron backbone: (i)~a continuous sigmoid relaxation,
+(ii)~simulated annealing with a straight-through $k$-winner-take-all,
+and (iii)~a Gumbel-Sigmoid (Binary Concrete) relaxation with annealed
+temperature.  We sweep optimisation budget across four orders of
+magnitude (50 to 50{,}000 inner steps) on two task families with
+explicit pairwise concept sharing: a synthetic sinusoidal mixture and a
+structured MNIST label-permutation benchmark. We track four signals:
+retrospective forgetting, the loss obtained by the freshly-optimised
+mask alone, end-of-training backward transfer, and the correspondence
+between the model's neuron-sharing matrix and the data-generator's
+concept-sharing matrix.  We find that all three optimisers reach
+low forgetting under the realistic mask-recovery protocol --- closing
+roughly $85$--$95\%$ of the gap between an unmasked baseline and a
+fixed-mask oracle --- that mask optimisation alone confers a
+substantial pre-training head start whose size grows by up to
+$2.6\times$ as the inner budget increases, and that the recovered
+neuron-sharing structure converges toward the ground-truth
+concept-sharing matrix on the synthetic family. The annealed
+straight-through optimiser already achieves the lowest head-start at
+the smallest budget, while the Gumbel relaxation exhibits the steepest
+improvement curve and benefits the most from a larger budget.
+\end{abstract}
+
+% =====================================================================
+\section{Introduction}
+\label{sec:intro}
+
+Continual learning systems, from lifelong agents to continually
+pretrained language models~\citep{gururangan2020dontstop,
+yildiz2024investigating}, must absorb new data without overwriting old
+competence. Two failure modes recur. First, gradient updates on a new
+task can overwrite parameters that encoded an earlier
+task~\citep{mccloskey1989catastrophic, french1999catastrophic}, the
+catastrophic-forgetting problem. Second, every new task is also a
+candidate \emph{forward-transfer} opportunity~\citep{lopez2017gradient,
+chaudhry2018efficient}: if the new task shares structure with previously
+trained tasks, the system should re-use the relevant parts of its
+network without re-deriving them from scratch. Parameter-isolation
+methods~\citep{mallya2018packnet, serra2018overcoming,
+wortsman2020supermasks} solve the first problem cleanly by training each
+task on a disjoint sub-network, but the very disjointness that protects
+old solutions also prevents reuse: a fresh task starts from scratch on a
+new slot.
+
+This paper investigates a route through that tension that uses no
+explicit task identity, no learned cross-task router, and no extra
+trainable component beyond the per-task routing mask itself. The setup
+is a parallel-neuron backbone (\cref{sec:method}) in which $H$
+independent small subnetworks share an input and produce scalar outputs;
+a binary mask $m\in\{0,1\}^H$ with $\|m\|_0=k$ gates which subnetworks
+contribute to the readout. Disjoint masks give exactly disjoint
+gradients, so training one task leaves prior solutions provably
+unchanged (\cref{thm:isolation}). The mask is selected by a short inner
+optimisation on a fresh batch; the same procedure is used at training to
+\emph{install} a subnetwork and at inference to \emph{recover} one. The
+question we study is what happens when the inner optimisation is given
+substantial compute on a new task before any neuron weights are
+updated.
+
+\paragraph{Hypothesis.}
+If the data-generating process exposes shared latent structure across
+tasks, then the trained backbone already contains useful mid-level
+features that have been wired into earlier subnetworks. A thorough
+mask-only optimisation on a single batch from a new task should then
+discover those existing features, choose a mask that re-uses them, and
+attain a low loss \emph{before} any neuron weights are updated. The
+size of this pre-training loss reduction is a direct measure of
+knowledge transferred via the mask alone.
+
+\paragraph{Compute-axis comparison.}
+The three principled mask optimisers we study differ in how they
+handle the binary constraint $m\in\{0,1\}^H$:
+\begin{itemize}
+\item \textbf{Sigmoid relaxation.} Treat the mask logits $m$ as
+continuous and optimise $\sigma(m)$ in the readout. The binary
+constraint is enforced only at the end via top-$k$. Simplest baseline.
+\item \textbf{Annealed straight-through KWTA (AnnealSTE).} Each step
+uses an actual binary top-$k$ mask sampled from $m+$ noise and passes
+gradients through with a straight-through estimator. The noise scale
+is annealed from the spread of $m$ to zero.
+\item \textbf{Gumbel-Sigmoid (Binary Concrete) with temperature
+annealing.} Each step uses a stochastic soft binary mask $\sigma((m +
+g)/\tau)$ with logistic noise $g$, the binary-concrete relaxation
+\citep{maddison2017concrete, jang2017categorical}; $\tau$ is annealed
+from large to small. A budget penalty $(\sum \sigma(m)-k)^2$ keeps
+$\mathbb{E}[\#\mathrm{active}]$ near $k$.
+\end{itemize}
+We sweep the inner-loop budget over $\{50, 500, 5\,000, 50\,000\}$
+steps, holding all other hyperparameters fixed.
+
+\paragraph{Contributions.}
+\begin{itemize}
+\item A clean experimental protocol for studying mask optimisation as
+a knowledge-transfer mechanism on top of a shared neuron bank. The
+backbone is identical across treatments; only the mask configurer
+differs.
+\item Three principled mask optimisers (Sigmoid, AnnealSTE,
+Gumbel-Sigmoid) at four optimisation budgets, on two task families
+with structured pairwise concept sharing: a synthetic sinusoidal
+mixture and a shared-shuffle MNIST.
+\item Four metrics, all directly tied to knowledge transfer: (i) ACC
+and forgetting under the realistic mask-recovery evaluation
+protocol, (ii) the \emph{head-start} loss that a freshly optimised
+mask attains on a new task before any neuron training, (iii) end-of-
+training backward transfer, and (iv) the Pearson correlation between
+the model's empirical neuron-sharing matrix and the ground-truth
+concept-sharing matrix.
+\item A finding that the recovered neuron-sharing structure recovers
+the ground-truth concept-sharing matrix on the synthetic family
+($r_{\mathrm{share}}$ up to $0.66$, vs.\ $0.0$ for either baseline),
+with the AnnealSTE optimiser already near-asymptotic on accuracy
+and head-start at the smallest budget, and the Gumbel optimiser
+exhibiting the steepest budget-driven improvement.
+\end{itemize}
+
+% =====================================================================
+\section{Related work}
+\label{sec:related}
+
+\paragraph{Parameter isolation in continual learning.}
+PackNet~\citep{mallya2018packnet}, HAT~\citep{serra2018overcoming},
+SupSup~\citep{wortsman2020supermasks}, and Progressive
+Networks~\citep{rusu2016progressive} all assign new tasks to dedicated
+parameter subsets. They differ in how the subset is chosen and whether
+the choice is task-id-conditioned. Our backbone is closest in spirit to
+SupSup but removes the assumption that masks are fixed and known per
+task: at inference we re-derive the mask by the same optimisation used
+during training, so task identity is not required.
+
+\paragraph{Mask routing and mixtures of experts.}
+Mixture-of-experts routers~\citep{shazeer2017outrageously,
+fedus2022switch} learn a soft assignment of inputs to expert
+subnetworks; our setup is the special case in which the routing
+distribution is binary and the routing decision is shared across the
+whole batch (one mask per task, not one per token). The closer
+analogues in continual learning are Conditional
+Channel-Gated Networks~\citep{abati2020conditional} and
+SupSup~\citep{wortsman2020supermasks}; we focus on a much simpler
+substrate to isolate the role of the mask optimiser.
+
+\paragraph{Replay and shared structure.}
+GEM and A-GEM~\citep{lopez2017gradient, chaudhry2018efficient} use a
+small replay buffer to constrain the gradient on shared parameters. We
+include a mask-correlation-filtered replay buffer in the trainer
+(\cref{sec:method}); selectively replaying memories whose masks partially
+overlap with the current mask gives a graceful interpolation between
+fully disjoint and fully shared parameters.
+
+\paragraph{Discrete mask optimisation.}
+The discrete optimisation literature offers many ways to train through a
+$k$-WTA constraint; the three we compare cover the principal axes:
+direct sigmoid relaxation, annealed
+discrete sampling with a straight-through
+estimator~\citep{bengio2013estimating}, and Gumbel-Softmax /
+Concrete~\citep{jang2017categorical, maddison2017concrete}. We are not
+aware of prior work that compares them on a continual-learning
+substrate or that interprets the resulting masks as a transfer
+mechanism.
+
+% =====================================================================
+\section{Method}
+\label{sec:method}
+
+\paragraph{Backbone.}
+Let $H$ ``neurons'' index a parallel bank of independent small MLPs
+(``parallel-MLP'' backbone, after \citealp{shazeer2017outrageously}).
+Each neuron $k\in\{1,\ldots,H\}$ is itself a feed-forward network with
+$L$ hidden layers of inner width $d_\mathrm{inner}$ and a scalar
+output. Weights are stored as $H\times d_\mathrm{in}\times
+d_\mathrm{inner}$ tensors and applied with a batched einsum that
+broadcasts the shared input $x$ across neuron slots. A binary routing
+mask $m\in\{0,1\}^H$ gates the per-neuron scalar outputs and a single
+linear readout produces the prediction:
+\[
+  z_k = \mathrm{MLP}_k(x), \qquad \hat y = W_\mathrm{out}\,(\mathrm{Dropout}(z)\odot m).
+\]
+
+\begin{theorem}[Structural forgetting guarantee]
+\label{thm:isolation}
+Let $m^{(s)},m^{(t)}\in\{0,1\}^H$ be the masks active during blocks
+$s<t$. If $m^{(s)}\odot m^{(t)}=\mathbf{0}$, then for every parameter
+$\theta_k$ of neuron $k$ with $m^{(s)}_k=1$ and every column
+$[W_\mathrm{out}]_{:,k}$, the gradient of the task-$t$ loss is zero.
+Training on block $t$ leaves the task-$s$ solution unchanged.
+\end{theorem}
+\begin{proof}
+With $m^{(t)}_k=0$, $z_k$ is multiplied by zero in the loss, so
+$\partial\mathcal{L}_t/\partial z_k=0$; by the chain rule the gradient
+is zero throughout $\theta_k$ and $[W_\mathrm{out}]_{:,k}$. \qed
+\end{proof}
+\begin{remark}\label{rem:caveats}
+Decoupled weight decay and Adam moment carry-over change inactive
+parameters even when their gradients are zero. We disable weight
+decay and reset the optimiser state at every task boundary to make
+\cref{thm:isolation} hold empirically.
+\end{remark}
+
+\paragraph{Three mask optimisers.}
+A mask configurer is a callable that takes the live model and a fresh
+batch $(X,Y)$ and returns a binary top-$k$ mask. All three optimisers
+in this paper share the same scaffolding (\cref{alg:configurer}): they
+parameterise $H$ logits, optimise an objective that depends on the
+soft mask $\sigma(m)$ or a stochastic relaxation of it, and return the
+hard top-$k$ projection of the learned logits.
+
+\begin{algorithm}[t]
+\caption{Mask configurer (generic scaffold)}
+\label{alg:configurer}
+\begin{algorithmic}[1]
+\STATE \textbf{Input:} model $f_\theta$, batch $(X,Y)$, target winners $k$,
+       budget $S$, learning rate $\eta$
+\STATE Pre-compute $z\leftarrow\mathrm{ParallelMLP}_\theta(X)$
+       \COMMENT{detached, not retraced through backbone}
+\STATE Initialise mask logits $m$ \COMMENT{see method-specific init}
+\FOR{$i=1,\ldots,S$}
+\STATE Compute task loss $\mathcal{L}$ from $W_\mathrm{out}\,(z\odot \tilde m_i)$
+\STATE \textbf{(method-specific)} construct $\tilde m_i$ from $m$
+       \COMMENT{Sigmoid: $\sigma(m)$; AnnealSTE: $\mathrm{KWTA}(m{+}\epsilon_i)$
+       with STE; Gumbel: $\sigma((m{+}g_i)/\tau_i)$}
+\STATE Update $m\leftarrow m-\eta\,\widehat\nabla\mathcal{L}$
+\STATE Track best hard top-$k$ mask seen so far
+\ENDFOR
+\STATE \textbf{return} best top-$k$ mask
+\end{algorithmic}
+\end{algorithm}
+
+\paragraph{Sigmoid (continuous relaxation).}
+$\tilde m_i=\sigma(m)$ throughout. The binary constraint is enforced
+only at the end via top-$k$. RMSprop optimiser.
+
+\paragraph{AnnealSTE (simulated annealing + straight-through).}
+$\tilde m_i = \mathrm{KWTA}(m+\epsilon_i,k) + m - \mathrm{stop\_grad}(m)$, with
+$\epsilon_i\sim\mathcal{N}(0,\tau_i^2I)$ and $\tau_i = \mathrm{std}(m)\cdot
+\exp(-i/(S/4))$.  SGD optimiser.  Each step evaluates an actual binary
+top-$k$ mask, which gives a faithful gradient signal at the cost of
+straight-through bias~\citep{bengio2013estimating}.
+
+\paragraph{Gumbel-Sigmoid (Binary Concrete).}
+$\tilde m_i = \sigma((m+g_i)/\tau_i)$ with logistic-distributed noise
+$g_i$ (the difference of two Gumbel samples; equivalently the
+Binary-Concrete distribution \citep{maddison2017concrete}). The
+temperature is annealed log-linearly from $\tau_\mathrm{start}=1.0$ to
+$\tau_\mathrm{end}=0.1$ across $S$ steps. A budget penalty
+$(\sum\sigma(m)-k)^2/k^2$ keeps $\mathbb{E}[\#\mathrm{active}]\approx k$
+so that the post-hoc top-$k$ extraction is well defined. Adam optimiser.
+The logits are initialised at $\sigma^{-1}(k/H)$ rather than $0$ so the
+initial expected budget already matches $k$.
+
+\paragraph{Block-sequential training with mask-filtered replay.}
+Tasks are presented sequentially. At each task boundary we run the
+configurer on a fresh batch ($S$ steps), record the mask, and train
+the active subnetwork for the task budget. We also keep a small replay
+buffer of $(x,y,m)$ triplets; on each gradient step we sample buffer
+entries whose stored mask has fractional overlap
+$\rho=(m_\mathrm{cur}\cdot m_j)/\|m_\mathrm{cur}\|_1\in(0.2,0.8]$ with
+the current mask and add their loss as a regulariser. This targets
+exactly the shared-neuron region at risk of interference.
+
+% =====================================================================
+\section{Experiments}
+\label{sec:experiments}
+
+\paragraph{Setup.}
+$H{=}1024$ slots; $L{=}8$-layer per-neuron MLPs of inner width
+$d_\mathrm{inner}{=}8$; output dropout $0.2$; KWTA budget $k{=}128$
+($12.5\%$ of slots per task). Adam at $3\times 10^{-4}$ with weight
+decay disabled and Adam moments reset at every task boundary. Replay
+buffer of size 200 with $\rho\in(0.2, 0.8]$ filter; one replay sample
+per gradient step. Three seeds; mean$\pm$std reported. Each of the
+three configurers is run at four budgets $S\in\{50,500,5\,000,50\,000\}$
+inner steps; the inner-LR is fixed per method
+(Sigmoid: $0.05$, AnnealSTE: $0.5$, Gumbel: $0.02$). Eval uses two
+protocols:
+\emph{stored} (use the mask saved during training, an oracle that
+knows task identity) and \emph{reconfig} (re-run the configurer on a
+fresh evaluation batch with no task identity).
+
+\paragraph{Task family 1 — Synthetic correlated sinusoids.}
+A 2-D input is projected through a fixed encoder to a 16-dim latent
+partitioned into 4 concept components of size 4. Each of 6 tasks is
+the union of a different pair of components, so any two tasks share
+exactly one component. A sinusoidal nonlinearity at frequency 8
+produces binary classification targets. One epoch, 1{,}500 steps per
+task, batch 256.
+
+\paragraph{Task family 2 — Shared-shuffle MNIST.}
+6 MNIST classification tasks; each task's digit-to-label permutation
+is the union of 2 of 4 component sub-permutations of 5 digits each.
+Two tasks that share a component agree on the digit-to-label mapping
+within that component.  Two epochs, 400 steps per task, batch 256.
+
+\paragraph{Metrics.}
+\begin{itemize}
+\item ACC, FM (forgetting measure)~\citep{chaudhry2018efficient}, BWT
+(backward transfer)~\citep{lopez2017gradient} on the lower-triangular
+performance matrix $R_{ij}$.
+\item Head-start: the model's loss on a fresh batch from task $t>0$
+\emph{after} the configurer has optimised the mask on that same batch
+but \emph{before} any neuron weights are updated for task $t$. We
+report the mean of the head-start losses for tasks $2..N$ (task $1$
+has no prior solution to transfer from).
+\item Sharing fidelity $r_\mathrm{share}$: Pearson correlation between
+the off-diagonal entries of the row-normalised model neuron-sharing
+matrix (built from the per-task masks) and the row-normalised
+ground-truth concept-sharing matrix (which two tasks share a concept
+component).
+\end{itemize}
+
+\paragraph{Main results.}
+\input{tables/main_synthetic.tex}
+\input{tables/main_mnist_shared.tex}
+
+\paragraph{Forgetting under the mask-recovery protocol.}
+All three optimisers attain low forgetting under the realistic
+mask-recovery protocol (\cref{tab:main_synthetic,tab:main_mnist_shared};
+see also \cref{fig:forgetting_curves}): forgetting measure is
+$\approx\!0.05$ on synthetic and $\le\!0.04$ on shared-shuffle MNIST,
+versus $0.354$ and $0.676$ for the NoMask baseline. Equivalently, the
+KWTA optimisers close $\sim\!85\%$ of the gap between NoMask and the
+FixedMask oracle on synthetic and $\sim\!95\%$ on MNIST. The NoMask
+baseline collapses to chance under the shared-shuffle MNIST concept
+shift, confirming that the masking layer carries the
+parameter-isolation guarantee. Among the three KWTA optimisers, the
+Sigmoid relaxation is strongest at the smallest budget on MNIST
+($\mathrm{ACC}{=}0.970$, FM$\,{=}\,0.004$, essentially the FixedMask
+ceiling), whereas AnnealSTE is the lowest-FM method at the smallest
+budget on synthetic; differences shrink at larger budgets.
+
+\begin{figure}[t]
+\centering
+\begin{subfigure}[b]{0.48\columnwidth}
+  \includegraphics[width=\textwidth]{synthetic/forgetting_vs_compute.pdf}
+  \caption{Synthetic.}
+\end{subfigure}
+\hfill
+\begin{subfigure}[b]{0.48\columnwidth}
+  \includegraphics[width=\textwidth]{mnist_shared/forgetting_vs_compute.pdf}
+  \caption{Shared-shuffle MNIST.}
+\end{subfigure}
+\caption{Forgetting Measure (stored protocol) versus mask-optimisation
+budget. Lower is better. All three KWTA optimisers approach the
+FixedMask oracle as compute grows. Mean$\pm$std across 3 seeds.}
+\label{fig:forgetting_curves}
+\end{figure}
+
+\paragraph{Mask optimisation alone produces a head start.}
+\Cref{fig:headstart} reports the mean over tasks $2..N$ of the loss
+attained by the freshly optimised mask before any neuron training on
+the new task. As budget grows the head-start loss falls by up to a
+factor of $2.6\times$ (Sigmoid on MNIST: $1.476\!\to\!0.793$; Gumbel on
+MNIST: $1.266\!\to\!0.563$); on synthetic Gumbel falls $0.572\!\to\!0.366$
+while AnnealSTE is already near-asymptotic at the smallest budget
+($0.404$). For comparison, a naive untrained-mask baseline gives a
+loss of $0.724$ (synthetic) and $2.324$ (MNIST), so even the smallest-
+budget AnnealSTE configurer cuts roughly half the loss with the mask
+alone. This is the central transfer signal: with the mask alone, the
+model can route a new task into existing subnetworks and approach a
+respectable initial loss without any new neuron training.
+
+\begin{figure}[t]
+\centering
+\begin{subfigure}[b]{0.48\columnwidth}
+  \includegraphics[width=\textwidth]{synthetic/headstart_curves.pdf}
+  \caption{Synthetic.}
+\end{subfigure}
+\hfill
+\begin{subfigure}[b]{0.48\columnwidth}
+  \includegraphics[width=\textwidth]{mnist_shared/headstart_curves.pdf}
+  \caption{Shared-shuffle MNIST.}
+\end{subfigure}
+\caption{Head-start loss versus mask-optimisation budget.  Lower is
+better. The y-axis is the model's task loss on a fresh batch from a
+new task immediately after the configurer has optimised the mask on
+that batch and \emph{before} any neuron weights are updated. Mean over
+tasks 2..N; mean$\pm$std across seeds.}
+\label{fig:headstart}
+\end{figure}
+
+\paragraph{Recovered sharing matches data-generating sharing.}
+\Cref{fig:sharing} shows side-by-side the ground-truth concept-sharing
+matrix (which two tasks share a concept component) and the model's
+empirical neuron-sharing matrix at the largest budget, for each of the
+three optimisers. The agreement is visible by eye for synthetic tasks;
+quantitatively (\cref{fig:sharing_corr}) the Pearson correlation
+between off-diagonal entries grows from $0.44$--$0.58$ at the smallest
+budget to $0.55$--$0.66$ at the largest budget on synthetic, with both
+Gumbel and AnnealSTE peaking near $r{=}0.65$. On shared-shuffle MNIST
+the absolute correlations are lower ($\le 0.48$) and not strictly
+monotone in budget --- the four label-permutation components in MNIST
+are recovered less cleanly than the four orthogonal latent components
+of the synthetic generator. The Gumbel optimiser produces noisier
+sharing patterns at small budgets because the binary-concrete sample
+is high-variance, but matches AnnealSTE at the largest budget.
+
+\begin{figure}[t]
+\centering
+\begin{subfigure}[b]{\columnwidth}
+  \includegraphics[width=\textwidth]{synthetic/sharing_compare_AnnealSTE.pdf}
+  \caption{AnnealSTE on synthetic tasks at the largest budget.}
+\end{subfigure}\\[0.5em]
+\begin{subfigure}[b]{\columnwidth}
+  \includegraphics[width=\textwidth]{mnist_shared/sharing_compare_AnnealSTE.pdf}
+  \caption{AnnealSTE on shared-shuffle MNIST at the largest budget.}
+\end{subfigure}
+\caption{Concept-sharing ground truth (left) versus model neuron sharing
+(right), AnnealSTE optimiser at $S{=}50{,}000$ inner steps. Each cell
+is the (row-normalised) fraction of components / neurons shared between
+two tasks. The model's neuron sharing recovers the structure of the
+data-generator's concept sharing.}
+\label{fig:sharing}
+\end{figure}
+
+\begin{figure}[t]
+\centering
+\begin{subfigure}[b]{0.48\columnwidth}
+  \includegraphics[width=\textwidth]{synthetic/sharing_corr_vs_compute.pdf}
+  \caption{Synthetic.}
+\end{subfigure}
+\hfill
+\begin{subfigure}[b]{0.48\columnwidth}
+  \includegraphics[width=\textwidth]{mnist_shared/sharing_corr_vs_compute.pdf}
+  \caption{Shared-shuffle MNIST.}
+\end{subfigure}
+\caption{Pearson correlation between the model's neuron-sharing matrix
+and the data-generator's concept-sharing matrix as a function of
+mask-optimisation budget. Higher is better. Mean$\pm$std across 3 seeds.}
+\label{fig:sharing_corr}
+\end{figure}
+
+\paragraph{Backward transfer.}
+\Cref{fig:bwt} reports BWT on prior tasks at the end of training.
+Naive unmasked training (NoMask) shows large negative BWT under
+shared-shuffle MNIST ($-0.676$, heavy forgetting). All three KWTA
+optimisers compress the BWT magnitude by an order of magnitude or
+more (synthetic: $|\mathrm{BWT}|{\le}0.06$; MNIST:
+$|\mathrm{BWT}|{\le}0.04$). The remaining gap to the zero-forgetting
+FixedMask oracle is small but consistent: the configurer occasionally
+recovers a slightly different mask at recall time than the one stored
+during training, which produces small drops on the recovered
+subnetwork's task --- noise that the FixedMask oracle is structurally
+spared.
+
+\begin{figure}[t]
+\centering
+\begin{subfigure}[b]{0.48\columnwidth}
+  \includegraphics[width=\textwidth]{synthetic/bwt_vs_compute.pdf}
+  \caption{Synthetic.}
+\end{subfigure}
+\hfill
+\begin{subfigure}[b]{0.48\columnwidth}
+  \includegraphics[width=\textwidth]{mnist_shared/bwt_vs_compute.pdf}
+  \caption{Shared-shuffle MNIST.}
+\end{subfigure}
+\caption{Backward Transfer (stored protocol) versus mask-optimisation
+budget. Higher is better; the dotted line marks zero.}
+\label{fig:bwt}
+\end{figure}
+
+% =====================================================================
+\section{Discussion}
+
+\paragraph{Why the mask alone can transfer.}
+A trained backbone embeds the union of all previously seen tasks into
+its neuron bank.  When a new task is correlated with prior tasks (i.e.\
+shares a concept component with them), the relevant computations are
+already present somewhere in the bank: the forward map exists, only the
+selection of which neurons to read out is missing. Optimising only the
+mask, on a single batch, finds that selection. The price is an inner
+optimisation budget; the budget axis we sweep here exposes the trade-off
+explicitly.
+
+\paragraph{Compute scaling.}
+The three optimisers span a budget--quality trade-off. AnnealSTE
+attains the lowest head-start at every budget on synthetic and the
+lowest at the smallest budget on MNIST; the faithful binary gradient
+signal of the straight-through estimator means that even $S{=}50$
+inner steps already select a sensible subnetwork. The Sigmoid
+relaxation is strongest at the smallest budget on MNIST --- the
+binary-concrete machinery is overkill there --- but on synthetic its
+head-start barely falls with budget ($0.481\!\to\!0.450$), because the
+soft objective $\sigma(m)$ is no longer informative once the easy
+gradient has been spent. The Gumbel relaxation has the steepest
+improvement curve from medium to large budgets ($1.27\!\to\!0.56$ on
+MNIST, $0.57\!\to\!0.37$ on synthetic), so it is the natural choice
+when one is willing to pay a large mask-search budget at recall time.
+
+\paragraph{Connection to mixture-of-experts inference.}
+The mask-recovery step at inference is a soft analogue of the
+discrete-routing decision in mixture-of-experts
+inference~\citep{shazeer2017outrageously, fedus2022switch}: a small
+support batch is consumed to select which experts (here: neurons)
+participate in the forward pass on the live query. Our results suggest
+that one need not learn the router explicitly when the model is sparse
+enough; an inner optimisation on a fresh batch suffices and additionally
+acts as a knowledge-transfer mechanism on a new task.
+
+\paragraph{Limitations.}
+The benchmarks here are small. The structural guarantee in
+\cref{thm:isolation} is contingent on the implementation details
+described in \cref{rem:caveats}. The mask configurer adds a non-trivial
+inference-time compute cost; however, the parallel-neuron forward map
+is computed once and cached, so the inner optimisation runs only on the
+linear readout, which is several orders of magnitude cheaper than the
+full forward pass. Capacity is bounded by $H/k$ disjoint subnetworks per
+layer; longer task sequences require neurogenesis.
+
+\paragraph{Outlook.}
+The most actionable follow-up is to push the mask-only optimisation to
+LLM scale, by replacing the parallel neuron bank with a pool of LoRA
+components on a frozen pretrained backbone~\citep{hu2022lora}: each
+component plays the role of a neuron, and the mask routes a binary
+combination of components to instantiate a task-specific adapter. The
+mask-only optimisation then becomes a continual-fine-tuning device that
+re-uses adapter components across tasks where possible and recovers
+prior tasks via the same mask-search step.
+
+% =====================================================================
+\section*{Impact Statement}
+
+This paper presents work whose goal is to advance the field of machine
+learning. There are many potential societal consequences of our work,
+none of which we feel must be specifically highlighted here.
+
+\bibliography{refs}
+\bibliographystyle{icml2026}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\newpage
+\appendix
+\onecolumn
+
+\section{Hyperparameters and Implementation}
+\label{app:hp}
+
+\paragraph{Mask configurers.}
+All three configurers expose the same external interface
+(\cref{alg:configurer}); the inner-loop differences are summarised in
+\cref{tab:configurer_init}.
+
+\begin{table}[h]
+\centering
+\caption{Method-specific differences across the three mask
+optimisers. Other hyperparameters are shared.}
+\label{tab:configurer_init}
+\begin{tabular}{lllll}
+\toprule
+& Optimiser & Init logits & Soft mask $\tilde m_i$ & Aux.\ term \\
+\midrule
+Sigmoid    & RMSprop & $0$ & $\sigma(m)$ & --- \\
+AnnealSTE  & SGD     & $0$ & $\mathrm{KWTA}(m{+}\epsilon_i)+m-\mathrm{stop\_grad}(m)$ & --- \\
+Gumbel     & Adam    & $\sigma^{-1}(k/H)$ & $\sigma((m{+}g_i)/\tau_i)$ & $(\sum\sigma(m)-k)^2/k^2$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{Replay.}
+The replay buffer keeps up to 200 $(x,y,m)$ triplets; on every
+gradient step we sample one entry whose stored mask has overlap
+$\rho=(m_\mathrm{cur}\cdot m_j)/\|m_\mathrm{cur}\|_1\in(0.2,0.8]$ with
+the current mask. Disjoint entries ($\rho\le 0.2$) are skipped because
+they would waste capacity on unrelated tasks; near-fully-overlapping
+entries ($\rho>0.8$) are skipped because the current task already
+trains the same subnetwork.
+
+\paragraph{Mask-recovery evaluation.}
+At the end of every training task we evaluate every prior task with a
+fresh reconfig: a new batch is drawn from the prior task and the
+configurer is run on it (with the trained backbone fixed). This is the
+same operation used during training, so its compute cost scales with
+$S$. The reconfig protocol is the more realistic of the two we report
+because it corresponds to a deployment situation in which task
+identity is unknown at inference time.
+
+\section{Per-task perf-matrix snapshots}
+\label{app:perf_matrix}
+
+For completeness, \cref{fig:perf_matrix_synth,fig:perf_matrix_mnist}
+show the lower-triangular performance matrices $R$ at the largest
+budget, both stored (oracle mask) and reconfig (mask re-derived from
+fresh data). The diagonal $R_{ii}$ is the within-task performance
+right after task $i$; sub-diagonal $R_{ij}$ ($j<i$) is task $j$'s
+performance after the model has trained on tasks up to $i$.
+
+\begin{figure}[h]
+\centering
+\begin{subfigure}[b]{0.32\columnwidth}
+  \includegraphics[width=\textwidth]{synthetic/perf_stored_Sigmoid_b50000.pdf}
+  \caption{Sigmoid stored.}
+\end{subfigure}
+\begin{subfigure}[b]{0.32\columnwidth}
+  \includegraphics[width=\textwidth]{synthetic/perf_stored_AnnealSTE_b50000.pdf}
+  \caption{AnnealSTE stored.}
+\end{subfigure}
+\begin{subfigure}[b]{0.32\columnwidth}
+  \includegraphics[width=\textwidth]{synthetic/perf_stored_Gumbel_b50000.pdf}
+  \caption{Gumbel stored.}
+\end{subfigure}\\[0.5em]
+\begin{subfigure}[b]{0.32\columnwidth}
+  \includegraphics[width=\textwidth]{synthetic/perf_reconfig_Sigmoid_b50000.pdf}
+  \caption{Sigmoid reconfig.}
+\end{subfigure}
+\begin{subfigure}[b]{0.32\columnwidth}
+  \includegraphics[width=\textwidth]{synthetic/perf_reconfig_AnnealSTE_b50000.pdf}
+  \caption{AnnealSTE reconfig.}
+\end{subfigure}
+\begin{subfigure}[b]{0.32\columnwidth}
+  \includegraphics[width=\textwidth]{synthetic/perf_reconfig_Gumbel_b50000.pdf}
+  \caption{Gumbel reconfig.}
+\end{subfigure}
+\caption{Performance matrices on synthetic tasks at $S{=}50{,}000$,
+seed 0.}
+\label{fig:perf_matrix_synth}
+\end{figure}
+
+\begin{figure}[h]
+\centering
+\begin{subfigure}[b]{0.32\columnwidth}
+  \includegraphics[width=\textwidth]{mnist_shared/perf_stored_Sigmoid_b50000.pdf}
+  \caption{Sigmoid stored.}
+\end{subfigure}
+\begin{subfigure}[b]{0.32\columnwidth}
+  \includegraphics[width=\textwidth]{mnist_shared/perf_stored_AnnealSTE_b50000.pdf}
+  \caption{AnnealSTE stored.}
+\end{subfigure}
+\begin{subfigure}[b]{0.32\columnwidth}
+  \includegraphics[width=\textwidth]{mnist_shared/perf_stored_Gumbel_b50000.pdf}
+  \caption{Gumbel stored.}
+\end{subfigure}
+\caption{Performance matrices on shared-shuffle MNIST at
+$S{=}50{,}000$, seed 0.}
+\label{fig:perf_matrix_mnist}
+\end{figure}
+
+\section{Biological motivation (compressed)}
+\label{app:bio}
+The architecture follows several cortical motifs in compressed form:
+each ``neuron'' as a small private MLP mirrors the dendritic-tree view
+of pyramidal neurons~\citep{poirazi2003pyramidal, beniaguev2021single};
+the $k$-winner-take-all step is a discrete abstraction of cortical
+lateral inhibition~\citep{maass2000computational, amari1977dynamics};
+the per-task mask plays the role of an attentional / basal-ganglia
+gating signal that selects among competing
+assemblies~\citep{mink1996basal, schultz1997neural,
+oreilly2006making}.  None of the present results depend on the
+neuroscience interpretation; the cortical analogy is included as
+motivation for the design choices.
+
+\end{document}

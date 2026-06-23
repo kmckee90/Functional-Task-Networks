@@ -1,0 +1,9 @@
+name=$1
+CUDA_VISIBLE_DEVICES=0 nohup uv run python train_grid_dqn.py --name $name --seed 0 &
+CUDA_VISIBLE_DEVICES=0 nohup uv run python train_grid_dqn.py --name $name --seed 1 &
+CUDA_VISIBLE_DEVICES=0 nohup uv run python train_grid_dqn.py --name $name --seed 2 &
+CUDA_VISIBLE_DEVICES=0 nohup uv run python train_grid_dqn.py --name $name --seed 3 &
+CUDA_VISIBLE_DEVICES=1 nohup uv run python train_grid_dqn.py --name $name --seed 4 &
+CUDA_VISIBLE_DEVICES=1 nohup uv run python train_grid_dqn.py --name $name --seed 5 &
+CUDA_VISIBLE_DEVICES=1 nohup uv run python train_grid_dqn.py --name $name --seed 6 &
+CUDA_VISIBLE_DEVICES=1 nohup uv run python train_grid_dqn.py --name $name --seed 7 &

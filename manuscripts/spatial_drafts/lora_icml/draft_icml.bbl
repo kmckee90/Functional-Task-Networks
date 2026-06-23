@@ -1,0 +1,104 @@
+\begin{thebibliography}{14}
+\providecommand{\natexlab}[1]{#1}
+\providecommand{\url}[1]{\texttt{#1}}
+\expandafter\ifx\csname urlstyle\endcsname\relax
+  \providecommand{\doi}[1]{doi: #1}\else
+  \providecommand{\doi}{doi: \begingroup \urlstyle{rm}\Url}\fi
+
+\bibitem[Aljundi et~al.(2019)Aljundi, Kelchtermans, and
+  Tuytelaars]{aljundi2019taskfree}
+Aljundi, R., Kelchtermans, K., and Tuytelaars, T.
+\newblock Task-free continual learning.
+\newblock \emph{IEEE CVPR}, 2019.
+
+\bibitem[French(1999)]{french1999catastrophic}
+French, R.~M.
+\newblock Catastrophic forgetting in connectionist networks.
+\newblock \emph{Trends in cognitive sciences}, 3\penalty0 (4):\penalty0
+  128--135, 1999.
+
+\bibitem[Gama et~al.(2014)Gama, {\v{Z}}liobait{\.e}, Bifet, Pechenizkiy, and
+  Bouchachia]{gama2014concept}
+Gama, J., {\v{Z}}liobait{\.e}, I., Bifet, A., Pechenizkiy, M., and Bouchachia,
+  A.
+\newblock A survey on concept drift adaptation.
+\newblock \emph{ACM Computing Surveys}, 46\penalty0 (4):\penalty0 1--37, 2014.
+
+\bibitem[Hu et~al.(2022)Hu, Shen, Wallis, Allen-Zhu, Li, Wang, Wang, and
+  Chen]{hu2022lora}
+Hu, E.~J., Shen, Y., Wallis, P., Allen-Zhu, Z., Li, Y., Wang, S., Wang, L., and
+  Chen, W.
+\newblock {LoRA}: Low-rank adaptation of large language models.
+\newblock In \emph{International Conference on Learning Representations
+  (ICLR)}, 2022.
+
+\bibitem[Kirkpatrick et~al.(2017)Kirkpatrick, Pascanu, Rabinowitz, Veness,
+  Desjardins, Rusu, Milan, Quan, Ramalho, Grabska-Barwinska,
+  et~al.]{kirkpatrick2017overcoming}
+Kirkpatrick, J., Pascanu, R., Rabinowitz, N., Veness, J., Desjardins, G., Rusu,
+  A.~A., Milan, K., Quan, J., Ramalho, T., Grabska-Barwinska, A., et~al.
+\newblock Overcoming catastrophic forgetting in neural networks.
+\newblock \emph{Proceedings of the national academy of sciences}, 114\penalty0
+  (13):\penalty0 3521--3526, 2017.
+
+\bibitem[Lopez-Paz \& Ranzato(2017)Lopez-Paz and Ranzato]{lopez2017gradient}
+Lopez-Paz, D. and Ranzato, M.
+\newblock Gradient episodic memory for continual learning.
+\newblock \emph{Advances in neural information processing systems}, 30, 2017.
+
+\bibitem[Mallya \& Lazebnik(2018)Mallya and Lazebnik]{mallya2018packnet}
+Mallya, A. and Lazebnik, S.
+\newblock Packnet: Adding multiple tasks to a single network by iterative
+  pruning.
+\newblock In \emph{IEEE Conference on Computer Vision and Pattern Recognition
+  (CVPR)}, 2018.
+
+\bibitem[McCloskey \& Cohen(1989)McCloskey and
+  Cohen]{mccloskey1989catastrophic}
+McCloskey, M. and Cohen, N.~J.
+\newblock Catastrophic interference in connectionist networks: The sequential
+  learning problem.
+\newblock \emph{Psychology of learning and motivation}, 24:\penalty0 109--165,
+  1989.
+
+\bibitem[Rebuffi et~al.(2017)Rebuffi, Kolesnikov, Sperl, and
+  Lampert]{rebuffi2017icarl}
+Rebuffi, S.-A., Kolesnikov, A., Sperl, G., and Lampert, C.~H.
+\newblock icarl: Incremental classifier and representation learning.
+\newblock In \emph{IEEE Conference on Computer Vision and Pattern Recognition
+  (CVPR)}, 2017.
+
+\bibitem[Rusu et~al.(2016)Rusu, Rabinowitz, Desjardins, Soyer, Kirkpatrick,
+  Kavukcuoglu, Pascanu, and Hadsell]{rusu2016progressive}
+Rusu, A.~A., Rabinowitz, N.~C., Desjardins, G., Soyer, H., Kirkpatrick, J.,
+  Kavukcuoglu, K., Pascanu, R., and Hadsell, R.
+\newblock Progressive neural networks.
+\newblock \emph{arXiv preprint arXiv:1606.04671}, 2016.
+
+\bibitem[Serra et~al.(2018)Serra, Suris, Miron, and
+  Karatzoglou]{serra2018overcoming}
+Serra, J., Suris, D., Miron, M., and Karatzoglou, A.
+\newblock Overcoming catastrophic forgetting with hard attention to the task.
+\newblock In \emph{International Conference on Machine Learning}, pp.\
+  4548--4557. PMLR, 2018.
+
+\bibitem[Wortsman et~al.(2020)Wortsman, Ramanujan, Liu, Kembhavi, Rastegari,
+  Yosinski, and Farhadi]{wortsman2020supermasks}
+Wortsman, M., Ramanujan, V., Liu, R., Kembhavi, A., Rastegari, M., Yosinski,
+  J., and Farhadi, A.
+\newblock Supermasks in superposition.
+\newblock \emph{Advances in Neural Information Processing Systems},
+  33:\penalty0 15173--15184, 2020.
+
+\bibitem[Yoon et~al.(2018)Yoon, Yang, Lee, and Hwang]{yoon2018lifelong}
+Yoon, J., Yang, E., Lee, J., and Hwang, S.~J.
+\newblock Lifelong learning with dynamically expandable networks.
+\newblock \emph{ICLR}, 2018.
+
+\bibitem[Zenke et~al.(2017)Zenke, Poole, and Ganguli]{zenke2017continual}
+Zenke, F., Poole, B., and Ganguli, S.
+\newblock Continual learning through synaptic intelligence.
+\newblock In \emph{International Conference on Machine Learning}, pp.\
+  3987--3995. PMLR, 2017.
+
+\end{thebibliography}

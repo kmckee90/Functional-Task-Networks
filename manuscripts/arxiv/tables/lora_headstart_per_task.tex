@@ -1,0 +1,22 @@
+\begin{table}[t]
+\centering
+\small
+\caption{Per-task head-start NLL on the six-task multilingual classification stream described in \cref{sec:lora}. Each entry is the answer-token NLL on the held-out batch of that task, evaluated under the method's mask BEFORE any gradient update on the task. Lower is better. Tasks are ordered as canonically presented during training; task~1 (C-STANCE-A) is omitted because no prior context exists.}
+\label{tab:lora_hs_per_task}
+\begin{tabular}{lccccc}
+\toprule
+Method & financial & trec & emotion & ag news & dbpedia \\
+\midrule
+SeqLoRA & 2.36 & 0.60 & 1.06 & 0.21 & 2.60 \\
+SeqLoRA + ER & 2.60 & 0.56 & 1.11 & 0.22 & 2.39 \\
+RandMask + Router & 1.96 & 0.35 & 0.81 & 0.21 & 2.93 \\
+Indep.\ LoRA (oracle) & 1.47 & 0.48 & 1.84 & 0.16 & 2.17 \\
+Indep.\ LoRA + Router & 2.36 & 0.42 & 1.22 & 0.13 & 2.15 \\
+FTN-LoRA, $B_0=0$, no replay & 1.61 & 9.29 & 1.77 & 0.45 & 4.33 \\
+FTN-LoRA, $B_0=0$ + Router & 1.99 & 2.87 & 1.87 & 0.36 & 2.66 \\
+FTN-LoRA, $B_0=0$ & 2.24 & 0.94 & 1.13 & 0.38 & 3.61 \\
+FTN-LoRA, random per-batch masks & 1.41 & 0.75 & 1.08 & 0.33 & 3.35 \\
+FTN-LoRA & 1.81 & 0.67 & 1.18 & 0.37 & 3.08 \\
+\bottomrule
+\end{tabular}
+\end{table}

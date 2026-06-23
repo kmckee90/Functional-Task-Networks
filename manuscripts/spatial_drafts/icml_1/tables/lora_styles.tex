@@ -1,0 +1,29 @@
+\begin{table}[t]
+\caption{Block-sequential continual fine-tuning of {\tt distilgpt2} on six mutually-exclusive style-transformation tasks (concept shift). Per-token cross-entropy on a held-out test split, mean $\pm$ std over 7 random seeds; FM is the average rise in CE on prior tasks above the lowest level they reached during training (positive $\Rightarrow$ forgetting). {\sc stored} uses each task's training-time mask (oracle); {\sc reconfig} cold-starts the SmoothKWTA configurer on a fresh support batch with no task identity.}
+\label{tab:lora_styles}
+\vskip 0.05in
+\begin{center}\begin{small}\begin{sc}
+\begin{tabular}{llrr}
+\toprule
+Method & Protocol & CE$\downarrow$ & FM$\downarrow$ \\
+\midrule
+\multirow{2}{*}{LoRA-Naive}
+  & stored   & $8.22\pm0.42$ & $+7.37\pm0.50$ \\
+  & reconfig & $8.22\pm0.42$ & $+7.37\pm0.50$ \\
+\midrule
+\multirow{2}{*}{LoRA-Fixed}
+  & stored   & $1.39\pm0.09$ & $0.00\pm0.00$ \\
+  & reconfig & $1.39\pm0.09$ & $0.00\pm0.00$ \\
+\midrule
+\multirow{2}{*}{LoRA-Bank}
+  & stored   & $1.49\pm0.22$ & $+0.11\pm0.30$ \\
+  & reconfig & $1.42\pm0.09$ & $+0.04\pm0.11$ \\
+\midrule
+\multirow{2}{*}{\textbf{LoRA-FTN}}
+  & stored   & $1.71\pm0.16$ & $+0.34\pm0.11$ \\
+  & reconfig & $1.51\pm0.08$ & $+0.07\pm0.03$ \\
+\bottomrule
+\end{tabular}
+\end{sc}\end{small}\end{center}
+\vskip -0.1in
+\end{table}

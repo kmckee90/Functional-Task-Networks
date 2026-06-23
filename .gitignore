@@ -1,0 +1,67 @@
+# ---------------------------------------------------------------------------
+# Functional Task Networks — ignore all produced artifacts.
+# Every subproject writes into organized output folders; none are committed.
+# ---------------------------------------------------------------------------
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+.ipynb_checkpoints/
+
+# Organized output folders (produced by experiments — never committed)
+output/
+checkpoints/
+checkpoints_*/
+results/
+figures/
+images/
+configs/
+gifs/
+data_cache/
+expert_data/
+logs/
+runs/
+wandb/
+
+# Datasets (downloaded/regenerable)
+data/MNIST/
+data/openml/
+
+# Heavy / binary artifacts
+*.npz
+*.npy
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+*.bin
+*.gif
+*.mp4
+
+# Logs
+*.log
+nohup.out
+*.out
+
+# LaTeX build cruft (keep .tex, .bib, .bbl, .sty, .bst, .cls)
+*.aux
+*.blg
+*.fls
+*.fdb_latexmk
+*.synctex.gz
+*.toc
+*.lof
+*.lot
+
+# Editor / OS
+.DS_Store
+.vscode/
+.idea/
+.claude/

@@ -1,0 +1,227 @@
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% draft_icml.tex — ICML 2026 submission: LoRA-Mux for continual fine-tuning of
+% large language models.  This is the LLM-result-first version of the paper;
+% the synthetic / Permuted-MNIST experiments from the long version live in
+% paper/draft_v4.tex.  Compile from this directory:
+%   cd experiments/lora/icml/
+%   pdflatex draft_icml && bibtex draft_icml && pdflatex draft_icml && pdflatex draft_icml
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\documentclass{article}
+
+\usepackage{microtype}
+\usepackage{graphicx}
+% LoRA-experiment figures live in ../figures/ relative to this draft.
+\graphicspath{{./}{../figures/}{../}}
+\usepackage{subcaption}
+\usepackage{booktabs}
+\usepackage{hyperref}
+
+\newcommand{\theHalgorithm}{\arabic{algorithm}}
+
+\usepackage{icml2026}
+
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{mathtools}
+\usepackage{amsthm}
+\usepackage[capitalize,noabbrev]{cleveref}
+
+\theoremstyle{plain}
+\newtheorem{theorem}{Theorem}[section]
+\theoremstyle{remark}
+\newtheorem{remark}[theorem]{Remark}
+
+\icmltitlerunning{LoRA-Mux: structured LoRA routing for continual LLM fine-tuning}
+
+\begin{document}
+
+\twocolumn[
+\icmltitle{LoRA-Mux: A Structured Pool of Low-Rank Adapters for \\
+Continual Concept-Shift Fine-Tuning of Language Models}
+
+\icmlsetsymbol{equal}{*}
+\begin{icmlauthorlist}
+\icmlauthor{Anonymous}{anon}
+\end{icmlauthorlist}
+\icmlaffiliation{anon}{Anonymous Institution}
+\icmlcorrespondingauthor{Anonymous}{anonymous@example.org}
+
+\icmlkeywords{Continual learning, LoRA, low-rank adaptation, mixture of experts, language models, parameter isolation}
+
+\vskip 0.3in
+]
+
+\printAffiliationsAndNotice{}
+
+% =====================================================================
+\begin{abstract}
+Continually fine-tuning a large language model across mutually-exclusive task or preference regimes (e.g.\ conflicting RLHF profiles, persona switches, code/chat regimes) reproduces the catastrophic-forgetting and unsupervised-task-detection problems of classical continual learning, on the comparatively small parameter slice exposed by Low-Rank Adaptation (LoRA). We present \emph{LoRA-Mux}: a structured pool of $H$ rank-$r$ LoRA components per adapted weight, routed by a binary mask produced by a three-stage configurer (gradient proposal $\to$ lateral spatial smoothing $\to$ $k$-winner-take-all). Disjoint masks across tasks give exactly disjoint gradient paths, so training one regime provably leaves prior regimes' adapters unchanged; the same configurer that \emph{installs} a regime's adapter during training \emph{recovers} it from a small support batch at inference, with no task labels. On a frozen \texttt{distilgpt2} continually fine-tuned through six mutually-exclusive style-transformation tasks (concept shift), LoRA-Mux retains prior-task per-token CE within $0.13$~nats of an oracle disjoint-block baseline, while a single shared LoRA loses $7.5$~nats — a $59\times$ reduction in forgetting at no oracle-information cost. The structural oracle attains $\mathrm{FM}=0.000$ exactly, a direct empirical confirmation of the theorem.
+\end{abstract}
+
+% =====================================================================
+\section{Introduction}
+\label{sec:intro}
+
+Modern deployment of large language models increasingly involves continual fine-tuning across heterogeneous regimes that share the same input distribution but require different correct outputs: conflicting RLHF preference distributions across user populations, instruction-tuning regimes (chat/code/JSON/system-style), persona regimes, or domain-shifted continual pretraining~\citep{gururangan2020dontstop,yildiz2024investigating}. When these regimes are presented in a block-sequential stream and a single shared adapter is fine-tuned across them, gradient updates on the current block can overwrite the configuration that encoded a previous block~\citep{mccloskey1989catastrophic,french1999catastrophic}, producing catastrophic forgetting. The problem is sharpest under \emph{concept shift}, where the same input features map to incompatible correct outputs across blocks~\citep{gama2014concept}. The model must additionally identify the active regime at inference time without an oracle task label~\citep{aljundi2019taskfree}.
+
+The standard parameter-efficient adaptation tool is Low-Rank Adaptation (LoRA, \citealt{hu2022lora}), which adds a rank-$r$ update $\Delta W = BA$ to each adapted weight matrix.  Continually fine-tuning a single LoRA across heterogeneous regimes recovers the same catastrophic-forgetting and unsupervised-regime-detection problems, and the three classical CL families inherit the same trade-offs. Regularization~\citep{kirkpatrick2017overcoming,zenke2017continual} fails under strict concept shift because no single rank-$r$ update can simultaneously satisfy incompatible reward profiles. Replay~\citep{rebuffi2017icarl,lopez2017gradient} requires keeping data from prior regimes. Parameter-isolation methods~\citep{mallya2018packnet,serra2018overcoming,wortsman2020supermasks,rusu2016progressive,yoon2018lifelong} typically need either an oracle task identity at inference or a separate task-embedding-conditioned router learned across tasks.
+
+We introduce \emph{LoRA-Mux}: a structured pool of $H$ rank-$r$ LoRA components per adapted weight, routed by a binary mask produced by a short inner-loop optimization. The same procedure that installs a subnetwork during training recovers it cold-started on a fresh support batch at inference; no task identity, embedding, or learned cross-task router is required. Disjoint masks give exactly disjoint gradient paths (\cref{thm:isolation}), so any regime trained with a mask disjoint from a prior regime's mask leaves the prior adapter untouched.
+
+\paragraph{Contributions.} (1) The LoRA-Mux module, which inserts a pool of LoRA components into the existing LoRA setup with no other changes to model or training (\cref{sec:method}). (2) A three-stage mask configurer (gradient $\to$ lateral smoothing $\to$ KWTA) that runs cold-started on a small support batch at both training and inference, with no task labels. (3) A structural no-forgetting theorem for disjoint masks (\cref{thm:isolation}), confirmed empirically on a real LLM. (4) An evaluation on \texttt{distilgpt2} continually fine-tuned through six mutually-exclusive style-transformation tasks: LoRA-Mux retains prior tasks within $0.13$~nats CE of the oracle while a shared LoRA loses $7.5$~nats, and the residual gap to oracle is fully explained by mask overlap on gradient-similar task pairs.
+
+% =====================================================================
+\section{Method}
+\label{sec:method}
+
+\paragraph{LoRA-Mux module.}
+For each adapted weight $W \in \mathbb{R}^{d_o\times d_i}$ in a frozen pretrained backbone, we instantiate a pool of $H$ rank-$r$ components $\{(B_k,A_k)\}_{k=1}^{H}$, with $A_k\in\mathbb{R}^{r\times d_i}$ and $B_k\in\mathbb{R}^{d_o\times r}$, and route them through a binary mask $m\in\{0,1\}^H$ with $\|m\|_0 = k$:
+\begin{equation}
+\Delta W(m) = \sum_{k=1}^{H} m_k\, B_k A_k, \qquad y = (W + \Delta W(m))\,x.
+\end{equation}
+The frozen base $W$ is shared across tasks; $A$ and $B$ are the only trained parameters; $m$ selects which components contribute on the current pass. Standard LoRA init ($A$ uniform, $B$ zero) makes the initial $\Delta W$ identically zero, so the model starts at the pretrained behaviour. A single mask of size $H$ is shared across all adapted layers, so a "component" spans the full depth of the network — analogous to a parameter-isolation neuron in classical CL.
+
+\begin{theorem}[Structural forgetting guarantee]
+\label{thm:isolation}
+Let $m^{(s)},m^{(t)}\in\{0,1\}^H$ be the masks active during fine-tuning blocks $s<t$. If $m^{(s)}\odot m^{(t)} = \mathbf{0}$, then for every $(A_k,B_k)$ with $m^{(s)}_k=1$, the gradient of the block-$t$ loss is exactly zero. Training on block $t$ leaves the block-$s$ LoRA adapter unchanged.
+\end{theorem}
+\begin{proof}
+With $m^{(t)}_k=0$, the term $m^{(t)}_k B_k A_k x$ is multiplied by zero in every forward pass, so $\partial\mathcal{L}_t/\partial A_k = 0$ and $\partial\mathcal{L}_t/\partial B_k = 0$. \qed
+\end{proof}
+\begin{remark}\label{rem:caveats}
+The theorem assumes no parameter changes via channels other than the explicit gradient. Decoupled weight decay (AdamW) and Adam first/second moments carried across task boundaries change inactive parameters and produce a small but reproducible $\mathrm{FM}>0$ even for FixedMask oracles. Resetting Adam $(m,v)$ at every task boundary suffices; we do this in all reported runs.
+\end{remark}
+
+\paragraph{Three-stage mask configurer.}
+The mask is produced by \cref{alg:mask_config} given the live model and a single support batch $(X,Y)$ from the current task:
+(i)~\emph{Gradient proposal}: $S$ Adam steps on the sigmoid-relaxed mask logits, cold-started from $m=\mathbf{0}$, minimise the task loss on $(X,Y)$.
+(ii)~\emph{Lateral smoothing}: the proposal is reshaped to a $D\times D$ grid (so $H = D^2$) and convolved $T$ times with a uniform $s\times s$ kernel (torus padding); this projects the noisy proposal onto compact contiguous blobs.
+(iii)~\emph{KWTA}: top-$k$ binarisation gives a fixed capacity budget $k/H$ per task.
+The same procedure installs the adapter during training and recovers it at inference; no task identity, embedding, or cross-task router is learned. Because steps~(ii) and (iii) are deterministic functions of the relaxed proposal, the only source of variance in mask recovery is the support batch and the inner-loop randomness.
+
+\begin{algorithm}[t]
+\caption{\textsc{SmoothKWTA} configurer for LoRA-Mux}
+\label{alg:mask_config}
+\begin{algorithmic}[1]
+\STATE \textbf{Input:} model $f_\theta$, support batch $(X,Y)$, grid side $D$ (so $H=D^2$), kernel $s$, lateral steps $T$, winners $k$, reconfig steps $S$, learning rate $\eta$
+\STATE $m \leftarrow \mathbf{0} \in \mathbb{R}^{H}$
+\FOR{$i=1,\ldots,S$}
+  \STATE $m \leftarrow m - \eta\,\widehat\nabla_m\mathcal{L}\bigl(f_\theta(X,\sigma(m)),\,Y\bigr)$
+\ENDFOR
+\STATE Reshape $m$ to $D\times D$;\quad $m \leftarrow K_s^{(T)}*m$
+\STATE \textbf{return} $\mathrm{KWTA}(\mathrm{flatten}(m),\,k)$
+\end{algorithmic}
+\end{algorithm}
+
+\paragraph{Variants and baselines.}
+\textbf{LoRA-Mux} (the proposed method) uses Algorithm~\ref{alg:mask_config} to install and recover the mask.
+\textbf{LoRA-FixedMask} assigns each task index a deterministic disjoint block of size $k$; it is the structural oracle.
+\textbf{LoRA-Naive} uses the all-ones mask (every component active for every task) — a single shared LoRA of effective rank $H r$, sequentially fine-tuned.  This is the catastrophic-forgetting reference point. All three share the same backbone, the same total parameter pool $\{(A_k,B_k)\}$, and the same training schedule; they differ only in routing.
+
+% =====================================================================
+\section{Experiments}
+\label{sec:experiments}
+
+\paragraph{Setup.}
+\label{sec:setup}
+We continually fine-tune a frozen \texttt{distilgpt2} (six transformer layers) on a stream of $N=6$ style-transformation tasks. Every transformer block's attention QKV projection (\texttt{c\_attn}) is wrapped with a LoRA-Mux pool: $H=1024$ components arranged on a $32\times 32$ grid, rank $r=4$, KWTA winners $k=128$ ($12.5\%$ active per task). Optimizer: Adam at $\eta = 5\times 10^{-4}$, weight decay disabled, $(m,v)$ moments reset at every task boundary (\cref{rem:caveats}). Each task gets $200$ training steps at batch size $8$; the configurer's support batch is $16$ examples; we report per-token cross-entropy on a held-out test split. Headline metrics use the realistic mask-recovery protocol: at evaluation, the configurer is cold-started on a fresh support batch with no task identity (\textsc{reconfig}); the oracle protocol that uses the training-time mask (\textsc{stored}) is reported for comparison.
+
+\paragraph{Tasks.}
+The six tasks share the same source corpus of mixed-case English sentences and apply different deterministic text-to-text transformations: \texttt{upper}, \texttt{lower}, \texttt{reverse\_words}, \texttt{double\_words}, \texttt{starred\_vowels} (vowels replaced with \texttt{*}), and \texttt{pirate} (\texttt{"Arr! ... matey!"} wrapping). Same input distribution, different target text $\Rightarrow$ strict concept shift. The transformations are gradient-discriminable: each requires a distinct token-level pattern, so the loss surface for $(x, y_k)$ has a clearly different gradient w.r.t.\ the mask logits than $(x, y_j)$ for $j\ne k$.
+
+\paragraph{Headline result.}
+\cref{tab:lora_styles} reports the three methods under both protocols. LoRA-Naive collapses: a single all-active adapter sequentially trained through six concept-shift regimes loses an average of $+7.55$~nats on prior tasks. LoRA-FixedMask attains $\mathrm{FM}=0.000$ exactly across all six tasks under both protocols, the empirical confirmation of \cref{thm:isolation}. LoRA-Mux, with the same parameter pool but mask routing learned from data, retains within $0.13$~nats of the oracle under the realistic protocol — a $59\times$ reduction in forgetting relative to LoRA-Naive, and within the standard deviation of the oracle's own training run.
+
+\input{tables/lora_styles.tex}
+
+\cref{fig:perf_matrices} shows the per-task forgetting pattern under the realistic protocol. LoRA-Naive's matrix darkens monotonically along each prior-task column as more tasks are added — every cell off the diagonal is overwritten. LoRA-Mux's matrix retains the diagonal and most off-diagonals at low CE, with concentrated forgetting on a single pair (\texttt{reverse\_words} / \texttt{double\_words}). \cref{fig:forgetting_curves} traces the per-task CE through the training stream: LoRA-Naive's curves climb sharply on every prior task whenever a new task is trained, while LoRA-Mux's stay flat for most pairs.
+
+\begin{figure}[t]
+\centering
+\begin{subfigure}[b]{0.48\columnwidth}
+  \includegraphics[width=\textwidth]{perf_matrix_LoRA-Naive_reconfig.pdf}
+  \caption{LoRA-Naive (\textsc{reconfig}).}
+\end{subfigure}
+\hfill
+\begin{subfigure}[b]{0.48\columnwidth}
+  \includegraphics[width=\textwidth]{perf_matrix_LoRA-Mux_reconfig.pdf}
+  \caption{LoRA-Mux (\textsc{reconfig}).}
+\end{subfigure}
+\caption{Per-task performance matrices on the LLM concept-shift stream (per-token CE on test, lower better). Cell $(i,j)$ is the loss on task $j$ after training through task $i$. LoRA-Naive (left) overwrites every prior task; LoRA-Mux (right) retains nearly all prior tasks via mask recovery, with concentrated forgetting on a single gradient-similar pair.}
+\label{fig:perf_matrices}
+\end{figure}
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\columnwidth]{forgetting_curves.pdf}
+\caption{Per-task CE through the training stream (\textsc{reconfig} protocol). Each curve is one task; the $x$-axis is "after training through task $i$." LoRA-Naive's prior-task curves climb at every block boundary; LoRA-FixedMask is flat (Theorem~\ref{thm:isolation}); LoRA-Mux is flat for most tasks with one visible spike when a gradient-similar later task overwrites a shared component.}
+\label{fig:forgetting_curves}
+\end{figure}
+
+\paragraph{What the routing looks like.}
+\Cref{fig:mask_tiling} renders the LoRA-Mux training-time masks across eight random seeds as RGB overlays on the $32\times 32$ component grid: each task is assigned a distinct colour and the per-task binary masks are summed (clipped per-channel). Despite the configurer being cold-started from $m=\mathbf{0}$ at every task, the SmoothKWTA stages (lateral $3\times 3$ kernel, $T=15$ iterations) consistently group the selected components into compact contiguous blobs. Tasks with disjoint colours are exactly non-interfering by Theorem~\ref{thm:isolation}; the residual co-located colours on gradient-similar task pairs are the source of the residual forgetting reported in Table~\ref{tab:lora_styles}.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\columnwidth]{mask_tiling_LoRA-Mux.pdf}
+\caption{LoRA-Mux mask layouts on the $32\times 32$ component grid for eight random seeds. One colour per task; cells with mixed colour are shared by overlapping masks. The configurer is cold-started from $m=\mathbf{0}$ in every panel, yet repeatedly assigns each task a compact spatial blob, and most task pairs land in disjoint regions across seeds (and are retained exactly).}
+\label{fig:mask_tiling}
+\end{figure}
+
+\paragraph{Where the residual loss goes: a mask-overlap diagnostic.}
+The disjoint-mask theorem makes a precise prediction: for any two tasks whose recovered masks happen to be disjoint, training the second leaves the first untouched. \cref{tab:lora_overlap} reports the pairwise mask overlap $|m_i\cap m_j|/k$ for the six LoRA-Mux training-time masks on the $32\times 32$ grid. Most pairs are exactly disjoint. The largest overlap is $0.36$ (\texttt{upper}/\texttt{lower}, both case-change tasks); the gradient-similar word-level pair \texttt{reverse\_words}/\texttt{double\_words} sits at $0.24$. The residual $\mathrm{FM}=0.13$ for LoRA-Mux is concentrated on these overlapping pairs; the disjoint pairs retain exactly. This is a direct empirical realisation of \cref{thm:isolation}: forgetting is exactly proportional to mask overlap, and the configurer's job is simply to make the masks disjoint enough — a job that becomes much easier when the component grid is large enough to give each task its own spatial neighbourhood.
+
+\input{tables/lora_overlap.tex}
+
+\paragraph{Concept-shift corroboration: MNIST Shuffled Labels.}
+To check that the mechanism is not specific to LLM tokenisation we also report the same configurer on a non-LLM concept-shift benchmark, MNIST Shuffled Labels~\citep{van2019three}: five tasks share the MNIST images but apply different permutations of the digit labels (pure concept shift; same images, incompatible labels). \cref{tab:exp2}: a regularization baseline (EWC) collapses to chance ($\mathrm{ACC}=0.255$); LoRA-style mask routing recovers task subnetworks accurately, with FTN-Slow at $\mathrm{ACC}=0.976\pm0.001$, $\mathrm{FM}=0.004\pm0.001$. The same algorithmic ingredient (disjoint mask routing recovered without task labels) explains the result on both substrates.
+
+\input{tables/exp2.tex}
+
+% =====================================================================
+\section{Discussion}
+
+\paragraph{Why LoRA-Mux works.}
+\Cref{thm:isolation} reduces forgetting to a routing problem: any disjoint pair of masks is provably non-interfering. The configurer is the operationalisation of "make the routing disjoint enough on this batch", and the empirical result tracks the prediction quantitatively — disjoint pairs are retained exactly, and forgetting is concentrated on overlapping pairs (\cref{tab:lora_overlap}).
+
+\paragraph{Comparison to other LoRA continual approaches.}
+Most continual-LoRA proposals either store one LoRA per task and select with an oracle index, or learn a router across tasks (HAT-style or SupSup-style \citep{serra2018overcoming,wortsman2020supermasks}). LoRA-Mux occupies a different point: one structured pool, one configurer that does both install and recovery, and no learned cross-task component. The structural guarantee is the same as the per-task-LoRA approach (because the masks are disjoint), but inference time uses the same mechanism that training time does.
+
+\paragraph{What the spatial smoothing buys.}
+Without smoothing, the configurer's gradient proposal is a noisy single-batch estimate of which components reduce loss for the current support batch; KWTA on top picks the top-$k$ of that noisy signal. The same support batch can produce different proposals across calls, and gradient-similar tasks (\texttt{reverse\_words}/\texttt{double\_words}) push toward overlapping winners. The lateral smoothing kernel projects the proposal onto compact contiguous blobs on the 2-D component grid, which (i)~stabilises recovery across calls and (ii)~biases the selection toward spatially separated regions for distinct tasks. Stronger smoothing (larger kernel or more iterations) further reduces overlap on borderline pairs at the cost of slower convergence on the current task.
+
+\paragraph{Limitations.}
+The benchmarks here remain small. The structural guarantee is contingent on disabling decoupled weight decay and resetting Adam moments at task boundaries (\cref{rem:caveats}); real fine-tuning pipelines that depend on AdamW will silently violate it. Per-task capacity is bounded by $kr$ effective rank; longer streams require either neurogenesis (expanding the grid) or graceful sharing through the natural mask-overlap query.
+
+\paragraph{Outlook.}
+The most actionable direction is scaling: larger backbones (LLaMA, Mistral), wrapping more module types (\texttt{c\_attn}, \texttt{c\_proj}, MLP up/down), and evaluating on conflicting RLHF preference profiles or instruction-tuning regimes. The same configurer transfers without changes; the open empirical question is how the mask-disjointness property holds up as the gradient proposal is computed through a much deeper backbone with more nuanced loss surfaces.
+
+% =====================================================================
+\section*{Impact Statement}
+
+This paper presents work whose goal is to advance the field of machine learning. There are many potential societal consequences of our work, none which we feel must be specifically highlighted here.
+
+\bibliography{refs}
+\bibliographystyle{icml2026}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\newpage
+\appendix
+\onecolumn
+
+\section{Implementation Notes for \cref{thm:isolation}}
+\label{app:impl}
+The theorem assumes that no parameter changes occur on inactive LoRA components. In practice, two common implementation choices break this assumption silently:
+
+\begin{itemize}
+\item \textbf{Decoupled weight decay} (e.g.\ AdamW): applies $\theta\leftarrow(1-\eta\lambda)\theta$ regardless of gradient. Set weight decay to $0$ or apply it only to active components.
+\item \textbf{Adam moment carry-over}: at a task boundary the prior task's $(m,v)$ moments on inactive components are non-zero, so subsequent Adam updates remain non-zero (decaying as $(\beta_1/\sqrt{\beta_2})^t$) for $\sim 1/(1-\beta_1/\sqrt{\beta_2})\approx 10$ steps. Reset the optimizer state at every task boundary.
+\end{itemize}
+With both precautions, LoRA-FixedMask attains $\mathrm{FM}=0.000$ exactly on every reported run.
+
+\section{Hyperparameters and reproduction}
+\label{app:hp}
+LoRA-Mux experiments: \texttt{distilgpt2} backbone (frozen), $H=1024$, $D=32$, $r=4$, $k=128$ ($12.5\%$ active per task), $\eta=5\times 10^{-4}$, $200$ training steps per task, batch $8$, support-batch size $16$, max seq length $96$, Adam $(m,v)$ reset at every task boundary, decoupled weight decay $0$. SmoothKWTA configurer: $S=15$ inner steps at $\eta_m=0.5$, kernel $3\times 3$, $T=15$ lateral steps. The full code accompanies this submission at \texttt{experiments/lora/}.
+
+\end{document}

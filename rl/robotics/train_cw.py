@@ -1,0 +1,2149 @@
+"""Sequential DDPG on the Continual World benchmark — FTN backbone + masked replay.
+
+Continual-World port of train_mt10.py. Same FTN-DDPG continual-learning pipeline,
+but the task suite is the Continual World CW10/CW20 sequence (Wołczyk et al. 2021,
+https://github.com/awarelab/continual_world) rather than MT10. Continual World is
+a fixed sequence of MetaWorld manipulation tasks, each meant to be trained for a
+fixed step budget before moving to the next, evaluating forgetting / transfer.
+
+Fidelity notes (the upstream CW package targets an old MetaWorld + mujoco-py +
+gym + TensorFlow stack that does not coexist with this repo's MetaWorld 3.0.0 /
+mujoco 3.8.1 / PyTorch). We therefore reproduce CW's *protocol* on the installed
+MetaWorld rather than importing the package:
+    * Task sequence: CW10 (CW20 = CW10 twice), names mapped -v1 -> -v3.
+    * Randomization: "random_init_all" — goals/objects are resampled every reset
+      (we unfreeze `env._freeze_rand_vec`, exactly what CW's RandomizationWrapper
+      does); "deterministic" / "random_init_fixed20" also supported.
+    * 200-step episode horizon (CW's META_WORLD_TIME_HORIZON).
+    * Success read from MetaWorld's info["success"].
+    * Optional one-hot task id appended to the obs (CW's OneHotAdder) — OFF by
+      default: FTN carries task identity in the *mask*, not the obs.
+
+Cheat reset: CW is designed to be solved by a real off-policy learner (SAC) over
+~1M steps/task from random init, NOT by random exploration, and the dense
+MetaWorld rewards already shape from anywhere. The cheat-init handlers also only
+exist for a couple of CW10 tasks. So `use_cheat_reset` defaults to FALSE here
+(standard CW). It can be re-enabled from the config for the few tasks that have a
+handler in `_cheat_reset` (others fall back to a normal reset).
+
+Per task (unchanged from train_mt10.py):
+    1. Exploration: random / OU rollouts until `n_successful_explore` rewarded
+       episodes or `explore_episodes` total. (With cheat off, hard CW tasks may
+       yield zero rewarded episodes; the boundary reconfig is then skipped and
+       mask search relies on the mid-phase reconfig over dense-reward bursts.)
+    2. Boundary mask reconfig on the rewarded support — critic mask via
+       `reconfig_objective` (default −Pearson(Q(s,a), G_t)), then actor mask via
+       −Q under the new critic mask. AnnealedSTE.
+    3. Exploitation: `n_iters_per_task` iterations of a DECOUPLED collect/train
+       loop. Each iteration (a) collects `collect_steps` env steps on each of
+       `n_parallel_train` continuing (auto-reset) envs, pushing them to the replay
+       ring, then (b) runs `train_steps` joint DDPG updates whose loss = current
+       loss (current masks) summed with the loss over up to `replay_max_chunks`
+       mask-overlapping archived chunks, each under its own (m_a, m_c).
+    4. Mid-phase reconfig every `reconfig_every_iters` iterations on the latest
+       collect burst; each reconfig closes off the current chunk (tagged with the
+       outgoing masks) before committing the new ones.
+    5. Archive the final chunk, then eval all tasks (explore -> cold-start
+       reconfig per eval episode -> greedy rollout).
+"""
+
+from __future__ import annotations
+
+import json
+import random
+import time
+from collections import defaultdict
+from dataclasses import asdict, dataclass
+
+import matplotlib
+
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import metaworld
+import metaworld.policies as mw_policies
+import mujoco
+import numpy as np
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from ftn import (
+    FTNActor,
+    FTNCritic,
+    anneal_ste_mask,
+    kwta,
+)
+
+torch.set_default_device("cuda" if torch.cuda.is_available() else "cpu")
+
+
+# ---------------------------------------------------------------------------
+# Config
+# ---------------------------------------------------------------------------
+
+# Continual World task sequences (Wołczyk et al. 2021). The canonical CW10 list,
+# in order; CW20 is CW10 concatenated with itself. Upstream uses -v1 names; the
+# installed MetaWorld exposes the same tasks as -v3, so we map suffixes. The rest
+# of the pipeline keys off len(tasks), so any subset / either sequence works.
+# These are HARD manipulation tasks — without cheat-init, random exploration will
+# essentially never solve them (they are meant for full off-policy RL over a large
+# step budget); their dense rewards still shape learning during exploitation.
+CW10 = (
+    "hammer-v3",
+    "push-wall-v3",
+    "faucet-close-v3",
+    "push-back-v3",
+    "stick-pull-v3",
+    "handle-press-side-v3",
+    "push-v3",
+    "shelf-place-v3",
+    "window-close-v3",
+    "peg-unplug-side-v3",
+)
+CW20 = CW10 + CW10
+
+# Default to CW10. Select CW20 (or a subset) via --sequence / the config.
+DEFAULT_TASKS = CW10
+
+# MetaWorld task names that have a cheat-init handler in `_cheat_reset`. Only a
+# couple of CW10 tasks (push, window-close) are covered; with use_cheat_reset on,
+# uncovered tasks fall back to a normal random_init reset.
+CHEAT_HANDLERS = {
+    "reach-v3",
+    "push-v3",
+    "pick-place-v3",
+    "door-open-v3",
+    "drawer-open-v3",
+    "drawer-close-v3",
+    "button-press-topdown-v3",
+    "peg-insert-side-v3",
+    "window-open-v3",
+    "window-close-v3",
+}
+
+# CW seeds MT50 with a fixed seed so the goal-variant task pool is reproducible
+# and independent of the experiment seed (goals still resample per reset under
+# random_init_all).
+CW_MT50_SEED = 1
+
+
+# ---------------------------------------------------------------------------
+# DDPGConfig glossary (parameter reference; fields are listed bare below)
+# ---------------------------------------------------------------------------
+# tasks                   : CW task names (MetaWorld -v3), learned sequentially (one phase each).
+#
+# -- experiment --
+# seed                    : RNG seed for python/numpy/torch and env goal sampling.
+# explore_episodes        : cap on exploration episodes per task / per eval cell.
+# n_successful_explore    : stop exploration after this many rewarded episodes.
+# eval_episodes           : greedy rollouts per (phase, task) eval cell.
+# max_episode_steps       : truncated horizon; matches what cheat init allows.
+# output_path             : .npz/.png results path (suffixed per baseline + seed).
+# log_every               : print a training summary every this many iterations.
+#
+# -- exploitation: decoupled collect / train (actor-learner loop) --
+# n_iters_per_task        : collect→train iterations run after the boundary reconfig.
+# n_parallel_train        : parallel (auto-reset) MuJoCo envs stepped per collect.
+# collect_steps           : N — env steps collected PER PARALLEL ENV per iteration,
+#                           with auto-reset on success/term/trunc/timeout, before
+#                           any training (so one iter adds N*n_parallel_train tuples).
+# train_steps             : M — joint DDPG gradient updates run per iteration, after
+#                           collection. Decoupling collection from training (vs the
+#                           old per-env-step interleaving) mirrors train_jax_debug.py.
+#
+# -- DDPG --
+# gamma                   : discount factor for TD targets and MC returns.
+# tau                     : Polyak target-network averaging rate.
+# actor_lr / critic_lr    : Adam learning rates for actor and critic.
+# batch_size              : transitions per gradient step.
+# replay_capacity         : ring-buffer capacity (current-segment transitions).
+# noise_std               : Gaussian exploration noise added to actions in rollouts.
+#
+# -- FTN backbone (ParallelMLP bank + KWTA-masked readout) --
+# ftn_hidden_size         : H — number of parallel sub-networks per network.
+# ftn_k                   : active sub-networks selected by the KWTA mask.
+# ftn_inner_size          : width inside each parallel MLP.
+# ftn_layers              : hidden layers inside each parallel MLP.
+# ftn_dropout_p           : dropout on the per-neuron output vector (train-time only).
+#
+# -- AnnealedSTE mask reconfiguration --
+# reconfig_steps          : inner optimization steps per mask search.
+# reconfig_lr             : learning rate for the soft-mask logits.
+# reconfig_n              : support-batch cap (subsampled rewarded transitions).
+# mask_init_noise_scale   : cold-start logit init = noise_scale * randn(H).
+# mask_warm_start         : warm-start logits from the current mask (eval cold-starts
+#                           regardless).
+# reconfig_objective      : critic-mask objective; one of:
+#     "td"          — MSE(Q(s,a)[m], r + γ·(1-done)·Q_target(s', μ(s'))[m])
+#     "mse_returns" — MSE(Q(s,a)[m], G_t)
+#     "cos_returns" — −cos(Q(s,a)[m], G_t)
+#     "r_returns"   — −Pearson(Q(s,a)[m], G_t)   (default)
+#   The actor mask is always selected second, via −Q under the new critic mask.
+# reconfig_gamma          : discount for MC returns G_t; None → fall back to gamma.
+# reconfig_every_iters    : mid-phase reconfig cadence (iterations); 0 disables. The
+#                           support is the most recent collect burst (MC returns over
+#                           its auto-reset episodes, computed per env); the current
+#                           chunk is archived under the outgoing masks before commit.
+#
+# -- mask-overlap-filtered cross-task replay (summed-loss, per-chunk) --
+# replay_max_chunks       : max archived chunks summed into one joint step.
+# replay_max_tuples       : transitions sampled per recalled chunk (per-chunk
+#                           batch size; each chunk is forwarded under its own
+#                           (m_a, m_c), so its data-to-mask match stays exact).
+# rho_low / rho_high      : recall a chunk if either actor OR critic mask overlap
+#                           ρ ∈ (rho_low, rho_high].
+#
+# -- exploration / eval-time mask recovery --
+# warmup_policy           : exploration policy used to gather the rewarded support
+#                           for boundary + eval mask reconfig. "random" (OU/uniform
+#                           cold-start), "prev_mask" (prior actor+noise; falls back
+#                           to random at task 0), or "scripted" (MetaWorld expert
+#                           for the task + noise_std_explore noise — solves hard CW
+#                           tasks random can't, seeding support only; the agent
+#                           still learns/evals under its own masked policy).
+#
+# -- exploration noise process --
+# exploration_noise       : "ou" (default) temporally-correlated Ornstein-
+#                           Uhlenbeck noise — used both as additive noise on the
+#                           policy AND as the no-policy cold-start driver (its
+#                           sample is the action), so exploration produces
+#                           directed motion instead of a zero-mean random walk.
+#                           "simple" restores legacy behavior (uniform-random
+#                           cold-start actions + i.i.d. Gaussian additive noise).
+#                           noise_std / noise_std_explore are the OU volatility
+#                           (sigma) in "ou" mode and the Gaussian std in "simple".
+# ou_theta                : OU mean-reversion rate (higher = less correlated).
+#
+# -- bootstrapped exploration (eval-time support collection) --
+# explore_method          : how the eval-time rewarded support is gathered
+#                           (`_eval_with_reconfig`); eval then runs a fresh
+#                           cold-start reconfig per eval episode either way.
+#                           CLI override: --bootstrap selects "bootstrap".
+#     "random"    — collect random / warmup_policy rollouts until
+#                   n_successful_explore rewarded episodes. Off-policy: returns
+#                   come from meandering random rollouts, so the Q-vs-returns
+#                   correlation target is noisy.
+#     "bootstrap" — on-policy collection. Random actions until the first reward;
+#                   thereafter EVERY exploration episode is preceded by a fresh
+#                   COLD-START reconfig on the *cumulative* rewarded support
+#                   (never committed), so each episode draws a fresh plausible
+#                   mask and a bad early mask can't trap exploration. Rewarded
+#                   episodes accumulate. Stops at n_successful_explore rewarded
+#                   episodes or explore_episodes total.
+# noise_std_explore       : Gaussian exploration noise for the "bootstrap"
+#                           collection rollouts (DDPG analog of an exploration ε,
+#                           separate from noise_std).
+#
+# -- baselines: catastrophic-forgetting references (mutually exclusive) --
+# fixed_mask    : oracle disjoint allocation — task i owns neurons [i*k, (i+1)*k)
+#                 (requires N*k <= H), recalled exactly at eval (oracle task
+#                 identity). Disables all reconfig and cross-task replay (the
+#                 disjoint masks never overlap); forward-transfer cells are NaN.
+# no_mask       : all-ones mask (k = ftn_hidden_size), frozen for the run — plain
+#                 dense DDPG over the FTN backbone. Disables reconfig + replay.
+# stored_mask   : full FTN training, but eval recalls the last mask used in each
+#                 task's training phase instead of explore + cold-start reconfig;
+#                 forward-transfer cells NaN. Isolates mask recovery from storage.
+# Everything else (buffer, DDPG updates, exploration) is identical across
+# conditions, so the result matrices are directly cell-comparable.
+# ---------------------------------------------------------------------------
+@dataclass
+class DDPGConfig:
+    # --- tasks ---
+    tasks: tuple = DEFAULT_TASKS
+
+    # --- Continual World env setup ---
+    # use_cheat_reset : place the arm/world near the reward state at reset so
+    #     random exploration finds reward (see `_cheat_reset`). DEFAULT FALSE —
+    #     CW is meant to be run from random init with a real RL learner; also
+    #     only push/window-close among CW10 have a handler (others fall back to a
+    #     normal reset even when this is on).
+    # randomization   : "random_init_all" (CW default — goals/objects resampled
+    #     every reset), "deterministic" (goal fixed per env), or
+    #     "random_init_fixed20" (resample among the first 20 goal variants).
+    # add_onehot      : append a one-hot task id to the obs (CW's OneHotAdder).
+    #     DEFAULT FALSE — FTN encodes task identity in the mask, not the obs.
+    use_cheat_reset: bool = True
+    randomization: str = "random_init_all"
+    add_onehot: bool = False
+
+    # --- experiment ---
+    seed: int = 0
+    # With cheat off, hard CW tasks yield ~0 rewarded explore episodes, so keep
+    # the explore cap small (it would otherwise burn explore_episodes*horizon
+    # random steps finding nothing). The boundary reconfig is simply skipped when
+    # no reward is found; mid-phase reconfig over dense-reward bursts still runs.
+    explore_episodes: int = 50
+    n_successful_explore: int = 20
+    eval_episodes: int = 10
+    max_episode_steps: int = 200  # CW META_WORLD_TIME_HORIZON
+    output_path: str = "results.npz"
+    log_every: int = 5
+
+    # --- exploitation: decoupled collect / train (the actor-learner loop) ---
+    # Each iteration collects `collect_steps` env steps on `n_parallel_train`
+    # continuing (auto-reset) envs, pushes them to the replay ring, then runs
+    # `train_steps` joint DDPG updates. Mirrors train_jax_debug.py's structure
+    # (collect N then train M) instead of train.py's per-env-step interleaving.
+    n_iters_per_task: int = 50  # collect→train iterations per task
+    n_parallel_train: int = 4  # parallel MuJoCo envs during collection
+    collect_steps: int = 64  # N — env steps collected per iteration (per env)
+    train_steps: int = 64  # M — gradient updates per iteration
+
+    # --- DDPG ---
+    gamma: float = 0.95
+    tau: float = 0.01
+    actor_lr: float = 1e-4
+    critic_lr: float = 3e-4
+    batch_size: int = 64
+    replay_capacity: int = 200_000
+    noise_std: float = 0.1
+
+    # --- FTN backbone ---
+    ftn_hidden_size: int = 256
+    ftn_k: int = 64
+    ftn_inner_size: int = 8
+    ftn_layers: int = 8
+    ftn_dropout_p: float = 0.00
+
+    # --- AnnealedSTE ---
+    reconfig_steps: int = 120
+    reconfig_lr: float = 0.003
+    reconfig_n: int = 4096
+    mask_init_noise_scale: float = 0.00001
+    mask_warm_start: bool = True
+    reconfig_objective: str = "r_returns"
+    reconfig_gamma: float | None = None
+    reconfig_every_iters: int = 10
+
+    # --- mask-overlap-filtered cross-task replay (summed-loss, per-chunk) ---
+    replay_max_chunks: int = 4
+    replay_max_tuples: int = 64
+    rho_low: float = 0.2
+    rho_high: float = 0.8
+
+    # --- exploration / eval-time mask recovery ---
+    # "random" | "prev_mask" | "scripted" (MetaWorld expert; see _SCRIPTED_POLICIES).
+    warmup_policy: str = "scripted"
+
+    # --- exploration noise process ---
+    # "ou"     : temporally-correlated Ornstein-Uhlenbeck noise (default). Used
+    #            both as additive noise on the policy and as the no-policy
+    #            cold-start exploration driver (sample → clipped action). Its
+    #            correlated increments integrate into directed motion, so the
+    #            arm actually traverses the workspace instead of jittering.
+    # "simple" : legacy behavior — uniform-random actions for no-policy
+    #            cold-start exploration, i.i.d. Gaussian additive noise on the
+    #            policy. `noise_std` / `noise_std_explore` are the Gaussian std.
+    # noise_std / noise_std_explore double as the OU volatility (sigma) in "ou"
+    # mode; ou_theta is the OU mean-reversion rate.
+    exploration_noise: str = "ou"
+    ou_theta: float = 0.15
+
+    # --- demonstration seeding (train DDPG on the exploration data) ---
+    # By default the exploration episodes only feed the mask reconfig and are NOT
+    # used for gradient updates. With demo_seed on, after the boundary reconfig
+    # commits the phase mask, the exploration episodes are archived as a protected
+    # demo chunk (tagged with that mask) and summed into EVERY joint DDPG update
+    # for the phase — so the agent learns directly from the (e.g. scripted-expert)
+    # data, DDPGfD-style, instead of only from its own collected rollouts.
+    #   demo_seed              : enable demo seeding.
+    #   demo_seed_rewarded_only: seed only the successful explore episodes (else
+    #                            all of them — useful when dense reward is enough).
+    #   demo_seed_persist      : keep demo chunks across phases (each replayed
+    #                            under its own task's mask, a cross-task retention
+    #                            aid) instead of clearing them at each phase start.
+    demo_seed: bool = True
+    demo_seed_rewarded_only: bool = True
+    demo_seed_persist: bool = True
+
+    # --- bootstrapped exploration (explore_method="bootstrap") ---
+    explore_method: str = "random"
+    noise_std_explore: float = 0.1
+
+    # --- baselines: catastrophic-forgetting references ---
+    fixed_mask: bool = False
+    no_mask: bool = False
+    stored_mask: bool = False
+
+
+def smoke_ddpg_config() -> DDPGConfig:
+    return DDPGConfig(
+        # Two of the cheaper CW10 tasks for a fast end-to-end check.
+        tasks=("faucet-close-v3", "window-close-v3"),
+        explore_episodes=20,
+        n_successful_explore=5,
+        n_iters_per_task=20,
+        n_parallel_train=2,
+        collect_steps=32,
+        train_steps=32,
+        reconfig_every_iters=5,
+        eval_episodes=2,
+        # Long enough for the scripted experts to complete (they need ~64-80
+        # steps on these two tasks) so --warmup-policy scripted smoke-tests too.
+        max_episode_steps=120,
+        batch_size=32,
+        replay_capacity=10_000,
+        ftn_hidden_size=32,
+        ftn_inner_size=4,
+        ftn_layers=2,
+        ftn_k=8,
+        reconfig_steps=10,
+        reconfig_n=128,
+        log_every=5,
+        output_path="results_smoke.npz",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Cheat-init wrappers (MetaWorld tasks; used only when use_cheat_reset is on)
+# ---------------------------------------------------------------------------
+#
+# CALIBRATION CONVENTION: every task branch below opens with its difficulty
+# knob(s) as named local variables — spawn radii, z-distances, pre-open amounts,
+# remaining-travel gaps, etc. Tune ONLY those first line(s) per task to make
+# random actions hit success at a useful rate (~30-70% within max_episode_steps);
+# use `--calibrate` to measure. Larger radii / bigger remaining gaps = harder.
+
+
+def _disk_offset(rng: np.random.Generator, radius: float) -> np.ndarray:
+    """Uniformly-sampled xy offset within a disk of the given radius (meters)."""
+    ang = float(rng.uniform(0.0, 2.0 * np.pi))
+    r = radius * float(np.sqrt(rng.uniform(0.0, 1.0)))
+    return np.array([r * np.cos(ang), r * np.sin(ang)], dtype=np.float32)
+
+
+def _cheat_reset(env, task_name: str, rng: np.random.Generator) -> np.ndarray:
+    """Reset env, then place arm/world close to the reward state so random
+    actions can hit success quickly. Returns the post-cheat observation.
+
+    For free-body objects (push / pick-place / peg) we call `env._set_obj_xyz`
+    (the env's own helper — sets the object free-joint and zeros its velocity)
+    AFTER `_reset_hand`, so the freshly-placed object isn't disturbed by the
+    hand-settle steps. For articulated tasks (door / drawer / window / button)
+    we set the relevant joint, then re-assert it after `_reset_hand` (which
+    steps the sim) so the pre-set pose survives."""
+    env.reset()
+
+    if task_name == "reach-v3":
+        if False:
+            xy_radius = 0.12  # [difficulty] hand spawn radius around target in xy (m)
+            z_offset = 0.12  # [difficulty] hand height above the target (m)
+            target = env._target_pos.copy()
+            xy = _disk_offset(rng, xy_radius)
+            env.hand_init_pos = np.array(
+                [target[0] + xy[0], target[1] + xy[1], target[2] + z_offset],
+                dtype=np.float32,
+            )
+            env._reset_hand(steps=100)
+
+    elif task_name == "push-v3":
+        obj_radius = 0.1  # [difficulty] puck spawn radius around the goal (m); keep > 0.05 success radius or it pre-succeeds
+        hand_x = 0.05  # [difficulty] hand x-offset from the puck (m); keep > ~0.02 — MetaWorld's caging reward errors if the hand starts ~on the object in x-z (margin < 0, xz_thresh=0.005)
+        hand_z = 0.03  # [difficulty] hand height above the puck (m)
+        # Success: puck within 0.05 of _target_pos. Spawn it just shy of the
+        # goal so a little random nudging finishes the push.
+        target = env._target_pos.copy()
+        xy = _disk_offset(rng, obj_radius)
+        obj = np.array(
+            [target[0] + xy[0], target[1] + xy[1], target[2]], dtype=np.float32
+        )
+        # Keep obj_init_pos consistent with the placed puck — it feeds the dense
+        # reward (and thus the MC returns the mask reconfig fits).
+        env.obj_init_pos = obj.copy()
+        env.hand_init_pos = np.array(
+            [obj[0] + hand_x, obj[1], obj[2] + hand_z], dtype=np.float32
+        )
+        env._reset_hand()
+        env._set_obj_xyz(obj)
+
+    elif task_name == "pick-place-v3":
+        # HARD: success (obj within 0.07 of an AIR target) needs a sustained
+        # grasp; an ungrasped object just falls. Best effort: spawn the object
+        # right at the air-goal with the hand on it. Calibrate expecting low SR.
+        obj_radius = 0.02  # [difficulty] object spawn radius around the air-goal (m)
+        hand_x = 0.05  # [difficulty] hand x-offset from the object (m); keep > ~0.02 (caging-margin safety)
+        hand_z = 0.0  # [difficulty] hand height above the object (m)
+        target = env._target_pos.copy()
+        xy = _disk_offset(rng, obj_radius)
+        obj = np.array(
+            [target[0] + xy[0], target[1] + xy[1], target[2]], dtype=np.float32
+        )
+        env.obj_init_pos = obj.copy()  # consistent bookkeeping (feeds the dense reward)
+        env.hand_init_pos = np.array(
+            [obj[0] + hand_x, obj[1], obj[2] + hand_z], dtype=np.float32
+        )
+        env._reset_hand()
+        env._set_obj_xyz(obj)
+
+    elif task_name == "door-open-v3":
+        door_angle = -1.2  # [difficulty] pre-opened hinge angle (rad); more negative = more open = easier (full open ≈ -1.57)
+        hand_off = np.array(
+            [0.0, 0.0, 0.0], dtype=np.float32
+        )  # [difficulty] hand offset from the handle (m)
+        # Door starts closed (angle 0); opening drives the hinge negative.
+        env.data.joint("doorjoint").qpos[:] = door_angle
+        mujoco.mj_forward(env.model, env.data)
+        handle = env._get_pos_objects().copy()
+        env.hand_init_pos = handle.astype(np.float32) + hand_off
+        env._reset_hand()
+        env.data.joint("doorjoint").qpos[:] = door_angle
+        mujoco.mj_forward(env.model, env.data)
+
+    elif task_name == "drawer-open-v3":
+        drawer_pull = 0.12  # [difficulty] pre-pulled-open amount (m); bigger = easier (full open ~0.16, success within 0.03)
+        hand_z = 0.02  # [difficulty] hand height above the handle (m)
+        # Drawer starts closed; pulling open drives qpos[9] negative.
+        qpos = env.data.qpos.flat.copy()
+        qvel = env.data.qvel.flat.copy()
+        qpos[9] = -drawer_pull
+        qvel[9] = 0.0
+        env.set_state(qpos, qvel)
+        mujoco.mj_forward(env.model, env.data)
+        handle = env._get_pos_objects().copy()
+        env.hand_init_pos = handle.astype(np.float32) + np.array(
+            [0.0, 0.0, hand_z], dtype=np.float32
+        )
+        env._reset_hand()
+        # _reset_hand stepped the sim; reassert the joint pos so the drawer is
+        # still pre-opened.
+        qpos = env.data.qpos.flat.copy()
+        qvel = env.data.qvel.flat.copy()
+        qpos[9] = -drawer_pull
+        qvel[9] = 0.0
+        env.set_state(qpos, qvel)
+        mujoco.mj_forward(env.model, env.data)
+
+    elif task_name == "drawer-close-v3":
+        drawer_open_remaining = 0.1  # [difficulty] how far the drawer starts pulled out (m); bigger = harder (full open ~0.16)
+        hand_z = 0.05  # [difficulty] hand height above the handle (m)
+        # Drawer starts pulled out (qpos[9] negative); closing drives it to 0.
+        handle = env._get_pos_objects().copy()
+        env.hand_init_pos = handle.astype(np.float32) + np.array(
+            [0.0, 0.0, hand_z], dtype=np.float32
+        )
+        qpos = env.data.qpos.flat.copy()
+        qvel = env.data.qvel.flat.copy()
+        qpos[9] = -drawer_open_remaining
+        qvel[9] = 0.0
+        env.set_state(qpos, qvel)
+        env._reset_hand()
+
+    elif task_name == "button-press-topdown-v3":
+        press_remaining = 0.02  # [difficulty] button travel left to the target (m); bigger = harder (full travel 0.06)
+        hand_z = 0.03  # [difficulty] hand height above the button (m)
+        # Slider qpos[9] ∈ [-0.06, 0]; -0.06 = fully pressed. Pre-press to leave
+        # `press_remaining`, then place the hand right above so random downward
+        # motion finishes it. `_set_obj_xyz` sets the slider (qpos[9]) for this env.
+        button_pre = -(0.06 - press_remaining)
+        env._set_obj_xyz(button_pre)
+        button = env._get_pos_objects().copy()
+        env.hand_init_pos = np.array(
+            [button[0], button[1], button[2] + hand_z], dtype=np.float32
+        )
+        env._reset_hand()
+        env._set_obj_xyz(button_pre)  # reassert after _reset_hand stepped the sim
+
+    elif task_name == "peg-insert-side-v3":
+        # HARD: needs a sustained grasp + aligned insertion. Best effort: spawn
+        # the peg just outside the hole along the insertion (+x) axis with the
+        # hand on it. Calibrate expecting low SR.
+        insert_gap = 0.05  # [difficulty] peg distance from the hole along +x (m); bigger = harder
+        hand_x = 0.05  # [difficulty] hand x-offset from the peg (m); keep > ~0.02 (caging-margin safety, xz_thresh=0.005)
+        # Success: peg tip within 0.07 of _target_pos (the hole); insertion is
+        # toward -x, so spawn the peg at the hole + a small +x gap.
+        target = env._target_pos.copy()
+        peg = np.array([target[0] + insert_gap, target[1], target[2]], dtype=np.float32)
+        env.obj_init_pos = peg.copy()  # consistent bookkeeping (feeds the dense reward)
+        env.hand_init_pos = np.array(
+            [peg[0] + hand_x, peg[1], peg[2]], dtype=np.float32
+        )
+        env._reset_hand()
+        env._set_obj_xyz(peg)
+
+    elif task_name == "window-open-v3":
+        slide_pos = 0.12  # [difficulty] window slide position at reset (toward open); success within 0.05 of target
+        hand_off = np.array(
+            [0.0, -0.03, 0.0], dtype=np.float32
+        )  # [difficulty] hand offset from the handle (m)
+        env.data.joint("window_slide").qpos[:] = slide_pos
+        mujoco.mj_forward(env.model, env.data)
+        handle = env._get_pos_objects().copy()
+        env.hand_init_pos = handle.astype(np.float32) + hand_off
+        env._reset_hand()
+        env.data.joint("window_slide").qpos[:] = slide_pos
+        mujoco.mj_forward(env.model, env.data)
+
+    elif task_name == "window-close-v3":
+        slide_remaining = 0.1  # [difficulty] slide distance left to closed (m); window_slide 0.2=open, 0.0=closed, success within 0.05
+        hand_off = np.array(
+            [0.03, -0.03, -0.08], dtype=np.float32
+        )  # [difficulty] hand offset from the handle (m), mirrors expert approach
+        # Window starts open (slide 0.2); closing drives the slide to 0.
+        env.data.joint("window_slide").qpos[:] = slide_remaining
+        mujoco.mj_forward(env.model, env.data)
+        handle = env._get_pos_objects().copy()
+        env.hand_init_pos = handle.astype(np.float32) + hand_off
+        env._reset_hand()
+        env.data.joint("window_slide").qpos[:] = slide_remaining
+        mujoco.mj_forward(env.model, env.data)
+
+    else:
+        raise ValueError(f"no cheat handler for {task_name!r}")
+
+    return env._get_obs().astype(np.float32)
+
+
+class CWTaskEnv:
+    """One Continual World task: a MetaWorld v3 env fixed to a task, with CW-style
+    randomization, an optional one-hot task id appended to the obs, and optional
+    cheat-init. Replicates CW's RandomizationWrapper + OneHotAdder + SuccessCounter
+    conventions on the installed MetaWorld (success is read by the caller from
+    info["success"]). One env per sequence position (CW20 repeats tasks, but each
+    position gets its own env instance + one-hot index)."""
+
+    def __init__(
+        self,
+        name: str,
+        env_cls,
+        tasks,
+        seed: int,
+        cfg: "DDPGConfig",
+        one_hot_idx: int = 0,
+        one_hot_len: int = 1,
+    ):
+        self.name = name
+        self.env_cls = env_cls
+        self.env = env_cls()
+        self.tasks = tasks
+        self.cfg = cfg
+        self.one_hot_idx = one_hot_idx
+        self.one_hot_len = one_hot_len
+        self.rng = np.random.default_rng(seed)
+        # Fix the task once; randomization mode decides how goals vary per reset.
+        self.env.set_task(self.tasks[0])
+        self._apply_randomization()
+        obs, _ = self.reset()
+        self.obs_dim = int(obs.shape[0])
+        self.act_dim = int(self.env.action_space.shape[0])
+
+    def _apply_randomization(self):
+        mode = self.cfg.randomization
+        if mode == "random_init_all":
+            # CW RandomizationWrapper: unfreeze so _get_state_rand_vec resamples
+            # the goal/object placement on every reset.
+            self.env._freeze_rand_vec = False
+        elif mode in ("deterministic", "random_init_fixed20"):
+            # deterministic: keep the set_task goal frozen. fixed20: a fresh goal
+            # among the first 20 variants is set per reset (in reset()).
+            pass
+        else:
+            raise ValueError(f"unknown randomization={mode!r}")
+
+    def _augment(self, obs: np.ndarray) -> np.ndarray:
+        obs = np.asarray(obs, dtype=np.float32)
+        if not self.cfg.add_onehot:
+            return obs
+        oh = np.zeros(self.one_hot_len, dtype=np.float32)
+        oh[self.one_hot_idx] = 1.0
+        return np.concatenate([obs, oh]).astype(np.float32)
+
+    def reset(self):
+        if self.cfg.randomization == "random_init_fixed20":
+            n = min(20, len(self.tasks))
+            self.env.set_task(self.tasks[int(self.rng.integers(n))])
+        if self.cfg.use_cheat_reset and self.name in CHEAT_HANDLERS:
+            obs = _cheat_reset(self.env, self.name, self.rng)
+        else:
+            obs, _ = self.env.reset()
+        return self._augment(obs), {}
+
+    def step(self, action):
+        obs, r, term, trunc, info = self.env.step(action.astype(np.float32))
+        return self._augment(obs), float(r), bool(term), bool(trunc), info
+
+
+def get_mt50() -> "metaworld.MT50":
+    """MT50 with CW's fixed seeding so the goal-variant task pool is reproducible
+    and independent of the experiment seed."""
+    return metaworld.MT50(seed=CW_MT50_SEED)
+
+
+def build_cw_envs(task_names, cfg: "DDPGConfig", seed: int) -> list[CWTaskEnv]:
+    mt50 = get_mt50()
+    out = []
+    N = len(task_names)
+    for i, name in enumerate(task_names):
+        tasks = [t for t in mt50.train_tasks if t.env_name == name]
+        out.append(
+            CWTaskEnv(
+                name,
+                mt50.train_classes[name],
+                tasks,
+                seed + i + 1,
+                cfg,
+                one_hot_idx=i,
+                one_hot_len=N,
+            )
+        )
+    return out
+
+
+def build_parallel_envs(env: CWTaskEnv, B: int, seed: int) -> list[CWTaskEnv]:
+    """B independent CWTaskEnv instances for one task — the continuing (auto-reset)
+    envs the exploitation collect loop steps in lockstep. They share the parent
+    env's cfg + one-hot index so obs are identical in shape and semantics."""
+    return [
+        CWTaskEnv(
+            env.name,
+            env.env_cls,
+            env.tasks,
+            seed + j,
+            env.cfg,
+            one_hot_idx=env.one_hot_idx,
+            one_hot_len=env.one_hot_len,
+        )
+        for j in range(B)
+    ]
+
+
+# ---------------------------------------------------------------------------
+# MC returns (port of compute_mc_returns from train_grid.py)
+# ---------------------------------------------------------------------------
+
+
+def compute_mc_returns(
+    rewards: np.ndarray, dones: np.ndarray, gamma: float
+) -> np.ndarray:
+    T = len(rewards)
+    ret = np.zeros(T, dtype=np.float32)
+    g = 0.0
+    for t in reversed(range(T)):
+        if dones[t]:
+            g = 0.0
+        g = float(rewards[t]) + gamma * g
+        ret[t] = g
+    return ret
+
+
+# ---------------------------------------------------------------------------
+# Mask-overlap-filtered DDPG replay (GPU-resident; bulk-add per episode)
+# ---------------------------------------------------------------------------
+
+
+class MaskedReplayBufferDDPG:
+    """Continuous-action analog of MaskedReplayBufferDQN from train_grid_dqn.py.
+
+    Per-chunk archive: each chunk is tagged with the (m_a, m_c) its transitions
+    were collected under. Chunks are sub-phase — the caller archives (and clears)
+    the current segment at every reconfig commit, so each chunk's data matches
+    exactly one mask pair. A chunk is recalled if either its actor OR critic mask
+    overlaps the current mask in (rho_low, rho_high]. Storage lives on the default
+    device; one H2D copy per episode field."""
+
+    def __init__(self, capacity: int, obs_dim: int, act_dim: int):
+        self.capacity = capacity
+        self.obs = torch.zeros(capacity, obs_dim)
+        self.act = torch.zeros(capacity, act_dim)
+        self.rew = torch.zeros(capacity)
+        self.next_obs = torch.zeros(capacity, obs_dim)
+        self.done = torch.zeros(capacity)
+        self.ptr = 0
+        self.size = 0
+        self.past: list[dict] = []
+        self._past_masks_a: torch.Tensor | None = None
+        self._past_masks_c: torch.Tensor | None = None
+        # Protected demonstration store (DDPGfD-style). Each entry is a chunk of
+        # expert/exploration transitions tagged with the (m_a, m_c) committed for
+        # that phase. Unlike `past`, demos are NOT gated by the rho overlap filter
+        # (same-mask data has rho=1 > rho_high and would be filtered out) — they
+        # are sampled in full and summed into every joint update, so DDPG learns
+        # directly from the seeded data under the mask it belongs to.
+        self.demos: list[dict] = []
+
+    def add_episode(self, ep: dict):
+        L = ep["length"]
+        if L == 0:
+            return
+        obs_t = torch.from_numpy(ep["obs"])
+        act_t = torch.from_numpy(ep["act"])
+        rew_t = torch.from_numpy(ep["reward"])
+        next_t = torch.from_numpy(ep["next_obs"])
+        done_t = torch.from_numpy(ep["done"])
+        end = self.ptr + L
+        if end <= self.capacity:
+            self.obs[self.ptr : end].copy_(obs_t)
+            self.act[self.ptr : end].copy_(act_t)
+            self.rew[self.ptr : end].copy_(rew_t)
+            self.next_obs[self.ptr : end].copy_(next_t)
+            self.done[self.ptr : end].copy_(done_t)
+        else:
+            first = self.capacity - self.ptr
+            tail = L - first
+            self.obs[self.ptr :].copy_(obs_t[:first])
+            self.obs[:tail].copy_(obs_t[first:])
+            self.act[self.ptr :].copy_(act_t[:first])
+            self.act[:tail].copy_(act_t[first:])
+            self.rew[self.ptr :].copy_(rew_t[:first])
+            self.rew[:tail].copy_(rew_t[first:])
+            self.next_obs[self.ptr :].copy_(next_t[:first])
+            self.next_obs[:tail].copy_(next_t[first:])
+            self.done[self.ptr :].copy_(done_t[:first])
+            self.done[:tail].copy_(done_t[first:])
+        self.ptr = end % self.capacity
+        self.size = min(self.size + L, self.capacity)
+
+    def sample(self, batch):
+        idx = torch.randint(0, self.size, (batch,))
+        return (
+            self.obs[idx],
+            self.act[idx],
+            self.rew[idx],
+            self.next_obs[idx],
+            self.done[idx],
+        )
+
+    def clear_current(self):
+        self.ptr = 0
+        self.size = 0
+
+    def archive_chunk(self, m_a: torch.Tensor, m_c: torch.Tensor):
+        """Archive the current segment as a chunk tagged with the (m_a, m_c) it
+        was collected under. Per-reconfig-interval chunking: callers invoke this
+        right before committing new masks (and at phase end), then
+        clear_current(), so every chunk's transitions match exactly one mask
+        pair."""
+        if self.size == 0:
+            return
+        self.past.append(
+            {
+                "obs": self.obs[: self.size].clone(),
+                "act": self.act[: self.size].clone(),
+                "rew": self.rew[: self.size].clone(),
+                "next_obs": self.next_obs[: self.size].clone(),
+                "done": self.done[: self.size].clone(),
+                "m_a": m_a.detach().clone(),
+                "m_c": m_c.detach().clone(),
+            }
+        )
+        self._past_masks_a = torch.stack([ph["m_a"] for ph in self.past])
+        self._past_masks_c = torch.stack([ph["m_c"] for ph in self.past])
+
+    def add_demo_chunk(
+        self, episodes: list[dict], m_a: torch.Tensor, m_c: torch.Tensor
+    ):
+        """Archive a set of episode dicts (obs/act/reward/next_obs/done) as a
+        protected demo chunk tagged with the committed (m_a, m_c). Stored on the
+        default device for fast resampling. Call after the boundary reconfig
+        commits the phase mask."""
+        episodes = [e for e in episodes if e.get("length", 0) > 0]
+        if not episodes:
+            return
+        cat = lambda key: torch.tensor(  # noqa: E731
+            np.concatenate([e[key] for e in episodes], axis=0)
+        )
+        self.demos.append(
+            {
+                "obs": cat("obs"),
+                "act": cat("act"),
+                "rew": cat("reward"),
+                "next_obs": cat("next_obs"),
+                "done": cat("done"),
+                "m_a": m_a.detach().clone(),
+                "m_c": m_c.detach().clone(),
+            }
+        )
+
+    def sample_demos(self, max_tuples: int):
+        """One (batch, m_a, m_c) triple per stored demo chunk — `max_tuples`
+        transitions sampled with replacement, forwarded under the chunk's own
+        mask. Returns [] if no demos are stored. Shape matches
+        `sample_filtered_multi` so callers can concatenate the two."""
+        out = []
+        for d in self.demos:
+            N = d["obs"].shape[0]
+            idx = torch.randint(0, N, (max_tuples,))
+            batch = (
+                d["obs"][idx],
+                d["act"][idx],
+                d["rew"][idx],
+                d["next_obs"][idx],
+                d["done"][idx],
+            )
+            out.append((batch, d["m_a"], d["m_c"]))
+        return out
+
+    def clear_demos(self):
+        self.demos = []
+
+    def sample_filtered_multi(
+        self,
+        m_a_cur: torch.Tensor,
+        m_c_cur: torch.Tensor,
+        max_chunks: int,
+        max_tuples: int,
+        rho_low: float,
+        rho_high: float,
+    ):
+        """Return up to `max_chunks` (batch, m_a, m_c) triples — one per archived
+        chunk whose actor OR critic mask overlap with the current masks lies in
+        (rho_low, rho_high]. Each batch holds `max_tuples` transitions sampled
+        (with replacement) from that chunk, to be forwarded under that chunk's
+        own masks. Returns [] if none qualify. Chunks are addressed purely by
+        mask overlap — no task identity. If more than max_chunks qualify, a
+        uniform random subset is taken (a per-chunk weighting would instead bias
+        this selection / the loss)."""
+        if not self.past or self._past_masks_a is None:
+            return []
+        # With fixed-k masks |m_cur| == |m_chunk| == k, so each ratio is symmetric.
+        denom_a = m_a_cur.sum().clamp(min=1)
+        denom_c = m_c_cur.sum().clamp(min=1)
+        rho_a = (self._past_masks_a * m_a_cur).sum(dim=-1) / denom_a
+        rho_c = (self._past_masks_c * m_c_cur).sum(dim=-1) / denom_c
+        ok = ((rho_a > rho_low) & (rho_a <= rho_high)) | (
+            (rho_c > rho_low) & (rho_c <= rho_high)
+        )
+        candidates = ok.nonzero(as_tuple=True)[0]
+        n_cand = int(candidates.numel())
+        if n_cand == 0:
+            return []
+        if n_cand > max_chunks:
+            candidates = candidates[torch.randperm(n_cand)[:max_chunks]]
+        out = []
+        for ci in candidates.tolist():
+            ph = self.past[ci]
+            N = ph["obs"].shape[0]
+            idx = torch.randint(0, N, (max_tuples,))
+            batch = (
+                ph["obs"][idx],
+                ph["act"][idx],
+                ph["rew"][idx],
+                ph["next_obs"][idx],
+                ph["done"][idx],
+            )
+            out.append((batch, ph["m_a"], ph["m_c"]))
+        return out
+
+
+def disjoint_task_mask(ti: int, H: int, k: int) -> torch.Tensor:
+    """k-hot mask for the `fixed_mask` baseline: task ti owns neurons
+    [ti*k, (ti+1)*k). Caller must ensure (ti+1)*k <= H."""
+    m = torch.zeros(H)
+    m[ti * k : (ti + 1) * k] = 1.0
+    return m
+
+
+# ---------------------------------------------------------------------------
+# Exploration noise processes
+# ---------------------------------------------------------------------------
+#
+# Both expose the same interface: reset() at an episode boundary, sample()
+# once per env step → an (act_dim,) numpy noise vector. The caller adds the
+# sample to the (deterministic) policy action — or, for cold-start exploration
+# with no policy, uses the sample directly as the action.
+#
+# Uniform-random exploration is an i.i.d. random walk: successive actions are
+# independent, so net end-effector displacement averages to ~zero and the arm
+# only finds reward when it *starts* on the goal. OU noise is temporally
+# correlated — it integrates into sustained, directed motion — so it actually
+# translates the arm across the workspace. That makes it the better default
+# both as additive exploration noise and as a no-policy cold-start driver.
+
+
+class OUNoise:
+    """Ornstein-Uhlenbeck process (one independent dim per action), vectorized.
+
+    dx = theta * (mu - x) * dt + sigma * sqrt(dt) * N(0, I); x += dx. State
+    persists across steps and must be reset() at each episode boundary. The
+    stationary std is sigma / sqrt(2*theta) (~0.18 for sigma=0.1, theta=0.15)."""
+
+    def __init__(
+        self,
+        act_dim: int,
+        sigma: float,
+        theta: float = 0.15,
+        mu: float = 0.0,
+        dt: float = 1.0,
+    ):
+        self.act_dim = act_dim
+        self.sigma = sigma
+        self.theta = theta
+        self.mu = mu
+        self.dt = dt
+        self.reset()
+
+    def reset(self):
+        self.x = np.full(self.act_dim, self.mu, dtype=np.float32)
+
+    def sample(self) -> np.ndarray:
+        dx = self.theta * (self.mu - self.x) * self.dt + self.sigma * np.sqrt(
+            self.dt
+        ) * np.random.randn(self.act_dim).astype(np.float32)
+        self.x = (self.x + dx).astype(np.float32)
+        return self.x.copy()
+
+
+class GaussianNoise:
+    """Stateless i.i.d. Gaussian noise (the legacy additive exploration noise);
+    reset() is a no-op so it is interchangeable with OUNoise."""
+
+    def __init__(self, act_dim: int, sigma: float):
+        self.act_dim = act_dim
+        self.sigma = sigma
+
+    def reset(self):
+        pass
+
+    def sample(self) -> np.ndarray:
+        return (np.random.randn(self.act_dim) * self.sigma).astype(np.float32)
+
+
+def make_noise(cfg: "DDPGConfig", act_dim: int, sigma: float):
+    """Build the exploration-noise process selected by `cfg.exploration_noise`
+    ("ou" → OUNoise; "simple" → GaussianNoise) with the given volatility/std."""
+    if cfg.exploration_noise == "ou":
+        return OUNoise(act_dim, sigma, theta=cfg.ou_theta)
+    elif cfg.exploration_noise == "simple":
+        return GaussianNoise(act_dim, sigma)
+    raise ValueError(
+        f"unknown exploration_noise={cfg.exploration_noise!r} (want 'ou' or 'simple')"
+    )
+
+
+# ---------------------------------------------------------------------------
+# FTN DDPG agent (mirrors FTNDQN in train_grid_dqn.py; two masks instead of one)
+# ---------------------------------------------------------------------------
+
+
+class FTNDDPG:
+    def __init__(self, obs_dim: int, act_dim: int, cfg: DDPGConfig):
+        self.cfg = cfg
+        self.act_dim = act_dim
+        H, k = cfg.ftn_hidden_size, cfg.ftn_k
+        L, IS, D = cfg.ftn_layers, cfg.ftn_inner_size, cfg.ftn_dropout_p
+
+        self.actor = FTNActor(obs_dim, act_dim, H, L, IS, D)
+        self.critic = FTNCritic(obs_dim, act_dim, H, L, IS, D)
+        self.actor_t = FTNActor(obs_dim, act_dim, H, L, IS, D)
+        self.critic_t = FTNCritic(obs_dim, act_dim, H, L, IS, D)
+        self.actor_t.load_state_dict(self.actor.state_dict())
+        self.critic_t.load_state_dict(self.critic.state_dict())
+        for p in self.actor_t.parameters():
+            p.requires_grad_(False)
+        for p in self.critic_t.parameters():
+            p.requires_grad_(False)
+        self.actor_opt = torch.optim.Adam(self.actor.parameters(), lr=cfg.actor_lr)
+        self.critic_opt = torch.optim.Adam(self.critic.parameters(), lr=cfg.critic_lr)
+
+        if cfg.no_mask:
+            # All-ones mask: linear readout sees every parallel-MLP neuron. No
+            # sparsity at all. Used as a baseline alongside `fixed_mask`.
+            self.m_a = torch.ones(H)
+            self.m_c = torch.ones(H)
+        elif cfg.fixed_mask:
+            # Disjoint-subset baseline: the train loop reassigns task ti's
+            # index mask at each phase start; start on task 0's subset.
+            self.m_a = disjoint_task_mask(0, H, k)
+            self.m_c = disjoint_task_mask(0, H, k)
+        else:
+            self.m_a = kwta(torch.randn(H), k=k)
+            self.m_c = kwta(torch.randn(H), k=k)
+        self.m_a_logits: torch.Tensor | None = None
+        self.m_c_logits: torch.Tensor | None = None
+        self.stored_m_a: dict[int, torch.Tensor] = {}
+        self.stored_m_c: dict[int, torch.Tensor] = {}
+
+    def reset_optimizer_state(self):
+        """Per-task Adam state reset (func_net_kt paper protocol). Without it,
+        momentum from the previous phase keeps stepping that task's now-masked
+        neurons for ~tens of updates after the boundary even though their
+        gradients are exactly zero."""
+        self.actor_opt.state = defaultdict(dict)
+        self.critic_opt.state = defaultdict(dict)
+
+    @torch.no_grad()
+    def act(
+        self,
+        obs_np: np.ndarray,
+        mask_a: torch.Tensor | None = None,
+        noise_vec: np.ndarray | None = None,
+    ) -> np.ndarray:
+        """Greedy action under the actor (and `mask_a`, defaulting to m_a). If
+        `noise_vec` (an (act_dim,) exploration-noise sample, e.g. from OUNoise /
+        GaussianNoise) is given it is added before clipping. Noise generation is
+        the caller's job so temporally-correlated processes can keep their state
+        across steps."""
+        m = self.m_a if mask_a is None else mask_a
+        obs = torch.tensor(obs_np).unsqueeze(0)
+        # Deterministic action selection: dropout stays a train-time
+        # regularizer (gradient updates), not rollout/eval policy noise.
+        was_training = self.actor.training
+        self.actor.eval()
+        a = self.actor(obs, m).squeeze(0).cpu().numpy()
+        if was_training:
+            self.actor.train()
+        if noise_vec is not None:
+            a = a + noise_vec
+        return np.clip(a, -1.0, 1.0).astype(np.float32)
+
+    def reconfig_masks(self, support, commit: bool = True):
+        """Critic mask reconfig via `cfg.reconfig_objective`, then actor mask
+        reconfig via −Q under the freshly chosen critic mask.
+
+        support = (obs, act, rew, next_obs, done, returns)."""
+        obs, act, rew, next_obs, done, returns = support
+        cfg = self.cfg
+        H, k = cfg.ftn_hidden_size, cfg.ftn_k
+        warm = cfg.mask_warm_start
+        init_a = self.m_a_logits if warm else None
+        init_c = self.m_c_logits if warm else None
+        objective = cfg.reconfig_objective
+
+        # --- critic mask ---
+        def critic_loss(soft_m):
+            q_sa = self.critic(obs, act, soft_m)
+            if objective == "td":
+                with torch.no_grad():
+                    a_next = self.actor_t(next_obs, self.m_a)
+                    q_next = self.critic_t(next_obs, a_next, soft_m)
+                    target = rew + cfg.gamma * (1.0 - done) * q_next
+                return F.mse_loss(q_sa, target)
+            elif objective == "mse_returns":
+                return F.mse_loss(q_sa, returns)
+            elif objective == "cos_returns":
+                cos = F.cosine_similarity(
+                    q_sa.unsqueeze(0), returns.unsqueeze(0), dim=1
+                ).squeeze(0)
+                return -cos
+            elif objective == "r_returns":
+                q_c = q_sa - q_sa.mean()
+                r_c = returns - returns.mean()
+                r = F.cosine_similarity(
+                    q_c.unsqueeze(0), r_c.unsqueeze(0), dim=1
+                ).squeeze(0)
+                return -r
+            else:
+                raise ValueError(f"unknown reconfig_objective={objective!r}")
+
+        m_c_new, m_c_logits_new, c_init, c_final = anneal_ste_mask(
+            H,
+            k,
+            critic_loss,
+            cfg.reconfig_steps,
+            cfg.reconfig_lr,
+            init_logits=init_c,
+            noise_scale=cfg.mask_init_noise_scale,
+        )
+
+        # --- actor mask: maximize Q under the new critic mask ---
+        m_c_frozen = m_c_new
+
+        def actor_loss(soft_m):
+            a_pi = self.actor(obs, soft_m)
+            return -self.critic(obs, a_pi, m_c_frozen).mean()
+
+        m_a_new, m_a_logits_new, a_init, a_final = anneal_ste_mask(
+            H,
+            k,
+            actor_loss,
+            cfg.reconfig_steps,
+            cfg.reconfig_lr,
+            init_logits=init_a,
+            noise_scale=cfg.mask_init_noise_scale,
+        )
+
+        stats = {
+            "critic_init": c_init,
+            "critic_final": c_final,
+            "actor_init": a_init,
+            "actor_final": a_final,
+        }
+        if commit:
+            self.m_a = m_a_new
+            self.m_c = m_c_new
+            self.m_a_logits = m_a_logits_new
+            self.m_c_logits = m_c_logits_new
+        return m_a_new, m_c_new, stats
+
+    def update_joint(self, batch, recalled):
+        """One DDPG gradient step on the *summed* loss across the current batch
+        (under the current masks) and each recalled chunk (under the masks it was
+        collected under). The critic step sums the per-term TD losses; the actor
+        step sums the per-term −Q losses. Every term gets its own forward pass,
+        so the mask-to-data match is exact; gradients accumulate on neurons
+        shared across the masks (the cross-task consolidation mechanism).
+
+        `recalled` is a list of (batch, m_a, m_c) triples (possibly empty). One
+        critic step, one actor step, and one target soft-update per call."""
+        gamma, tau = self.cfg.gamma, self.cfg.tau
+        terms = [(batch, self.m_a, self.m_c)]
+        terms.extend(recalled)
+
+        # --- critic: summed TD loss across all terms ---
+        critic_total = None
+        for b, m_a, m_c in terms:
+            obs, act, rew, next_obs, done = b
+            with torch.no_grad():
+                a_next = self.actor_t(next_obs, m_a)
+                q_next = self.critic_t(next_obs, a_next, m_c)
+                target = rew + gamma * (1.0 - done) * q_next
+            critic_loss = F.mse_loss(self.critic(obs, act, m_c), target)
+            # --- per-chunk weighting hook (critic) -------------------------
+            # Unweighted sum for now. To weight (by overlap ρ, 1/len(terms), or
+            # per-neuron usage), scale critic_loss here before accumulating.
+            critic_total = (
+                critic_loss if critic_total is None else critic_total + critic_loss
+            )
+        self.critic_opt.zero_grad()
+        critic_total.backward()
+        self.critic_opt.step()
+
+        # --- actor: summed −Q loss across all terms ---
+        actor_total = None
+        for b, m_a, m_c in terms:
+            obs = b[0]
+            actor_loss = -self.critic(obs, self.actor(obs, m_a), m_c).mean()
+            # --- per-chunk weighting hook (actor) — see critic note above ---
+            actor_total = (
+                actor_loss if actor_total is None else actor_total + actor_loss
+            )
+        self.actor_opt.zero_grad()
+        actor_total.backward()
+        self.actor_opt.step()
+
+        with torch.no_grad():
+            for p, pt in zip(self.actor.parameters(), self.actor_t.parameters()):
+                pt.mul_(1 - tau).add_(p, alpha=tau)
+            for p, pt in zip(self.critic.parameters(), self.critic_t.parameters()):
+                pt.mul_(1 - tau).add_(p, alpha=tau)
+
+
+# ---------------------------------------------------------------------------
+# Episode collection (DDPG variant — continuous actions, needs next_obs)
+# ---------------------------------------------------------------------------
+
+
+def _collect_episode(env: CWTaskEnv, policy_fn, max_steps: int) -> dict:
+    obs_buf, act_buf, r_buf, next_buf, d_buf = [], [], [], [], []
+    obs, _ = env.reset()
+    success = 0
+    for _ in range(max_steps):
+        a = policy_fn(obs)
+        ns, r, term, trunc, info = env.step(a)
+        obs_buf.append(obs)
+        act_buf.append(a)
+        r_buf.append(r)
+        next_buf.append(ns)
+        d_buf.append(float(term or trunc))
+        obs = ns
+        if float(info.get("success", 0.0)) > 0.5:
+            success = 1
+        if term or trunc:
+            break
+    return {
+        "obs": np.stack(obs_buf).astype(np.float32),
+        "act": np.stack(act_buf).astype(np.float32),
+        "next_obs": np.stack(next_buf).astype(np.float32),
+        "reward": np.asarray(r_buf, dtype=np.float32),
+        "done": np.asarray(d_buf, dtype=np.float32),
+        "success": success,
+        "length": len(obs_buf),
+    }
+
+
+def _support_from_episodes(
+    episodes: list[dict],
+    gamma: float,
+    n_max: int,
+) -> tuple[torch.Tensor, ...]:
+    """Concatenate transitions, MC returns on the full concat (respects episode
+    boundaries via `done`), then subsample. Returns
+    (obs, act, rew, next_obs, done, returns)."""
+    obs = np.concatenate([e["obs"] for e in episodes], axis=0)
+    act = np.concatenate([e["act"] for e in episodes], axis=0)
+    rew = np.concatenate([e["reward"] for e in episodes], axis=0)
+    next_obs = np.concatenate([e["next_obs"] for e in episodes], axis=0)
+    done = np.concatenate([e["done"] for e in episodes], axis=0)
+    returns = compute_mc_returns(rew, done, gamma)
+    N = obs.shape[0]
+    if N > n_max:
+        idx = np.random.choice(N, size=n_max, replace=False)
+    else:
+        idx = np.arange(N)
+    return (
+        torch.tensor(obs[idx]),
+        torch.tensor(act[idx]),
+        torch.tensor(rew[idx]),
+        torch.tensor(next_obs[idx]),
+        torch.tensor(done[idx]),
+        torch.tensor(returns[idx]),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Decoupled step-based collection (the exploitation collect phase)
+# ---------------------------------------------------------------------------
+
+
+def _collect_steps(
+    envs: list[CWTaskEnv],
+    agent: FTNDDPG,
+    noise_sigma: float,
+    n_steps: int,
+    max_ep_steps: int,
+    state: dict,
+) -> tuple[list[dict], dict, int, int, dict]:
+    """Step B continuing envs in lockstep for `n_steps` under the noisy actor
+    (current masks), auto-resetting any env on success/term/trunc/timeout. The
+    timeout matters: without it an env that stalls (e.g. arm wedged) would never
+    reset and stop producing rewarded data. `state` = dict(obs=[per-env obs],
+    length=[per-env step count], noise=[per-env noise process]) carried across
+    iterations so episodes — and their temporally-correlated exploration noise —
+    continue between collect bursts. Each env owns its own noise process
+    (`cfg.exploration_noise`, volatility `noise_sigma`), reset on auto-reset.
+
+    Returns (per_env_seqs, burst_episode, n_success, n_done, new_state):
+      per_env_seqs : list of B dicts (obs/act/reward/next_obs/done) in time order
+                     — used for mid-phase reconfig support (MC returns per env, so
+                     credit never leaks across envs).
+      burst_episode: one episode-like dict (all transitions concatenated) for
+                     replay.add_episode — ordering is irrelevant to the ring.
+    """
+    B = len(envs)
+    per = [
+        {k: [] for k in ("obs", "act", "reward", "next_obs", "done", "boundary")}
+        for _ in range(B)
+    ]
+    obs, length = state["obs"], state["length"]
+    noise = state.get("noise")
+    if noise is None:
+        noise = [make_noise(agent.cfg, envs[i].act_dim, noise_sigma) for i in range(B)]
+        for p in noise:
+            p.reset()
+    n_success, n_done = 0, 0
+    for _ in range(n_steps):
+        for i, e in enumerate(envs):
+            o = obs[i]
+            a = agent.act(o, noise_vec=noise[i].sample())  # uses agent.m_a
+            ns, r, term, trunc, info = e.step(a)
+            succ = float(info.get("success", 0.0)) > 0.5
+            length[i] += 1
+            timeout = length[i] >= max_ep_steps
+            reset_now = term or trunc or succ or timeout
+            # Bootstrap-cutting terminal (stored as `done`, used by the TD
+            # target's (1-done) factor): only a true MDP terminal or the
+            # (absorbing) goal. Time-limit truncations / horizon timeouts are
+            # NOT terminal — the episode didn't really end, so bootstrapping
+            # must continue through them or values get biased downward near the
+            # horizon.
+            done = term or succ
+            per[i]["obs"].append(o)
+            per[i]["act"].append(a)
+            per[i]["reward"].append(r)
+            per[i]["next_obs"].append(ns)
+            per[i]["done"].append(float(done))
+            # Episode-boundary flag (every auto-reset, truncations included),
+            # used only to segment MC returns so credit never leaks across a
+            # reset — distinct from the bootstrap-cutting `done` above.
+            per[i]["boundary"].append(float(reset_now))
+            if reset_now:
+                n_done += 1
+                n_success += int(succ)
+                obs[i], _ = e.reset()
+                length[i] = 0
+                noise[i].reset()  # new episode → fresh (uncorrelated) noise
+            else:
+                obs[i] = ns
+
+    seqs = []
+    for i in range(B):
+        d = per[i]
+        if not d["obs"]:
+            continue
+        seqs.append(
+            {
+                "obs": np.stack(d["obs"]).astype(np.float32),
+                "act": np.stack(d["act"]).astype(np.float32),
+                "reward": np.asarray(d["reward"], dtype=np.float32),
+                "next_obs": np.stack(d["next_obs"]).astype(np.float32),
+                "done": np.asarray(d["done"], dtype=np.float32),
+                "boundary": np.asarray(d["boundary"], dtype=np.float32),
+            }
+        )
+    burst = {
+        "obs": np.concatenate([s["obs"] for s in seqs], axis=0),
+        "act": np.concatenate([s["act"] for s in seqs], axis=0),
+        "reward": np.concatenate([s["reward"] for s in seqs], axis=0),
+        "next_obs": np.concatenate([s["next_obs"] for s in seqs], axis=0),
+        "done": np.concatenate([s["done"] for s in seqs], axis=0),
+    }
+    burst["length"] = burst["obs"].shape[0]
+    return (
+        seqs,
+        burst,
+        n_success,
+        n_done,
+        {"obs": obs, "length": length, "noise": noise},
+    )
+
+
+def _support_from_burst(
+    seqs: list[dict], gamma: float, n_max: int
+) -> tuple[torch.Tensor, ...]:
+    """Mid-phase reconfig support from the most recent collect burst. MC returns
+    are computed PER ENV sequence and segmented on the per-env `boundary` flag
+    (every auto-reset, truncations included), so the episode boundaries inside
+    each env are respected and credit never leaks across a reset or across envs.
+    The returned `done` is the bootstrap-cutting terminal flag (true terminals /
+    goal only), used by the reconfig "td" objective. Transitions are then
+    concatenated and subsampled. Returns (obs, act, rew, next_obs, done, returns)."""
+    obs = np.concatenate([s["obs"] for s in seqs], axis=0)
+    act = np.concatenate([s["act"] for s in seqs], axis=0)
+    rew = np.concatenate([s["reward"] for s in seqs], axis=0)
+    next_obs = np.concatenate([s["next_obs"] for s in seqs], axis=0)
+    done = np.concatenate([s["done"] for s in seqs], axis=0)
+    returns = np.concatenate(
+        [compute_mc_returns(s["reward"], s["boundary"], gamma) for s in seqs], axis=0
+    )
+    N = obs.shape[0]
+    idx = np.random.choice(N, size=n_max, replace=False) if N > n_max else np.arange(N)
+    return (
+        torch.tensor(obs[idx]),
+        torch.tensor(act[idx]),
+        torch.tensor(rew[idx]),
+        torch.tensor(next_obs[idx]),
+        torch.tensor(done[idx]),
+        torch.tensor(returns[idx]),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Exploration + unified eval
+# ---------------------------------------------------------------------------
+
+
+def _cold_start_policy(cfg: DDPGConfig, act_dim: int):
+    """No-policy cold-start exploration action source for ONE fresh episode
+    (call once per episode). With `exploration_noise="ou"` the action is an OU
+    sample (clipped) — temporally-correlated drift that actually moves the arm;
+    with "simple" it is the legacy i.i.d. uniform-random action. Volatility is
+    `noise_std_explore`."""
+    if cfg.exploration_noise == "ou":
+        proc = OUNoise(act_dim, cfg.noise_std_explore, theta=cfg.ou_theta)
+
+        def policy_fn(_obs):
+            return np.clip(proc.sample(), -1.0, 1.0).astype(np.float32)
+
+        return policy_fn
+
+    def policy_fn(_obs):
+        return np.random.uniform(-1.0, 1.0, size=act_dim).astype(np.float32)
+
+    return policy_fn
+
+
+# Task -> MetaWorld scripted-expert policy class (in metaworld.policies). Covers
+# CW10; add entries for other tasks as needed. These experts solve their task at
+# ~80-100% even with exploration noise, so warmup_policy="scripted" can gather the
+# rewarded support the FTN boundary/eval mask reconfig needs on tasks where random
+# exploration never finds reward (the scripted expert only seeds support — the
+# agent still learns and is evaluated under its own masked policy).
+_SCRIPTED_POLICIES = {
+    "hammer-v3": "SawyerHammerV3Policy",
+    "push-wall-v3": "SawyerPushWallV3Policy",
+    "faucet-close-v3": "SawyerFaucetCloseV3Policy",
+    "push-back-v3": "SawyerPushBackV3Policy",
+    "stick-pull-v3": "SawyerStickPullV3Policy",
+    "handle-press-side-v3": "SawyerHandlePressSideV3Policy",
+    "push-v3": "SawyerPushV3Policy",
+    "shelf-place-v3": "SawyerShelfPlaceV3Policy",
+    "window-close-v3": "SawyerWindowCloseV3Policy",
+    "peg-unplug-side-v3": "SawyerPegUnplugSideV3Policy",
+}
+
+
+def _scripted_policy(env: CWTaskEnv, noise_sigma: float):
+    """Per-episode policy_fn driven by env.name's MetaWorld scripted expert (+
+    Gaussian noise of std `noise_sigma`). The expert expects the RAW MetaWorld
+    observation, so any appended one-hot is stripped before querying it. A fresh
+    expert instance is built per call so it carries no state across episodes."""
+    cls_name = _SCRIPTED_POLICIES.get(env.name)
+    if cls_name is None:
+        raise ValueError(
+            f"no scripted expert registered for {env.name!r}; add it to "
+            f"_SCRIPTED_POLICIES (warmup_policy='scripted' needs one per task)"
+        )
+    pol = getattr(mw_policies, cls_name)()
+    raw_len = env.obs_dim - env.one_hot_len if env.cfg.add_onehot else env.obs_dim
+    act_dim = env.act_dim
+
+    def policy_fn(obs):
+        raw = obs[:raw_len] if env.cfg.add_onehot else obs
+        a = np.asarray(pol.get_action(raw), dtype=np.float32)
+        if noise_sigma > 0.0:
+            a = a + np.random.randn(act_dim).astype(np.float32) * noise_sigma
+        return np.clip(a, -1.0, 1.0).astype(np.float32)
+
+    return policy_fn
+
+
+def _explore_for_reward(
+    env: CWTaskEnv,
+    agent: FTNDDPG,
+    max_episodes: int,
+    max_steps: int,
+    policy: str,
+    prev_m_a: torch.Tensor | None = None,
+    n_successful: int = 1,
+) -> tuple[list[dict], int]:
+    episodes = []
+    n_success = 0
+    act_dim = env.act_dim
+    cfg = agent.cfg
+    for _ in range(max_episodes):
+        if policy == "random":
+            policy_fn = _cold_start_policy(cfg, act_dim)
+        elif policy == "scripted":
+            policy_fn = _scripted_policy(env, cfg.noise_std_explore)
+        else:  # "prev_mask" — actor under prev mask + fresh per-episode noise
+            noise = make_noise(cfg, act_dim, cfg.noise_std)
+
+            def policy_fn(obs, _n=noise):
+                return agent.act(obs, mask_a=prev_m_a, noise_vec=_n.sample())
+
+        ep = _collect_episode(env, policy_fn, max_steps)
+        episodes.append(ep)
+        if ep["success"]:
+            n_success += 1
+            if n_success >= n_successful:
+                break
+    return episodes, n_success
+
+
+def _bootstrap_collect_rewarded(
+    env: CWTaskEnv,
+    agent: FTNDDPG,
+    cfg: DDPGConfig,
+    gamma_rc: float,
+) -> list[dict]:
+    """Collect rewarded episodes for eval-time recovery (`explore_method='bootstrap'`).
+
+    Until the first reward is found there is no support, so exploration uses
+    random actions. Once any rewarded episode exists, EVERY subsequent
+    exploration episode is preceded by a fresh COLD-START mask reconfiguration
+    on the full cumulative rewarded support (commit=False — no single mask is
+    committed). With low support the recovered masks are unreliable, so we
+    deliberately avoid committing to any one of them: each episode re-derives
+    the policy from scratch, drawing a fresh mask (cold-start init noise) from
+    the same support, so a bad early mask can't trap exploration when it is
+    still failing to find reward. Rewarded episodes accumulate into the support.
+    Stops at cfg.n_successful_explore rewarded episodes or cfg.explore_episodes
+    total episodes. The caller clears/restores the warm-start logits so every
+    reconfig here cold-starts. Returns the rewarded episodes."""
+    rewarded: list[dict] = []
+    act_dim = env.act_dim
+    for _ in range(cfg.explore_episodes):
+        if len(rewarded) >= cfg.n_successful_explore:
+            break
+        if not rewarded:
+            # No support yet: no-policy cold-start exploration (OU drift / uniform).
+            policy_fn = _cold_start_policy(cfg, act_dim)
+        else:
+            # Cold-start reconfig on the cumulative support before every episode.
+            support = _support_from_episodes(rewarded, gamma_rc, cfg.reconfig_n)
+            m_a_cur = agent.reconfig_masks(support, commit=False)[0]
+            noise = make_noise(cfg, act_dim, cfg.noise_std_explore)
+
+            def policy_fn(obs, _m=m_a_cur, _n=noise):
+                return agent.act(obs, mask_a=_m, noise_vec=_n.sample())
+
+        ep = _collect_episode(env, policy_fn, cfg.max_episode_steps)
+        if ep["success"]:
+            rewarded.append(ep)
+    return rewarded
+
+
+def _eval_with_reconfig(
+    env: CWTaskEnv,
+    agent: FTNDDPG,
+    cfg: DDPGConfig,
+    recall_m_a: torch.Tensor | None = None,
+) -> float:
+    """Mirror of _eval_with_reconfig in train_grid_dqn.py. Gather a rewarded
+    support set on the cheat-init env, then for each of cfg.eval_episodes trials
+    run a fresh cold-started AnnealedSTE reconfig on that support and one greedy
+    rollout. Support collection depends on `cfg.explore_method`:
+      "random"    — random / warmup_policy rollouts until cfg.n_successful_explore
+                    rewarded episodes.
+      "bootstrap" — on-policy: each exploration episode after the first reward
+                    acts under a fresh cold-start reconfig on the cumulative
+                    rewarded support (`_bootstrap_collect_rewarded`).
+
+    Recall baselines: when `recall_m_a` is given (fixed-mask / stored-mask —
+    oracle task identity) or `cfg.no_mask` is set (all-ones mask), skip
+    exploration + reconfig and just run cfg.eval_episodes greedy rollouts
+    under that mask."""
+    if recall_m_a is not None or cfg.no_mask:
+        n_eval_succ = 0
+        for _ in range(cfg.eval_episodes):
+
+            def policy_fn(obs):
+                return agent.act(obs, mask_a=recall_m_a)  # greedy (no noise)
+
+            ep = _collect_episode(env, policy_fn, cfg.max_episode_steps)
+            if ep["success"]:
+                n_eval_succ += 1
+        return n_eval_succ / cfg.eval_episodes
+
+    gamma_rc = cfg.reconfig_gamma if cfg.reconfig_gamma is not None else cfg.gamma
+
+    # Clear warm-start logits for the whole eval so every reconfig below (the
+    # bootstrap exploration and the per-eval-episode reconfigs alike) cold-starts
+    # and is not contaminated by whichever task was trained last; restore at the
+    # end. No mask is ever committed during eval (commit=False), so agent.m_a/m_c
+    # need no save/restore.
+    saved_la, saved_lc = agent.m_a_logits, agent.m_c_logits
+    agent.m_a_logits = None
+    agent.m_c_logits = None
+
+    # Gather the rewarded support set.
+    if cfg.explore_method == "bootstrap":
+        rewarded = _bootstrap_collect_rewarded(env, agent, cfg, gamma_rc)
+    else:
+        eps, _ = _explore_for_reward(
+            env,
+            agent,
+            cfg.explore_episodes,
+            cfg.max_episode_steps,
+            cfg.warmup_policy,
+            prev_m_a=agent.m_a.clone(),
+            n_successful=cfg.n_successful_explore,
+        )
+        rewarded = [e for e in eps if e["success"]]
+
+    if not rewarded:
+        agent.m_a_logits, agent.m_c_logits = saved_la, saved_lc
+        return 0.0
+
+    support = _support_from_episodes(rewarded, gamma_rc, cfg.reconfig_n)
+
+    # For each eval episode, run a fresh cold-started reconfig on the rewarded
+    # support and one greedy rollout (no commitment to a single mask).
+    n_eval_succ = 0
+    for _ in range(cfg.eval_episodes):
+        agent.m_a_logits = None
+        agent.m_c_logits = None
+        m_a_e = agent.reconfig_masks(support, commit=False)[0]
+
+        def policy_fn(obs, _m_a=m_a_e):
+            return agent.act(obs, mask_a=_m_a)  # greedy (no noise)
+
+        ep = _collect_episode(env, policy_fn, cfg.max_episode_steps)
+        if ep["success"]:
+            n_eval_succ += 1
+
+    agent.m_a_logits, agent.m_c_logits = saved_la, saved_lc
+    return n_eval_succ / cfg.eval_episodes
+
+
+# ---------------------------------------------------------------------------
+# Train
+# ---------------------------------------------------------------------------
+
+
+def train(cfg: DDPGConfig):
+    random.seed(cfg.seed)
+    np.random.seed(cfg.seed)
+    torch.manual_seed(cfg.seed)
+
+    envs = build_cw_envs(cfg.tasks, cfg, cfg.seed)
+    obs_dim = envs[0].obs_dim
+    act_dim = envs[0].act_dim
+
+    agent = FTNDDPG(obs_dim, act_dim, cfg)
+    replay = MaskedReplayBufferDDPG(cfg.replay_capacity, obs_dim, act_dim)
+
+    N = len(envs)
+    matrix = np.zeros((N, N), dtype=np.float32)
+    gamma_rc = cfg.reconfig_gamma if cfg.reconfig_gamma is not None else cfg.gamma
+
+    if cfg.fixed_mask and N * cfg.ftn_k > cfg.ftn_hidden_size:
+        raise ValueError(
+            f"fixed_mask needs N*k <= H for disjoint subsets, got "
+            f"{N}*{cfg.ftn_k} > {cfg.ftn_hidden_size}"
+        )
+
+    # fixed-mask / no-mask never run reconfig or cross-task replay; the
+    # stored-mask baseline trains exactly like FTN (it only differs at eval).
+    no_reconfig = cfg.fixed_mask or cfg.no_mask
+    baseline_label = (
+        "no-mask" if cfg.no_mask else ("fixed-mask" if cfg.fixed_mask else "")
+    )
+    # fixed-mask and stored-mask recall a per-task mask at eval; there is no
+    # mask-selection process for unseen tasks, so skip forward-transfer cells.
+    recall_eval = cfg.fixed_mask or cfg.stored_mask
+
+    t_start = time.time()
+    for ti, env in enumerate(envs):
+        print(f"\n=== Phase {ti}/{N - 1}: {env.name} ===")
+        replay.clear_current()
+        if cfg.demo_seed and not cfg.demo_seed_persist:
+            replay.clear_demos()
+        # Optimizer-state reset at task boundaries (paper protocol, applies to
+        # every condition): stale Adam momentum must not keep moving the
+        # previous task's neurons once they fall outside the active mask.
+        agent.reset_optimizer_state()
+
+        # Disjoint-subset baseline: assign this task's index mask for the
+        # whole phase (recalled exactly at eval).
+        if cfg.fixed_mask:
+            agent.m_a = disjoint_task_mask(ti, cfg.ftn_hidden_size, cfg.ftn_k)
+            agent.m_c = disjoint_task_mask(ti, cfg.ftn_hidden_size, cfg.ftn_k)
+            print(f"  fixed-mask: neurons [{ti * cfg.ftn_k}, {(ti + 1) * cfg.ftn_k})")
+
+        # 1) Exploration ---------------------------------------------------
+        prev_m_a = agent.m_a.clone()
+        # Only "prev_mask" needs a prior mask, so it falls back to random at task
+        # 0; "random" and "scripted" need no prior and apply from task 0 (scripted
+        # is the way to get rewarded support on hard CW tasks random can't solve).
+        policy = (
+            "random"
+            if (ti == 0 and cfg.warmup_policy == "prev_mask")
+            else cfg.warmup_policy
+        )
+        explore_eps, n_succ = _explore_for_reward(
+            env,
+            agent,
+            cfg.explore_episodes,
+            cfg.max_episode_steps,
+            policy,
+            prev_m_a=prev_m_a,
+            n_successful=cfg.n_successful_explore,
+        )
+        n_steps_exp = sum(e["length"] for e in explore_eps)
+        print(
+            f"  exploration ({policy}): {len(explore_eps)} eps, "
+            f"{n_steps_exp} steps, {n_succ} successful"
+        )
+
+        # 2) Mask reconfig (skipped under fixed-mask / no-mask baselines) -
+        if not no_reconfig:
+            if n_succ > 0:
+                rewarded = [e for e in explore_eps if e["success"]]
+                support = _support_from_episodes(rewarded, gamma_rc, cfg.reconfig_n)
+                _, _, stats = agent.reconfig_masks(support, commit=True)
+                print(
+                    f"  reconfig: critic {stats['critic_init']:.3f}->"
+                    f"{stats['critic_final']:.3f}  actor -Q {stats['actor_init']:.3f}->"
+                    f"{stats['actor_final']:.3f}"
+                )
+            else:
+                print("  WARN: no reward found during exploration; keeping prior masks")
+        else:
+            print(f"  {baseline_label} baseline: skipping reconfig")
+        agent.stored_m_a[ti] = agent.m_a.detach().clone()
+        agent.stored_m_c[ti] = agent.m_c.detach().clone()
+
+        # Exploration trajectories were collected *before* this phase's mask was
+        # committed, so they are not pushed to the per-mask replay ring. But with
+        # demo_seed on we now archive them as a protected demo chunk tagged with
+        # the just-committed mask, so DDPG trains directly on the (e.g. scripted-
+        # expert) data under the correct mask for the whole phase.
+        if cfg.demo_seed:
+            demo_eps = (
+                [e for e in explore_eps if e["success"]]
+                if cfg.demo_seed_rewarded_only
+                else explore_eps
+            )
+            replay.add_demo_chunk(demo_eps, agent.m_a, agent.m_c)
+            n_demo = sum(e["length"] for e in demo_eps)
+            print(
+                f"  demo-seed: {len(demo_eps)} eps / {n_demo} transitions "
+                f"-> protected demo store ({len(replay.demos)} chunks)"
+            )
+
+        # 3) Exploitation: decoupled collect (N steps) → train (M steps) loop --
+        # B continuing (auto-reset) envs collect collect_steps each per iteration;
+        # then train_steps joint DDPG updates run on the replay ring + recalled
+        # chunks. Mirrors train_jax_debug.py (collect N, then train M) instead of
+        # the old per-env-step interleaving.
+        coll_envs = build_parallel_envs(
+            env, cfg.n_parallel_train, cfg.seed + 1000 * (ti + 1)
+        )
+        col_state = {
+            "obs": [e.reset()[0] for e in coll_envs],
+            "length": [0] * len(coll_envs),
+        }
+        last_seqs = None
+        for it in range(cfg.n_iters_per_task):
+            # --- COLLECT: N steps per env across the continuing auto-reset envs.
+            last_seqs, burst, n_succ_b, n_done_b, col_state = _collect_steps(
+                coll_envs,
+                agent,
+                cfg.noise_std,
+                cfg.collect_steps,
+                cfg.max_episode_steps,
+                col_state,
+            )
+            replay.add_episode(burst)
+
+            # --- TRAIN: M joint DDPG updates. Each step sums the current-segment
+            # loss (current masks) with the loss over up to replay_max_chunks
+            # mask-overlapping archived chunks, each under its own (m_a, m_c).
+            # Under fixed-mask / no-mask cross-task replay is a no-op, so pass no
+            # recalled chunks to keep those baselines pure per-mask DDPG.
+            if replay.size > 0:
+                for _ in range(cfg.train_steps):
+                    recalled = (
+                        []
+                        if no_reconfig
+                        else replay.sample_filtered_multi(
+                            agent.m_a,
+                            agent.m_c,
+                            cfg.replay_max_chunks,
+                            cfg.replay_max_tuples,
+                            cfg.rho_low,
+                            cfg.rho_high,
+                        )
+                    )
+                    # Protected demos (if seeded) are summed in on top of the
+                    # cross-task recall, each forwarded under its own task mask.
+                    # Independent of no_reconfig: demos are current-/own-task
+                    # expert data, not rho-filtered cross-task replay.
+                    if cfg.demo_seed and replay.demos:
+                        recalled = recalled + replay.sample_demos(cfg.replay_max_tuples)
+                    agent.update_joint(replay.sample(cfg.batch_size), recalled)
+
+            # --- Mid-phase reconfig on the latest collect burst (skipped under
+            # fixed-mask / no-mask baselines). Close off the chunk collected under
+            # the outgoing masks before committing the new ones (per-interval
+            # chunking).
+            if (
+                not no_reconfig
+                and cfg.reconfig_every_iters > 0
+                and (it + 1) % cfg.reconfig_every_iters == 0
+                and last_seqs
+            ):
+                support = _support_from_burst(last_seqs, gamma_rc, cfg.reconfig_n)
+                replay.archive_chunk(agent.m_a, agent.m_c)
+                replay.clear_current()
+                agent.reconfig_masks(support, commit=True)
+
+            if (it + 1) % cfg.log_every == 0 or it == cfg.n_iters_per_task - 1:
+                sr = n_succ_b / max(n_done_b, 1)
+                mean_r = float(burst["reward"].mean())
+                elapsed = time.time() - t_start
+                print(
+                    f"  iter {it + 1:>4d}  step_r={mean_r:7.3f}  "
+                    f"succ/done={n_succ_b}/{n_done_b}={sr:.2f}  ({elapsed:.0f}s)"
+                )
+
+        # 4) Archive the final chunk (data since the last reconfig) under the
+        # phase's last masks (skipped under fixed-mask / no-mask). stored_m_a/c[ti]
+        # now holds the *last* mask used in this task's training phase — the
+        # stored-mask baseline recalls it at eval.
+        agent.stored_m_a[ti] = agent.m_a.detach().clone()
+        agent.stored_m_c[ti] = agent.m_c.detach().clone()
+        if not no_reconfig:
+            replay.archive_chunk(agent.m_a, agent.m_c)
+
+        # 5) Eval all tasks (unified procedure) ---------------------------
+        print(f"  --- Eval after phase {ti} ---")
+        for tj in range(N):
+            tag = "<-" if tj == ti else "  "
+            if recall_eval:
+                if tj > ti:
+                    # No mask-selection process for unseen tasks: skip
+                    # forward-transfer cells.
+                    matrix[ti, tj] = np.nan
+                    print(f"    [{tag}] {envs[tj].name:25s} sr=  — (skipped)")
+                    continue
+                sr = _eval_with_reconfig(
+                    envs[tj], agent, cfg, recall_m_a=agent.stored_m_a[tj]
+                )
+            else:
+                sr = _eval_with_reconfig(envs[tj], agent, cfg)
+            matrix[ti, tj] = sr
+            print(f"    [{tag}] {envs[tj].name:25s} sr={sr:.2f}")
+
+        np.savez(
+            cfg.output_path,
+            matrix=matrix,
+            tasks=np.array(cfg.tasks),
+            phases_done=ti + 1,
+        )
+
+    print("\n=== Eval matrix (rows: training phase, cols: eval task) ===")
+    for ti in range(N):
+        row = " ".join(
+            "  — " if np.isnan(matrix[ti, tj]) else f"{matrix[ti, tj]:.2f}"
+            for tj in range(N)
+        )
+        print(f"  phase {ti} ({envs[ti].name}): {row}")
+
+    # np.savez(
+    #     cfg.output_path,
+    #     matrix=matrix,
+    #     tasks=np.array(cfg.tasks),
+    #     phases_done=N,
+    # )
+    plot_matrix(
+        matrix,
+        [e.name for e in envs],
+        cfg.output_path.replace(".npz", ".png"),
+    )
+    config_path = cfg.output_path.replace(".npz", ".config.json")
+    with open(config_path, "w") as f:
+        json.dump(asdict(cfg), f, indent=2, default=str)
+    print(f"Saved config to {config_path}")
+    return matrix
+
+
+def plot_matrix(matrix: np.ndarray, names, out_path: str):
+    n = len(names)
+    fig, ax = plt.subplots(figsize=(max(6, 0.7 * n + 2), max(5, 0.6 * n + 1.5)))
+    im = ax.imshow(matrix, vmin=0.0, vmax=1.0, cmap="viridis", aspect="equal")
+    ax.set_xticks(range(n), names, rotation=45, ha="right")
+    ax.set_yticks(range(n), names)
+    ax.set_xlabel("Eval task")
+    ax.set_ylabel("Trained through task")
+    ax.set_title("Continual World sequential DDPG: success-rate matrix")
+    for i in range(n):
+        for j in range(n):
+            if np.isnan(matrix[i, j]):
+                continue  # skipped forward-transfer cell
+            color = "white" if matrix[i, j] < 0.5 else "black"
+            ax.text(
+                j,
+                i,
+                f"{matrix[i, j]:.2f}",
+                ha="center",
+                va="center",
+                color=color,
+                fontsize=8,
+            )
+    fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04, label="success rate")
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=150)
+    plt.close(fig)
+    print(f"Saved plot to {out_path}")
+
+
+# ---------------------------------------------------------------------------
+# Cheat-init calibration: random-action rollouts only, no learning.
+# Use this to iterate on `_cheat_reset` per task — aim for a target band of
+# success rates (e.g. 30–70%) and a non-trivial mean steps-to-first-success.
+# ---------------------------------------------------------------------------
+
+
+def calibrate_cheats(
+    task_names: tuple[str, ...] = DEFAULT_TASKS,
+    n_episodes: int = 30,
+    max_steps: int = 200,
+    seed: int = 0,
+    cfg: "DDPGConfig | None" = None,
+):
+    # Measure random-action success under whatever env setup `cfg` specifies
+    # (defaults: cheat off, random_init_all). Pass a cfg with use_cheat_reset on
+    # to tune the handlers for the few CW tasks that have one.
+    cfg = cfg if cfg is not None else DDPGConfig(tasks=tuple(task_names))
+    envs = build_cw_envs(task_names, cfg, seed)
+    print(
+        f"\nCalibration: {n_episodes} random-action eps per task, max_steps={max_steps}"
+    )
+    print(f"{'task':28s} {'sr':>5s}  {'mean_len':>8s}  {'mean_steps_to_succ':>18s}")
+    for env in envs:
+        n_succ = 0
+        lens: list[int] = []
+        first_succ_steps: list[int] = []
+        for _ in range(n_episodes):
+            env.reset()
+            ep_succ = 0
+            first = -1
+            for t in range(max_steps):
+                a = np.random.uniform(-1.0, 1.0, size=env.act_dim).astype(np.float32)
+                _, _, term, trunc, info = env.step(a)
+                if float(info.get("success", 0.0)) > 0.5 and first < 0:
+                    first = t + 1
+                if float(info.get("success", 0.0)) > 0.5:
+                    ep_succ = 1
+                if term or trunc:
+                    break
+            n_succ += ep_succ
+            lens.append(t + 1)
+            if first >= 0:
+                first_succ_steps.append(first)
+        sr = n_succ / n_episodes
+        mean_len = float(np.mean(lens)) if lens else float("nan")
+        mean_first = (
+            float(np.mean(first_succ_steps)) if first_succ_steps else float("nan")
+        )
+        print(f"{env.name:28s} {sr:5.2f}  {mean_len:8.1f}  {mean_first:18.1f}")
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+
+if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--smoke", action="store_true", help="Smoke-test config")
+    parser.add_argument(
+        "--calibrate",
+        action="store_true",
+        help="Run random-action rollouts under cheat init to tune _cheat_reset; no learning.",
+    )
+    parser.add_argument(
+        "--calibrate-eps",
+        type=int,
+        default=30,
+        help="Episodes per task in --calibrate.",
+    )
+    parser.add_argument(
+        "--calibrate-steps",
+        type=int,
+        default=50,
+        help="Max steps per ep in --calibrate.",
+    )
+    parser.add_argument(
+        "--fixed-mask",
+        action="store_true",
+        help="Disjoint-subset baseline: task i uses neurons [i*k, (i+1)*k), "
+        "recalled exactly at eval (oracle task identity); no reconfig or "
+        "cross-task replay, forward-transfer evals skipped. Output suffixed "
+        "with _fixed.",
+    )
+    parser.add_argument(
+        "--no-mask",
+        action="store_true",
+        help="No-sparsity baseline: all-ones mask (k=H), frozen. Skips all "
+        "reconfig + cross-task replay. Output suffixed with _nomask.",
+    )
+    parser.add_argument(
+        "--stored-mask",
+        action="store_true",
+        help="FTN training, but eval recalls the last mask used in each "
+        "task's training phase instead of explore + cold-start reconfig; "
+        "forward-transfer evals skipped. Output suffixed with _stored.",
+    )
+    parser.add_argument(
+        "--bootstrap",
+        action="store_true",
+        help="Use bootstrapped eval-time exploration (explore_method='bootstrap'): "
+        "after the first reward, every exploration episode cold-start-reconfigs "
+        "on the cumulative rewarded support. Default is random exploration.",
+    )
+    parser.add_argument(
+        "--exploration-noise",
+        choices=("ou", "simple"),
+        default=None,
+        help="Exploration noise process: 'ou' (default) temporally-correlated "
+        "Ornstein-Uhlenbeck noise used for both additive and no-policy cold-start "
+        "exploration; 'simple' legacy uniform-random + Gaussian additive noise.",
+    )
+    parser.add_argument(
+        "--sequence",
+        choices=("cw10", "cw20"),
+        default="cw10",
+        help="Continual World task sequence (default cw10; cw20 = cw10 twice).",
+    )
+    parser.add_argument(
+        "--cheat",
+        action="store_true",
+        help="Enable cheat-init reset (default off for CW). Only push/window-close "
+        "among CW10 have a handler; others fall back to a normal reset.",
+    )
+    parser.add_argument(
+        "--randomization",
+        choices=("random_init_all", "deterministic", "random_init_fixed20"),
+        default=None,
+        help="Goal/object randomization mode (default random_init_all).",
+    )
+    parser.add_argument(
+        "--onehot",
+        action="store_true",
+        help="Append a one-hot task id to the obs (CW OneHotAdder). Off by default "
+        "— FTN carries task identity in the mask, not the obs.",
+    )
+    parser.add_argument(
+        "--warmup-policy",
+        choices=("random", "prev_mask", "scripted"),
+        default=None,
+        help="Exploration policy for gathering rewarded reconfig support. "
+        "'scripted' uses the MetaWorld expert per task (+ noise) — the way to get "
+        "rewarded support on hard CW tasks that random exploration never solves.",
+    )
+    parser.add_argument(
+        "--demo-seed",
+        action="store_true",
+        help="Train DDPG on the exploration episodes too: archive them as a "
+        "protected demo chunk (under the committed mask) summed into every joint "
+        "update (DDPGfD-style). Pair with --warmup-policy scripted.",
+    )
+    parser.add_argument(
+        "--demo-all",
+        action="store_true",
+        help="With --demo-seed, seed ALL explore episodes (default: rewarded only).",
+    )
+    parser.add_argument(
+        "--demo-persist",
+        action="store_true",
+        help="With --demo-seed, keep demo chunks across phases (cross-task "
+        "retention) instead of clearing them each phase.",
+    )
+    parser.add_argument("--name", default="")
+    parser.add_argument("--seed", default="0")
+    args = parser.parse_args()
+
+    if args.fixed_mask + args.no_mask + args.stored_mask > 1:
+        parser.error(
+            "--fixed-mask, --no-mask, and --stored-mask are mutually exclusive."
+        )
+
+    if args.calibrate:
+        seq = CW20 if args.sequence == "cw20" else CW10
+        cal_cfg = DDPGConfig(tasks=seq, use_cheat_reset=args.cheat)
+        if args.randomization is not None:
+            cal_cfg.randomization = args.randomization
+        calibrate_cheats(
+            seq,
+            n_episodes=args.calibrate_eps,
+            max_steps=args.calibrate_steps,
+            seed=int(args.seed),
+            cfg=cal_cfg,
+        )
+    else:
+        cfg = smoke_ddpg_config() if args.smoke else DDPGConfig()
+        if not args.smoke:
+            cfg.tasks = CW20 if args.sequence == "cw20" else CW10
+        cfg.fixed_mask = args.fixed_mask
+        cfg.no_mask = args.no_mask
+        cfg.stored_mask = args.stored_mask
+        cfg.use_cheat_reset = args.cheat
+        cfg.add_onehot = args.onehot
+        if args.randomization is not None:
+            cfg.randomization = args.randomization
+        if args.warmup_policy is not None:
+            cfg.warmup_policy = args.warmup_policy
+        cfg.demo_seed = args.demo_seed
+        cfg.demo_seed_rewarded_only = not args.demo_all
+        cfg.demo_seed_persist = args.demo_persist
+        if args.bootstrap:
+            cfg.explore_method = "bootstrap"
+        if args.exploration_noise is not None:
+            cfg.exploration_noise = args.exploration_noise
+        if cfg.no_mask:
+            suffix = "_nomask"
+        elif cfg.fixed_mask:
+            suffix = "_fixed"
+        elif cfg.stored_mask:
+            suffix = "_stored"
+        else:
+            suffix = ""
+        tag = args.name + suffix
+        cfg.output_path = cfg.output_path.replace(".", f"_{tag}_{args.seed}.")
+        cfg.seed = int(args.seed)
+        print("Config:", asdict(cfg))
+        train(cfg)

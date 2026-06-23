@@ -1,0 +1,161 @@
+% ============================================================
+%  FTN-LoRA: prompt-perplexity-routed LoRA atom bank
+%  Self-contained Overleaf main. Compile with pdfLaTeX.
+%
+%  Transcribed from the implementation:
+%    model.py / lora_bank.py / perplexity_configurer.py
+%    / spatial.py / train.py
+% ============================================================
+\documentclass[11pt]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{mathtools}
+\usepackage{bm}
+\usepackage{microtype}
+\usepackage{hyperref}
+\hypersetup{colorlinks=true,linkcolor=blue,citecolor=blue,urlcolor=blue}
+
+% ---- Math operators / shorthands ---------------------------
+\DeclareMathOperator*{\argmin}{arg\,min}
+\DeclareMathOperator{\Topk}{Top\text{-}k}
+\newcommand{\kwta}{\mathrm{kWTA}_k}
+\newcommand{\sg}{\mathrm{sg}}        % stop-gradient
+\newcommand{\drop}{\mathrm{drop}}
+\newcommand{\vecop}{\mathrm{vec}}
+\newcommand{\grid}{\mathrm{grid}}
+\newcommand{\CE}{\mathrm{CE}}
+\newcommand{\RR}{\mathbb{R}}
+\newcommand{\Norm}[1]{\mathcal{N}\!\left(#1\right)}
+
+\title{FTN-LoRA: A Prompt-Perplexity-Routed LoRA Atom Bank}
+\author{}
+\date{}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+We attach a bank of $H$ low-rank (LoRA) adapter \emph{atoms} to every target
+linear of a frozen language-model backbone. A single shared binary mask selects
+$k$ active atoms; at inference the mask is chosen \emph{self-supervisedly} by
+minimising the next-token perplexity of the prompt over the mask, with all
+weights frozen. Tasks are learned block-sequentially: only the atoms selected
+for a task are updated, and a mask-overlap-filtered replay protects earlier
+blocks. The equations below transcribe the reference implementation.
+\end{abstract}
+
+% ---- Notation ----------------------------------------------
+\section{Notation}
+The frozen backbone is $\phi$ (Qwen2.5-7B-Instruct) with parameters $\theta$ held
+fixed. A bank is attached to every target linear
+$\ell \in \{\texttt{q},\texttt{k},\texttt{v},\texttt{o},\texttt{up},\texttt{gate},\texttt{down}\}\texttt{\_proj}$.
+There are $H = g^2$ atoms laid out on a $g \times g$ grid (default $g = 48$, so
+$H = 2304$); $k$ atoms are active per forward pass (default $k = 128$); each atom
+has rank $r$ (default $r = 1$) and the bank delta is scaled by $\alpha$ (default
+$\alpha = 16$).
+
+% ---- 1. Banked-LoRA layer ----------------------------------
+\section{Banked-LoRA layer}
+\label{sec:layer}
+For a target linear $\ell$ with frozen weight $W_\ell \in \RR^{\text{out}\times\text{in}}$,
+the bank stores $A_\ell \in \RR^{H\times\text{in}\times r}$ and
+$B_\ell \in \RR^{H\times r\times\text{out}}$. With a shared binary mask
+$m\in\{0,1\}^H$ (where $\|m\|_1 = k$),
+\begin{equation}
+  y_\ell \;=\; W_\ell\, x \;+\; \frac{\alpha}{k}
+  \sum_{j=1}^{H} m_j \,\bigl(\,\drop(x)^{\!\top} A_{\ell,j}\,\bigr)\, B_{\ell,j}.
+\end{equation}
+Equivalently, with the live active set $S(m) = \{\, j : m_j = 1 \,\}$,
+\begin{equation}
+  y_\ell \;=\; W_\ell\, x \;+\; \frac{\alpha}{k}
+  \sum_{j \in S(m)} \bigl(\drop(x)^{\!\top} A_{\ell,j}\bigr) B_{\ell,j}.
+\end{equation}
+A single mask $m$ is shared across all layers $\ell$, so one selection drives the
+whole model. The scale $\alpha/k$ tracks the \emph{live} active-atom count, so $k$
+may be changed at inference without inflating or fading the delta.
+
+% ---- 2. kWTA ----------------------------------------------
+\section{$k$-winners-take-all}
+\begin{equation}
+  \bigl[\kwta(z)\bigr]_j \;=\;
+  \begin{cases}
+    1, & j \in \Topk(z), \\
+    0, & \text{otherwise.}
+  \end{cases}
+\end{equation}
+
+% ---- 3. Prompt-perplexity reconfiguration ------------------
+\section{Prompt-perplexity reconfiguration}
+\label{sec:reconfig}
+This is the core routing mechanism. Given prompt token-ids
+$u = (u_1,\dots,u_T)$, we optimise mask logits $z \in \RR^H$ to minimise the
+self-supervised next-token NLL, with $\theta$ and $\{A,B\}$ frozen:
+\begin{equation}
+  \mathcal{L}_{\mathrm{ppl}}(m) \;=\;
+  -\frac{1}{T}\sum_{t=1}^{T} \log p_{\theta,\,m}\!\bigl(u_t \mid u_{<t}\bigr).
+\end{equation}
+The AnnealSTE inner loop runs for steps $s = 0,\dots,N-1$; only $z$ receives
+gradient:
+\begin{align}
+  \tau_s &= \operatorname{std}(z)\cdot \exp\!\Bigl(-\,s \big/ \tfrac{N}{4}\Bigr),
+            &\varepsilon_s &\sim \Norm{0,\tau_s^2 I}, \\
+  m_s    &= \kwta(z + \varepsilon_s) \;+\; \sigma(z) - \sg\!\bigl(\sigma(z)\bigr),
+            &&\text{(hard forward, straight-through grad)}\\
+  z      &\leftarrow z - \eta\,\mathrm{Adam}\!\bigl(\nabla_z \mathcal{L}_{\mathrm{ppl}}(m_s)\bigr).
+\end{align}
+The best hard mask is retained by NLL:
+\begin{equation}
+  m^\star = \kwta(z_{s^\star}), \qquad
+  s^\star = \argmin_{s} \mathcal{L}_{\mathrm{ppl}}\!\bigl(\kwta(z_s)\bigr).
+\end{equation}
+An optional warm start (e.g.\ mid-rollout reconfiguration) initialises
+$z_0 = a\, m_{\text{init}} + b\,\xi$ with $\xi \sim \Norm{0,I}$.
+
+% ---- 4. Lateral smoothing ----------------------------------
+\section{Lateral smoothing}
+The atoms are reshaped to the $g\times g$ grid; $C$ is a fixed $3\times3$ box
+convolution (circular padding iff the grid is a torus). We iterate $n_{\mathrm{lat}}$
+Polyak-averaged smoothing passes and re-apply $\kwta$ to pull active atoms into
+contiguous blobs:
+\begin{align}
+  m &\leftarrow \rho\, m + (1-\rho)\,\vecop\!\bigl(C * \grid(m)\bigr),
+     \qquad t = 1,\dots,n_{\mathrm{lat}}, \\
+  m_{\mathrm{final}} &= \kwta(m).
+\end{align}
+
+% ---- 5. Per-task reference mask ----------------------------
+\section{Per-task reference mask}
+The reference mask for task $c$ accumulates the masks over its support
+reconfigurations, then takes $\kwta$; mask overlap is measured by
+\begin{equation}
+  m^{\mathrm{ref}}_c \;=\; \kwta\!\Bigl( \textstyle\sum_{e \in \mathrm{supp}(c)} m_e \Bigr),
+  \qquad
+  o(m, m') = \frac{\langle m, m'\rangle}{k} \in [0,1].
+\end{equation}
+
+% ---- 6. Continual training objective -----------------------
+\section{Continual training objective}
+Training is block-sequential. For task $c$ we freeze $\theta$; for each batch
+$B_c$ we first reconfigure the mask $m$ on one random member's prompt
+(Section~\ref{sec:reconfig}), then update \emph{only} the active atoms on the
+causal-LM loss. Because $m_j = 0$ zeroes atom $j$'s contribution in
+Section~\ref{sec:layer}, its gradient is $0$ and untouched atoms are protected:
+\begin{equation}
+  \min_{A,B}\;
+  \underbrace{\frac{1}{|B_c|}\sum_{(u,y)\in B_c} \CE\bigl(y, p_{\theta,m}(\cdot\mid u)\bigr)}_{\text{current task, under fixed }m}
+  \;+\;
+  \mathbb{1}[r<p_{\mathrm{rep}}]\cdot
+  \underbrace{\CE\bigl(y', p_{\theta,m'}(\cdot\mid u')\bigr)}_{\text{replayed prior example, under its stored }m'} .
+\end{equation}
+Replay candidates are filtered to mid-band mask overlap with the current
+selection --- the retention mechanism:
+\begin{equation}
+  (u', y', m')\ \text{drawn from prior buffers with}\quad
+  0.1 \;<\; o(m', m) \;\le\; 0.8 .
+\end{equation}
+
+\end{document}

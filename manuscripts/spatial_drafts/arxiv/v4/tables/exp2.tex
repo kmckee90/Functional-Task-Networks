@@ -1,0 +1,16 @@
+\begin{table}[h]
+\centering
+\caption{Experiment 2: MNIST Shuffled Labels (concept shift, 5 tasks).  Mean $\pm$ std over 8 seeds; mask-recovery eval protocol.}
+\label{tab:exp2}
+\begin{tabular}{l rrr}
+\toprule
+Method & ACC$\uparrow$ & FM$\downarrow$ & BWT \\
+\midrule
+NoMask & $0.255\pm0.000$ & $0.904\pm0.001$ & $-0.904\pm0.001$ \\
+KWTA & $0.951\pm0.004$ & $0.025\pm0.005$ & $-0.023\pm0.006$ \\
+FTN-Fast & $0.938\pm0.051$ & $0.052\pm0.064$ & $-0.052\pm0.064$ \\
+FTN-Slow & $0.976\pm0.001$ & $0.004\pm0.001$ & $-0.004\pm0.001$ \\
+EWC & $0.255\pm0.000$ & $0.903\pm0.001$ & $-0.903\pm0.001$ \\
+\bottomrule
+\end{tabular}
+\end{table}

@@ -1,0 +1,20 @@
+\begin{table}[t]
+\caption{Pairwise overlap of LoRA-Mux training-time masks: $|m_i\cap m_j|/k$, where $k=72$ is the per-task active count. Diagonal is identically $1$ and omitted; off-diagonal $0$ means exact disjointness (Theorem~\ref{thm:isolation} gives FM$=0$ for that pair).}
+\label{tab:lora_overlap}
+\vskip 0.05in
+\begin{center}\begin{small}
+\begin{tabular}{lrrrrrr}
+\toprule
+ & upper & lower & reverse\ & double\_ & starred\ & pirate \\
+\midrule
+upper & $\cdot$ & $0.36$ & $0.00$ & $0.00$ & $0.00$ & $0.00$ \\
+lower & $0.36$ & $\cdot$ & $0.00$ & $0.00$ & $0.00$ & $0.06$ \\
+reverse\_wor & $0.00$ & $0.00$ & $\cdot$ & $0.24$ & $0.00$ & $0.00$ \\
+double\_word & $0.00$ & $0.00$ & $0.24$ & $\cdot$ & $0.00$ & $0.00$ \\
+starred\_vow & $0.00$ & $0.00$ & $0.00$ & $0.00$ & $\cdot$ & $0.18$ \\
+pirate & $0.00$ & $0.06$ & $0.00$ & $0.00$ & $0.18$ & $\cdot$ \\
+\bottomrule
+\end{tabular}
+\end{small}\end{center}
+\vskip -0.1in
+\end{table}

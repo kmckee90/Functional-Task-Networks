@@ -1,0 +1,6 @@
+data_cache/
+checkpoints/
+__pycache__/
+*.pyc
+checkpoints_backup_ftnpaper_4dom/
+checkpoints_serve/

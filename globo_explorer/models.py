@@ -37,8 +37,9 @@ class Conv2dReservoir(nn.Module):
         self,
         in_channels: int,
         num_channels: int = 64,
-        kernel_size: int = 7,
-        stride: int = 7,
+        kernel_size: int = 7,        # cnn1 (down-sampler) kernel
+        stride: int = 7,             # cnn1 stride (= kernel for non-overlapping downsample)
+        recur_kernel: int = 3,       # cnn2 (recurrent) kernel
         input_scale: float = 2.375 * 10,
         recur_scale: float = 1.49,
         tc: float = 1.0,
@@ -57,8 +58,8 @@ class Conv2dReservoir(nn.Module):
 
         self.cnn1 = nn.Conv2d(in_channels, num_channels, kernel_size=kernel_size,
                               stride=stride, padding=0, bias=False)
-        self.cnn2 = nn.Conv2d(num_channels, num_channels, kernel_size=3, stride=1,
-                              padding=1, padding_mode="circular", bias=False)
+        self.cnn2 = nn.Conv2d(num_channels, num_channels, kernel_size=recur_kernel, stride=1,
+                              padding=(recur_kernel - 1) // 2, padding_mode="circular", bias=False)
 
         with torch.no_grad():
             w1 = torch.empty_like(self.cnn1.weight).normal_(generator=gen)
@@ -111,12 +112,15 @@ class FeedbackToChannel(nn.Module):
 class DeepConvDecoder(nn.Module):
     """Trained deep conv2d readout on the reservoir hidden state.
 
-    Mirrors the Fluid_1S "classifier": 3x (Conv2d 3x3 s1 p1 + ReLU) -> flatten
-    -> Linear to ``out_size`` (number of discrete actions for DQN).
+    Mirrors the Fluid_1S "classifier": 3x (Conv2d 3x3 s1 p1 + ReLU) -> flatten ->
+    one or more Linear Q-heads. ``out_sizes`` is a list of per-head action counts:
+    a single entry is a standard DQN; multiple entries form a branching/factored
+    DQN (one independent Q-head per mutually-exclusive action group). The conv
+    trunk is shared across heads.
     """
 
     def __init__(self, in_channels: int, hidden_h: int, hidden_w: int,
-                 out_size: int, layer_size: int = 256):
+                 out_sizes: list[int], layer_size: int = 256):
         super().__init__()
         self.features = nn.Sequential(
             nn.Conv2d(in_channels, layer_size, kernel_size=3, stride=1, padding=1),
@@ -127,10 +131,12 @@ class DeepConvDecoder(nn.Module):
             nn.ReLU(),
             nn.Flatten(),
         )
-        self.head = nn.Linear(layer_size * hidden_h * hidden_w, out_size)
+        feat = layer_size * hidden_h * hidden_w
+        self.heads = nn.ModuleList([nn.Linear(feat, n) for n in out_sizes])
 
-    def forward(self, hidden: torch.Tensor) -> torch.Tensor:
-        return self.head(self.features(hidden))
+    def forward(self, hidden: torch.Tensor) -> list[torch.Tensor]:
+        f = self.features(hidden)
+        return [head(f) for head in self.heads]
 
 
 def downscale_embedding(img_chw: torch.Tensor, out_h: int, out_w: int,

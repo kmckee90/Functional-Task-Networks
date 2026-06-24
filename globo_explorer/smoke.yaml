@@ -1,0 +1,16 @@
+# Tiny end-to-end smoke run that exercises the goal/offline/prioritized machinery.
+# Overlays default.yaml (only the keys below change).
+#   uv run python train.py --config smoke.yaml
+episodes: 2
+max_steps: 60
+init_frames: 100
+batch: 32
+warmup: 32
+recode_memory: 256
+offline_scan_max: 256
+epsilon_decay: 400
+train_interval: 10
+train_iters: 6
+render_window: 30
+render_interval: 40
+device: cpu

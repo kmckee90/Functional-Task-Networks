@@ -1,0 +1,714 @@
+local mushrooms_on = {
+    "nodes_nature:silt", "nodes_nature:clay", "nodes_nature:sand", "nodes_nature:gravel",
+}
+local gravel_on = {
+    "nodes_nature:granite", "nodes_nature:limestone", "nodes_nature:gneiss",
+    "nodes_nature:conglomerate",
+}
+local sand_on = {
+    "nodes_nature:granite", "nodes_nature:limestone", "nodes_nature:gneiss",
+    "nodes_nature:sandstone",
+}
+local clay_on = {
+    "nodes_nature:granite", "nodes_nature:limestone", "nodes_nature:gneiss",
+    "nodes_nature:claystone",
+}
+local gravel_on = {"group:sand", "nodes_nature:silt"}
+local silt_on = {
+    "nodes_nature:granite", "nodes_nature:limestone", "nodes_nature:gneiss",
+    "nodes_nature:siltstone",
+}
+local fish_on = {
+    "nodes_nature:silt", "nodes_nature:silt_wet_salty", "nodes_nature:sand",
+    "nodes_nature:sand_wet_salty", "nodes_nature:gravel", "nodes_nature:gravel_wet_salty",
+}
+local darkasthaan_on = {
+    "nodes_nature:granite", "nodes_nature:basalt", "nodes_nature:silt", "nodes_nature:clay",
+    "nodes_nature:sand", "nodes_nature:gravel",
+}
+local impethu_on = {
+    "nodes_nature:granite", "nodes_nature:basalt", "nodes_nature:limestone",
+    "nodes_nature:sandstone", "nodes_nature:siltstone", "nodes_nature:claystone",
+    "nodes_nature:silt", "nodes_nature:clay", "nodes_nature:sand", "nodes_nature:gravel",
+}
+local moss_on = {
+    "nodes_nature:marshland_soil", "nodes_nature:marshland_soil_wet", "nodes_nature:highland_soil",
+    "nodes_nature:highland_soil_wet", "nodes_nature:woodland_soil",
+    "nodes_nature:woodland_soil_wet",
+}
+local kelp_on = {"nodes_nature:gravel", "nodes_nature:gravel_wet_salty"}
+local seagrass_on = {"nodes_nature:sand", "nodes_nature:sand_wet_salty"}
+local sea_lettuce_on = {"nodes_nature:silt", "nodes_nature:silt_wet_salty"}
+local glow_worm_on = {
+    "nodes_nature:granite", "nodes_nature:gneiss", "nodes_nature:limestone", "nodes_nature:jade",
+}
+
+local woodland_on = {"nodes_nature:woodland_soil", "nodes_nature:woodland_soil_wet"}
+local marshland_on = {"nodes_nature:marshland_soil", "nodes_nature:marshland_soil_wet"}
+local grassland_on = {"nodes_nature:grassland_soil", "nodes_nature:grassland_soil_wet"}
+local duneland_on = {"nodes_nature:duneland_soil", "nodes_nature:duneland_soil_wet"}
+local highland_on = {"nodes_nature:highland_soil", "nodes_nature:highland_soil_wet"}
+local barren_grassland_on = {
+    "nodes_nature:grassland_barren_soil", "nodes_nature:grassland_barren_soil_wet",
+}
+local dry_woodland_on = {"nodes_nature:woodland_dry_soil", "nodes_nature:woodland_dry_soil_wet"}
+local drylands_on = {"nodes_nature:grassland_barren_soil", "nodes_nature:woodland_dry_soil"}
+local all_woodland_on = {
+    "nodes_nature:woodland_soil", "nodes_nature:woodland_soil_wet",
+    "nodes_nature:woodland_dry_soil", "nodes_nature:woodland_dry_soil_wet",
+}
+local all_soils_on = {
+    "nodes_nature:marshland_soil", "nodes_nature:marshland_soil_wet", "nodes_nature:grassland_soil",
+    "nodes_nature:grassland_soil_wet", "nodes_nature:highland_soil",
+    "nodes_nature:highland_soil_wet", "nodes_nature:duneland_soil",
+    "nodes_nature:duneland_soil_wet", "nodes_nature:woodland_soil",
+    "nodes_nature:woodland_soil_wet",
+}
+
+local ocean_on = {
+    "default:water_source", 'nodes_nature:salt_water_source', 'nodes_nature:salt_water_flowing',
+}
+
+local high_soils_on = {
+    "nodes_nature:grassland_soil", "nodes_nature:grassland_soil_wet", "nodes_nature:highland_soil",
+    "nodes_nature:highland_soil_wet", "nodes_nature:grassland_barren_soil",
+    "nodes_nature:grassland_barren_soil_wet",
+}
+
+local lowland_ymax = 600
+local lowland_ymin = 1
+local canes_list = { --- Schematics
+    -- name                 y  x  z  
+    {"nodes_nature:gemedi", 7, 1, 1, 255, 245, 225, 205, 155, 55, 35},
+    {"nodes_nature:cana", 7, 1, 1, 255, 255, 255, 255, 230, 155, 105},
+    {"nodes_nature:tiken", 7, 1, 1, 255, 255, 255, 255, 230, 155, 105},
+    {"nodes_nature:chalin", 7, 1, 1, 255, 255, 255, 255, 230, 155, 105}, -- Exile v4 cane plant, found in dry woodlands
+}
+local canes = {}
+for i in ipairs(canes_list) do -- 
+    local shape = {name = canes_list[i][1], param2 = 2}
+    canes[i] = {
+        size = {y = canes_list[i][2], x = canes_list[i][3], z = canes_list[i][4]},
+        data = {shape, shape, shape, shape, shape, shape, shape},
+        yslice_prob = {
+            {ypos = 0, prob = canes_list[i][05]}, {ypos = 1, prob = canes_list[i][06]},
+            {ypos = 2, prob = canes_list[i][07]}, {ypos = 3, prob = canes_list[i][08]},
+            {ypos = 4, prob = canes_list[i][09]}, {ypos = 5, prob = canes_list[i][10]},
+            {ypos = 6, prob = canes_list[i][11]},
+        },
+    }
+end
+local gemedi = canes[1]
+local cana = canes[2]
+local tiken = canes[3]
+local chalin = canes[4]
+local function find(object)
+    return minetest.get_modpath("main") .. "/schematics/" .. object .. ".mts"
+end
+
+--- Decoration --- 
+local decoration_list = {
+    --         Description                               name                                  deco_type    place_on                             place_offset_y sidelen fill_ratio noise_params                                                                                                       y_max              y_min         decoration                        spawn_by       num_spawn_by schematic              flags                            rotation   param2 param2_max need_timer
+    { --[[ Grassland: mesa   				       ]]
+        "main:mesa", "simple", grassland_on, nil, 80, 0.000025, nil, 55, 10, "main:mesa", nil, nil,
+        nil, nil, nil, nil, nil, 1,
+    }, { --[[     Trees: maraka in grassland          ]]
+        "nodes_nature:maraka_tree", "schematic", grassland_on, -3, 16, nil, {
+            offset = 0.00,
+            scale = 0.0007,
+            spread = {x = 250, y = 250, z = 250},
+            seed = 222,
+            octaves = 3,
+            persist = 0.7,
+        }, 22, lowland_ymin, nil, nil, nil, find("maraka_tree"), "place_center_x, place_center_z",
+        "random", nil, nil, 0,
+    }, { --[[     Trees: maraka in woodland           ]]
+        "nodes_nature:maraka_tree2", "schematic", woodland_on, -3, 80, 0.006000, nil, 40,
+        lowland_ymin, nil, nil, nil, find("maraka_tree"), "place_center_x, place_center_z",
+        "random", nil, nil, 0,
+    }, { --[[     Trees: old tangkal in woodland      ]]
+        "nodes_nature:tangkal_tree_old", "schematic", woodland_on, -5, 80, 0.000900, nil, 25,
+        lowland_ymin, nil, nil, nil, find("tangkal_old"), "place_center_x, place_center_z",
+        "random", nil, nil, 0,
+    }, { --[[     Trees: adult tangkal in woodland    ]]
+        "nodes_nature:tangkal_tree", "schematic", woodland_on, -5, 80, 0.000700, nil, 25,
+        lowland_ymin, nil, nil, nil, find("tangkal_tree"), "place_center_x, place_center_z",
+        "random", nil, nil, 0,
+    }, { --[[     Trees: young tangkal in woodland    ]]
+        "nodes_nature:tangkal_tree_young", "schematic", woodland_on, -3, 80, 0.000500, nil, 25,
+        lowland_ymin, nil, nil, nil, find("tangkal_young"), "place_center_x, place_center_z",
+        "random", nil, nil, 0,
+    }, { --[[     Fills: Gravel Sediment              ]]
+        "nodes_nature:gravel", "simple", gravel_on, -1, 04, nil, {
+            offset = -0.80,
+            scale = 2.0000,
+            spread = {x = 100, y = 100, z = 100},
+            seed = 53995,
+            octaves = 3,
+            persist = 1.0,
+        }, 1, -1, "nodes_nature:gravel", "group:water", 1, nil, "force_placement", nil, nil, nil, 0,
+    }, { --[[  Lowlands: wet loam sediments           ]]
+        "nodes_nature:loam_wet", "simple", {"nodes_nature:loam"}, -1, 04, nil, {
+            offset = -0.40,
+            scale = 3.0000,
+            spread = {x = 32, y = 32, z = 32},
+            seed = 7995,
+            octaves = 3,
+            persist = 1.0,
+        }, 9, 0, "nodes_nature:loam_wet", nil, nil, nil, "force_placement", nil, nil, nil, 0,
+    }, { --[[  Lowlands: wet clay sediment            ]]
+        "nodes_nature:clay_wet", "simple", {"nodes_nature:clay"}, -1, 04, nil, {
+            offset = -0.40,
+            scale = 3.0000,
+            spread = {x = 32, y = 32, z = 32},
+            seed = 7995,
+            octaves = 3,
+            persist = 1.0,
+        }, 9, 0, "nodes_nature:clay_wet", nil, nil, nil, "force_placement", nil, nil, nil, 0,
+    }, { --[[  Lowlands: wet silt sediment            ]]
+        "nodes_nature:silt_wet", "simple", {"nodes_nature:silt"}, -1, 04, nil, {
+            offset = -0.40,
+            scale = 3.0000,
+            spread = {x = 32, y = 32, z = 32},
+            seed = 7995,
+            octaves = 3,
+            persist = 1.0,
+        }, 9, 0, "nodes_nature:silt_wet", nil, nil, nil, "force_placement", nil, nil, nil, 0,
+    }, { --[[  Lowlands: wet sand sediment            ]]
+        "nodes_nature:sand_wet", "simple", {"nodes_nature:sand"}, -1, 04, nil, {
+            offset = -0.40,
+            scale = 3.0000,
+            spread = {x = 32, y = 32, z = 32},
+            seed = 7995,
+            octaves = 3,
+            persist = 1.0,
+        }, 9, 0, "nodes_nature:sand_wet", nil, nil, nil, "force_placement", nil, nil, nil, 0,
+    }, { --[[  Lowlands: wet gravel sediment          ]]
+        "nodes_nature:gravel_wet", "simple", {"nodes_nature:gravel"}, -1, 04, nil, {
+            offset = -0.40,
+            scale = 3.0000,
+            spread = {x = 32, y = 32, z = 32},
+            seed = 7995,
+            octaves = 3,
+            persist = 1.0,
+        }, 9, 0, "nodes_nature:gravel_wet", nil, nil, nil, "force_placement", nil, nil, nil, 0,
+    }, { --[[ Grassland: gemedi                       ]]
+        "nodes_nature:gemedi", "schematic", grassland_on, nil, 16, nil, {
+            offset = 0.00,
+            scale = 1.0000,
+            spread = {x = 128, y = 128, z = 128},
+            seed = 998,
+            octaves = 3,
+            persist = 0.8,
+        }, 10, lowland_ymin, nil, nil, nil, gemedi, nil, nil, nil, nil, 0,
+    }, { --[[ Grassland: sari                         ]]
+        "nodes_nature:sari", "simple", grassland_on, nil, 80, 0.200000, nil, lowland_ymax,
+        lowland_ymin, "nodes_nature:sari", nil, nil, nil, nil, nil, 2, nil, 0,
+    }, { --[[ Grassland: gitiri                       ]]
+        "nodes_nature:gitiri", "simple", grassland_on, nil, 16, nil, {
+            offset = 0.00,
+            scale = 0.0800,
+            spread = {x = 32, y = 32, z = 32},
+            seed = 1001,
+            octaves = 3,
+            persist = 0.6,
+        }, lowland_ymax, lowland_ymin, "nodes_nature:gitiri", nil, nil, nil, nil, nil, 2, nil, 0,
+    }, { --[[ Grassland: tikusati                     ]]
+        "nodes_nature:tikusati", "simple", grassland_on, nil, 16, nil, {
+            offset = 0.00,
+            scale = 0.0010,
+            spread = {x = 100, y = 100, z = 100},
+            seed = 1002,
+            octaves = 3,
+            persist = 0.5,
+        }, lowland_ymax, lowland_ymin, "nodes_nature:tikusati", nil, nil, nil, nil, nil, 2, nil, 0,
+    }, { --[[ Grassland: wiha                         ]]
+        "nodes_nature:wiha", "simple", grassland_on, nil, 16, nil, {
+            offset = 0.00,
+            scale = 0.0020,
+            spread = {x = 32, y = 32, z = 32},
+            seed = 1003,
+            octaves = 3,
+            persist = 0.5,
+        }, lowland_ymax, lowland_ymin, "nodes_nature:wiha", nil, nil, nil, nil, nil, 4, nil, 0,
+    }, { --[[ Grassland: hakimi                       ]]
+        "nodes_nature:hakimi", "simple", grassland_on, nil, 16, nil, {
+            offset = 0.00,
+            scale = 0.0010,
+            spread = {x = 100, y = 100, z = 100},
+            seed = 1004,
+            octaves = 3,
+            persist = 0.5,
+        }, lowland_ymax, lowland_ymin, "nodes_nature:hakimi", nil, nil, nil, nil, nil, 3, nil, 0,
+    }, { --[[ Grassland: nebiyi                       ]]
+        "nodes_nature:nebiyi", "simple", grassland_on, nil, 16, nil, {
+            offset = 0.00,
+            scale = 0.0010,
+            spread = {x = 100, y = 100, z = 100},
+            seed = 1005,
+            octaves = 3,
+            persist = 0.5,
+        }, lowland_ymax, lowland_ymin, "nodes_nature:nebiyi", nil, nil, nil, nil, nil, 1, nil, 0,
+    }, { --[[ Grassland: zufani                       ]]
+        "nodes_nature:zufani", "simple", grassland_on, nil, 16, nil, {
+            offset = 0.00,
+            scale = 0.0020,
+            spread = {x = 32, y = 32, z = 32},
+            seed = 1006,
+            octaves = 3,
+            persist = 0.5,
+        }, lowland_ymax, lowland_ymin, "nodes_nature:zufani", nil, nil, nil, nil, nil, 2, nil, 0,
+    }, { --[[ Grassland: sumac                        ]]
+        "main:sumac", "simple", grassland_on, nil, 16, nil, {
+            offset = 0.00,
+            scale = 0.0020,
+            spread = {x = 32, y = 32, z = 32},
+            seed = 1007,
+            octaves = 3,
+            persist = 0.5,
+        }, lowland_ymax, lowland_ymin, "main:sumac", nil, nil, nil, nil, nil, nil, nil, 0,
+    }, { --[[ Grassland: glow stone                   ]]
+        "main:glow_stone", "simple", high_soils_on, nil, 16, nil, {
+            offset = -0.05,
+            scale = 0.0620,
+            spread = {x = 32, y = 32, z = 32},
+            seed = 1008,
+            octaves = 2,
+            persist = 0.5,
+        }, lowland_ymax, lowland_ymin, "main:glow_stone", nil, nil, nil, nil, nil, nil, nil, 0,
+    }, { --[[ Grassland: brambles                     ]]
+        "main:brambles", "simple", grassland_on, nil, 16, nil, {
+            offset = 0.00,
+            scale = 0.0020,
+            spread = {x = 32, y = 32, z = 32},
+            seed = 1009,
+            octaves = 3,
+            persist = 0.5,
+        }, lowland_ymax, lowland_ymin, "main:brambles", nil, nil, nil, nil, nil, nil, nil, 0,
+    }, { --[[ Grassland: coffee                       ]]
+        "main:coffee", "simple", highland_on, nil, 16, nil, {
+            offset = 0.00,
+            scale = 0.0060,
+            spread = {x = 32, y = 32, z = 32},
+            seed = 1010,
+            octaves = 3,
+            persist = 0.5,
+        }, lowland_ymax, lowland_ymin, "main:coffee", nil, nil, nil, nil, nil, nil, nil, 0,
+    }, { --[[ Grassland: thorns                       ]]
+        "main:thorns", "simple", grassland_on, nil, 16, nil, {
+            offset = 0.00,
+            scale = 0.0030,
+            spread = {x = 32, y = 32, z = 32},
+            seed = 1011,
+            octaves = 3,
+            persist = 0.5,
+        }, lowland_ymax, lowland_ymin, "main:thorns", nil, nil, nil, nil, nil, nil, nil, 1,
+    }, { --[[ Grassland: potatoes                     ]]
+        "main:potatoes", "simple", all_soils_on, nil, 16, nil, {
+            offset = 0.00,
+            scale = 0.0020,
+            spread = {x = 32, y = 32, z = 32},
+            seed = 1012,
+            octaves = 3,
+            persist = 0.5,
+        }, lowland_ymax, lowland_ymin, "main:potatoes", nil, nil, nil, nil, nil, nil, nil, 1,
+    }, { --[[ Grassland: pulse blossom                ]]
+        "main:pulse_blossom", "simple", grassland_on, nil, 16, nil, {
+            offset = 0.00,
+            scale = 0.0020,
+            spread = {x = 32, y = 32, z = 32},
+            seed = 1013,
+            octaves = 3,
+            persist = 0.5,
+        }, lowland_ymax, lowland_ymin, "main:pulse_blossom", nil, nil, nil, nil, nil, nil, nil, 1,
+    }, { --[[ Grassland: grib weed                    ]]
+        "main:grib_weed", "simple", grassland_on, nil, 16, nil, {
+            offset = 0.00,
+            scale = 0.0020,
+            spread = {x = 32, y = 32, z = 32},
+            seed = 1014,
+            octaves = 3,
+            persist = 0.5,
+        }, lowland_ymax, lowland_ymin, "main:grib_weed", nil, nil, nil, nil, nil, nil, nil, 1,
+    }, { --[[ Grassland: sun berry                    ]]
+        "main:sun_berry", "simple", grassland_on, nil, 16, nil, {
+            offset = 0.00,
+            scale = 0.0025,
+            spread = {x = 32, y = 32, z = 32},
+            seed = 1015,
+            octaves = 3,
+            persist = 0.5,
+        }, lowland_ymax, 25, "main:sun_berry", nil, nil, nil, nil, nil, nil, nil, 0,
+    }, { --[[ Grassland: moon berry                   ]]
+        "main:moon_berry", "simple", all_soils_on, nil, 16, nil, {
+            offset = 0.00,
+            scale = 0.0025,
+            spread = {x = 32, y = 32, z = 32},
+            seed = 1016,
+            octaves = 3,
+            persist = 0.5,
+        }, 20, lowland_ymin, "main:moon_berry", nil, nil, nil, nil, nil, nil, nil, 0,
+    }, { --[[ Marshland: goldcap                      ]]
+        "main:goldcap", "simple", marshland_on, nil, 80, 0.010000, nil, lowland_ymax, lowland_ymin,
+        "main:goldcap", nil, nil, nil, nil, nil, nil, nil, 0,
+    }, { --[[ Marshland: papaya                       ]]
+        "main:papaya", "simple", marshland_on, nil, 80, 0.010000, nil, lowland_ymax, lowland_ymin,
+        "main:papaya", nil, nil, nil, nil, nil, nil, nil, 1,
+    }, { --[[ Grassland: papaya                       ]]
+        "main:papaya_rare", "simple", "nodes_nature:grassland_soil_wet", nil, 80, 0.010000, nil, 20,
+        lowland_ymin, "main:papaya", nil, nil, nil, nil, nil, nil, nil, 1,
+    }, { --[[ Grassland: dawn_cactus                  ]]
+        "main:dawn_cactus", "simple", grassland_on, nil, 16, nil, {
+            offset = 0.00,
+            scale = 0.0060,
+            spread = {x = 32, y = 32, z = 32},
+            seed = 1017,
+            octaves = 3,
+            persist = 0.5,
+        }, lowland_ymax, 30, "main:dawn_cactus", nil, nil, nil, nil, nil, nil, nil, 1,
+    }, { --[[ Grassland: descor                       ]]
+        "main:descor", "simple", grassland_on, nil, 64, nil, {
+            offset = -0.01,
+            scale = 0.0180,
+            spread = {x = 32, y = 32, z = 32},
+            seed = 1018,
+            octaves = 3,
+            persist = 0.5,
+        }, lowland_ymax, 35, "main:descor", nil, nil, nil, nil, nil, 1, nil, 1,
+    }, { --[[ Grassland: barley                       ]]
+        "main:barley", "simple", grassland_on, nil, 16, nil, {
+            offset = 0.00,
+            scale = 0.0020,
+            spread = {x = 32, y = 32, z = 32},
+            seed = 1019,
+            octaves = 3,
+            persist = 0.5,
+        }, lowland_ymax, lowland_ymin, "main:barley", nil, nil, nil, nil, nil, nil, nil, 0,
+    }, { --[[ Water: Balloo hyce                      ]]
+        "main:balloo_hyce_plant", "simple", fish_on, 1, 16, 0.0006, nil, 0, 0,
+        "main:balloo_hyce_plant", nil, nil, nil, nil, nil, nil, nil, 1,
+    }, { --[[ Water: Sea Beans                        ]]
+        "main:sea_beans", "simple", fish_on, 3, 16, 0.0015, nil, -2, -2, "main:sea_beans", nil, nil,
+        nil, nil, nil, nil, nil, 1,
+    }, { --[[ Water: Sea Beans                        ]]
+        "main:sea_beans_deep", "simple", fish_on, 4, 16, 0.0015, nil, -3, -3, "main:sea_beans", nil,
+        nil, nil, nil, nil, nil, nil, 1,
+    }, { --[[ Water: Sea Beans                        ]]
+        "main:sea_beans_deeper", "simple", fish_on, 5, 16, 0.0015, nil, -4, -4, "main:sea_beans",
+        nil, nil, nil, nil, nil, nil, nil, 1,
+    }, { --[[ Highlands: gumboline   				   ]]
+        "main:gumboline", "simple", high_soils_on, nil, 80, .002, nil, 31000, 80, "main:gumboline",
+        nil, nil, nil, nil, nil, nil, nil, 0,
+    }, { --[[ Highlands: lava   				       ]]
+        "nodes_nature:lava_source", "simple", high_soils_on, -1, 16, nil, {
+            offset = -0.02,
+            scale = 0.013,
+            spread = {x = 250, y = 250, z = 250},
+            seed = 1020,
+            octaves = 3,
+            persist = 1.0,
+        }, lowland_ymax, 45, "nodes_nature:lava_source", nil, nil, nil, "force_placement", nil, nil,
+        nil, 1,
+    }, { --[[ Anywhere : pond   				       ]]
+        "main:pond", "simple", all_soils_on, nil, 80, 0.000022, nil, lowland_ymax, 3, "main:pond",
+        nil, nil, nil, "force_placement", nil, nil, nil, 1,
+    }, { --[[ Anywhere : firepuffin			       ]]
+        "animals:firepuffin_spawn", "simple", all_soils_on, nil, 80, 0.000020, nil, lowland_ymax, 3,
+        "animals:firepuffin_spawn", nil, nil, nil, "force_placement", nil, nil, nil, 1,
+    }, { --[[ Marshland: cana                         ]]
+        "nodes_nature:cana", "schematic", marshland_on, nil, 16, nil, {
+            offset = 0.00,
+            scale = 1.0000,
+            spread = {x = 16, y = 16, z = 16},
+            seed = 578,
+            octaves = 3,
+            persist = 0.7,
+        }, 5, lowland_ymin, nil, nil, nil, cana, nil, nil, nil, nil, 0,
+    }, { --[[ Marshland: tanai                        ]]
+        "nodes_nature:tanai", "simple", marshland_on, nil, 80, 0.300000, nil, lowland_ymax,
+        lowland_ymin, "nodes_nature:tanai", nil, nil, nil, nil, nil, 4, nil, 0,
+    }, { --[[ Marshland: galanta                      ]]
+        "nodes_nature:galanta", "simple", marshland_on, nil, 16, nil, {
+            offset = 0.00,
+            scale = 0.0020,
+            spread = {x = 32, y = 32, z = 32},
+            seed = 153,
+            octaves = 3,
+            persist = 0.5,
+        }, lowland_ymax, lowland_ymin, "nodes_nature:galanta", nil, nil, nil, nil, nil, 4, nil, 0,
+    }, { --[[ Marshland: marbhan                      ]]
+        "nodes_nature:marbhan", "simple", marshland_on, nil, 16, nil, {
+            offset = 0.00,
+            scale = 0.0010,
+            spread = {x = 100, y = 100, z = 100},
+            seed = 5505,
+            octaves = 3,
+            persist = 0.5,
+        }, lowland_ymax, lowland_ymin, "nodes_nature:marbhan", nil, nil, nil, nil, nil, 2, nil, 0,
+    }, { --[[ Marshland: bronach                      ]]
+        "nodes_nature:bronach", "simple", marshland_on, nil, 16, nil, {
+            offset = 0.00,
+            scale = 0.0600,
+            spread = {x = 16, y = 16, z = 16},
+            seed = 1707,
+            octaves = 3,
+            persist = 0.9,
+        }, lowland_ymax, lowland_ymin, "nodes_nature:bronach", nil, nil, nil, nil, nil, 3, nil, 0,
+    }, { --[[  Duneland: tiken                        ]]
+        "nodes_nature:tiken", "schematic", duneland_on, nil, 16, nil, {
+            offset = 0.00,
+            scale = 1.0000,
+            spread = {x = 64, y = 64, z = 64},
+            seed = 998,
+            octaves = 3,
+            persist = 0.9,
+        }, 7, lowland_ymin, nil, nil, nil, tiken, nil, nil, nil, nil, 0,
+    }, { --[[  Duneland: alaf                         ]]
+        "nodes_nature:alaf", "simple", duneland_on, nil, 80, 0.100000, nil, lowland_ymax + 20,
+        lowland_ymin, "nodes_nature:alaf", nil, nil, nil, nil, nil, 4, nil, 0,
+    }, { --[[  Duneland: anperla                      ]]
+        "nodes_nature:anperla", "simple", duneland_on, nil, 16, nil, {
+            offset = 0.00,
+            scale = 0.0010,
+            spread = {x = 32, y = 32, z = 32},
+            seed = 1112,
+            octaves = 3,
+            persist = 0.8,
+        }, lowland_ymax + 20, lowland_ymin, "nodes_nature:anperla", nil, nil, nil, nil, nil, 3, nil,
+        0,
+    }, { --[[  Highland: thoka                        ]]
+        "nodes_nature:thoka", "simple", highland_on, nil, 80, 0.300000, nil, 31000, lowland_ymin,
+        "nodes_nature:thoka", nil, nil, nil, nil, nil, 4, nil, 0,
+    }, { --[[  Highland: merki                        ]]
+        "nodes_nature:merki", "simple", highland_on, nil, 16, nil, {
+            offset = 0.00,
+            scale = 0.0020,
+            spread = {x = 32, y = 32, z = 32},
+            seed = 1112,
+            octaves = 3,
+            persist = 0.8,
+        }, lowland_ymax, lowland_ymin, "nodes_nature:merki", nil, nil, nil, nil, nil, 2, nil, 0,
+    }, { --[[  Woodland: damo                         ]]
+        "nodes_nature:damo", "simple", woodland_on, nil, 80, 0.100000, nil, lowland_ymax + 50,
+        lowland_ymin, "nodes_nature:damo", nil, nil, nil, nil, nil, 4, nil, 0,
+    }, { --[[  Woodland: vansano                      ]]
+        "nodes_nature:vansano", "simple", woodland_on, nil, 80, 0.010000, nil, lowland_ymax + 50,
+        lowland_ymin, "nodes_nature:vansano", nil, nil, nil, nil, nil, 2, nil, 0,
+    }, { --[[  Boulders: granite boulder              ]]
+        "nodes_nature:granite_boulder", "simple", "nodes_nature:granite", nil, 80, 0.050000, nil,
+        31000, -31000, "nodes_nature:granite_boulder", nil, nil, nil, "all_floors", nil, nil, nil,
+        0,
+    }, { --[[  Boulders: limestone boulder            ]]
+        "nodes_nature:limestone_boulder", "simple", "nodes_nature:limestone", nil, 80, 0.050000,
+        nil, 31000, -31000, "nodes_nature:limestone_boulder", nil, nil, nil, "all_floors", nil, nil,
+        nil, 0,
+    }, { --[[  Boulders: basalt boulder               ]]
+        "nodes_nature:basalt_boulder", "simple", "nodes_nature:basalt", nil, 80, 0.050000, nil,
+        31000, -31000, "nodes_nature:basalt_boulder", nil, nil, nil, "all_floors", nil, nil, nil, 0,
+    }, { --[[  Boulders: ironstone, dense on deposits ]]
+        "nodes_nature:ironstone_boulder", "simple", "nodes_nature:ironstone", nil, 80, 0.600000,
+        nil, 31000, -31000, "nodes_nature:ironstone_boulder", nil, nil, nil, "all_floors", nil, nil,
+        nil, 0,
+    }, { --[[  Boulders: gneiss boulder               ]]
+        "nodes_nature:gneiss_boulder", "simple", "nodes_nature:gneiss", nil, 80, 0.050000, nil,
+        31000, -31000, "nodes_nature:gneiss_boulder", nil, nil, nil, "all_floors", nil, nil, nil, 0,
+    }, { --[[  Boulders: jade boulder                 ]]
+        "nodes_nature:jade_boulder", "simple", "nodes_nature:jade", nil, 80, 0.400000, nil, 31000,
+        -31000, "nodes_nature:jade_boulder", nil, nil, nil, "all_floors", nil, nil, nil, 0,
+    },
+    ---- Cave mushrooms -- artifact species escaped from cultivation                                                                                                                                                                                                                                                                                                                                                                                                                 
+    { --[[ Mushrooms: lambakap  (food and water)   ]]
+        "nodes_nature:lambakap", "simple", mushrooms_on, nil, 80, 0.010000, nil, -80, -950,
+        "nodes_nature:lambakap", nil, nil, nil, "all_floors", nil, nil, nil, 0,
+    }, { --[[ Mushrooms: reshedaar (wood source)      ]]
+        "nodes_nature:reshedaar", "simple", mushrooms_on, nil, 80, 0.010000, nil, -80, -950,
+        "nodes_nature:reshedaar", nil, nil, nil, "all_floors", nil, nil, nil, 0,
+    }, { --[[ Mushrooms: mahal     (fibre source)     ]]
+        "nodes_nature:mahal", "simple", mushrooms_on, nil, 80, 0.010000, nil, -80, -950,
+        "nodes_nature:mahal", nil, nil, nil, "all_floors", nil, nil, nil, 0,
+    },
+    --	{ --[[   Animals: gundu                        ]]    "animals:gundu_eggs"                , "simple"   , fish_on                            , nil,           80,     0.000500,  nil                                                                                                              ,                -5,          -25, "animals:gundu_eggs"            , nil          , nil,         nil                  , "force_placement"               ,      nil, nil,   nil, 1, },
+    --	{ --[[   Animals: sarkamos                     ]]    "animals:sarkamos_eggs"             , "simple"   , fish_on                            , nil,           80,     0.000070,  nil                                                                                                              ,                -7,          -35, "animals:sarkamos_eggs"         , nil          , nil,         nil                  , "force_placement"               ,      nil, nil,   nil, 1, },
+
+    { --[[   Animals: impethu                      ]]
+        "animals:impethu_eggs", "simple", impethu_on, nil, 80, 0.005000, nil, lowland_ymax, -1300,
+        "animals:impethu_eggs", nil, nil, nil, "all_floors", nil, nil, nil, 1,
+    }, { --[[   Animals: kubwakubwa                   ]]
+        "animals:kubwakubwa_eggs", "simple", impethu_on, nil, 80, 0.001500, nil, lowland_ymax, -150,
+        "animals:kubwakubwa_eggs", nil, nil, nil, "all_floors", nil, nil, nil, 1,
+    }, { --[[   Animals: darkasthaan                  ]]
+        "animals:darkasthaan_spawn", "simple", all_soils_on, nil, 80, 0.000040, nil, 31000, 0,
+        "animals:darkasthaan_spawn", nil, nil, nil, "all_floors", nil, nil, nil, 1,
+    }, { --[[   Animals: pegasun                      ]]
+        "animals:pegasun_spawn", "simple", all_soils_on, nil, 16, nil, {
+            offset = 0.00,
+            scale = 0.0015,
+            spread = {x = 100, y = 100, z = 100},
+            seed = 1882,
+            octaves = 2,
+            persist = 0.9,
+        }, lowland_ymax, 3, "animals:pegasun_spawn", nil, nil, nil, "all_floors", nil, nil, nil, 1,
+    }, { --[[ Grassland: cow                          ]]
+        "animals:cow_spawn", "simple", all_soils_on, nil, 80, 0.000060, nil, lowland_ymax,
+        lowland_ymin, "animals:cow_spawn_herd", nil, nil, nil, nil, nil, nil, nil, 1,
+    }, { --[[ Grassland: wolf                         ]]
+        "animals:wolf_spawn", "simple", all_soils_on, nil, 16, nil, {
+            offset = 0.00,
+            scale = 0.0010,
+            spread = {x = 100, y = 100, z = 100},
+            seed = 1019,
+            octaves = 2,
+            persist = 0.9,
+        }, lowland_ymax, lowland_ymin, "animals:wolf_spawn", nil, nil, nil, nil, nil, nil, nil, 1,
+    }, { --[[ Marshland: mongoose                     ]]
+        "animals:mongoose_spawn", "simple", all_soils_on, nil, 16, nil, {
+            offset = 0.00,
+            scale = 0.0015,
+            spread = {x = 100, y = 100, z = 100},
+            seed = 1020,
+            octaves = 2,
+            persist = 0.9,
+        }, lowland_ymax, lowland_ymin, "animals:mongoose_spawn", nil, nil, nil, nil, nil, nil, nil,
+        1,
+    }, { --[[ Marshland: puma                         ]]
+        "animals:puma_spawn", "simple", all_soils_on, nil, 16, nil, {
+            offset = 0.00,
+            scale = 0.0010,
+            spread = {x = 100, y = 100, z = 100},
+            seed = 1021,
+            octaves = 2,
+            persist = 0.9,
+        }, lowland_ymax, lowland_ymin, "animals:puma_spawn", nil, nil, nil, nil, nil, nil, nil, 1,
+    }, { --[[ Grassland: gazelle                      ]]
+        "animals:gazelle_spawn", "simple", grassland_on, nil, 80, 0.000060, nil, 40, lowland_ymin,
+        "animals:gazelle_spawn_herd", nil, nil, nil, nil, nil, nil, nil, 1,
+    }, { --[[ Duneland: lavaox                        ]]
+        "animals:lavaox_spawn", "simple", duneland_on, nil, 80, 0.000035, nil, lowland_ymax,
+        lowland_ymin, "animals:lavaox_spawn_herd", nil, nil, nil, nil, nil, nil, nil, 1,
+    }, { --[[   Animals: sneachan                     ]]
+        "animals:sneachan_spawn", "simple", all_soils_on, nil, 80, 0.002000, nil, lowland_ymax, 3,
+        "animals:sneachan_spawn", nil, nil, nil, "all_floors", nil, nil, nil, 1,
+    }, { --[[  Multiple: moss                         ]]
+        "nodes_nature:moss", "simple", all_soils_on, nil, 16, nil, {
+            offset = 0.00,
+            scale = 0.0050,
+            spread = {x = 100, y = 100, z = 100},
+            seed = 1000,
+            octaves = 3,
+            persist = 0.9,
+        }, lowland_ymax, lowland_ymin, "nodes_nature:moss", nil, nil, nil, nil, nil, nil, nil, 0,
+    }, { --[[  Multiple: denser moss in marsh         ]]
+        "nodes_nature:moss", "simple", moss_on, nil, 16, nil, {
+            offset = 0.00,
+            scale = 0.0900,
+            spread = {x = 16, y = 16, z = 16},
+            seed = 1640,
+            octaves = 3,
+            persist = 0.8,
+        }, 31000, 1, "nodes_nature:moss", nil, nil, nil, nil, nil, nil, nil, 0,
+    },
+    ---- Exile v4 experimental-biome additions         name                                  deco_type    place_on                             place_offset_y sidelen fill_ratio noise_params                                                                                                      y_max                     y_min   decoration                        spawn_by       num_spawn_by schematic              flags                             rotation param2 param2_max
+    --	{ --[[     Trees: sasaran in dry woodland      ]]    "nodes_nature:sasaran_tree1_lowland", "schematic", grassland_on                       ,  -4,           80,     0.007500,  nil                                                                                                              ,                35, lowland_ymin, nil                             , nil          , nil,         find("sasaran1")     , "place_center_x, place_center_z", "random", nil,   nil, 0, },
+    { --[[     Trees: sasaran in dry woodland      ]]
+        "nodes_nature:sasaran_tree1", "schematic", grassland_on, -4, 80, nil, {
+            offset = -0.5,
+            scale = 0.65,
+            spread = {x = 128, y = 128, z = 128},
+            seed = 51122,
+            octaves = 3,
+            persist = 0.5,
+        }, 31000, 50, nil, nil, nil, find("sasaran1"), "place_center_x, place_center_z", "random",
+        nil, nil, 0,
+    }, { --[[     Trees: kagum on salt silt   169     ]]
+        "nodes_nature:kagum_tree", "schematic", "nodes_nature:silt_wet_salty", 0, 80, nil, {
+            offset = 0,
+            scale = 0.065,
+            spread = {x = 128, y = 128, z = 128},
+            seed = 51122,
+            octaves = 3,
+            persist = 0.5,
+        }, 3, -1, nil, nil, nil, find("kagum1"), "place_center_x, place_center_z", "random", nil,
+        nil, 0,
+    }, { --[[ All woods: Lowland Chalin       170     ]]
+        "nodes_nature:chalin_lowland", "schematic", all_woodland_on, nil, 80, 0.007500, nil, 35,
+        lowland_ymin, nil, nil, nil, chalin, nil, nil, nil, nil, 0,
+    }, { --[[ Dry woods: Chalin               171     ]]
+        "nodes_nature:chalin", "schematic", dry_woodland_on, nil, 80, 0.075000, nil, lowland_ymax,
+        35, nil, nil, nil, chalin, nil, nil, nil, nil, 0,
+    }, { --[[ Dry woods: Momo                 172     ]]
+        "nodes_nature:momo", "simple", dry_woodland_on, nil, 80, 0.001000, nil, lowland_ymax,
+        lowland_ymin, "nodes_nature:momo", nil, nil, nil, nil, nil, 1, nil, 0,
+    }, { --[[ All arids: Tashvish                     ]]
+        "nodes_nature:tashvish", "simple", drylands_on, nil, 80, 0.300000, nil, lowland_ymax,
+        lowland_ymin, "nodes_nature:tashvish", nil, nil, nil, nil, nil, 4, nil, 0,
+    }, { --[[     Trees: tangler in grassland         ]]
+        "main:tangler", "schematic", grassland_on, -3, 16, 0.000050, nil, 22, lowland_ymin,
+        "main:tangler", nil, nil, find("kagum1"), "place_center_x, place_center_z", "random", nil,
+        nil, 1,
+    },
+
+}
+
+local decoIDs = {} -- list of decoration IDs
+local nodeNames = {} -- list of node names
+local y_offsets = {} -- list of y offsets
+for i in ipairs(decoration_list) do
+    minetest.register_decoration(
+        {
+            name = decoration_list[i][01],
+            deco_type = decoration_list[i][02],
+            place_on = decoration_list[i][03],
+            place_offset_y = decoration_list[i][04],
+            sidelen = decoration_list[i][05],
+            fill_ratio = decoration_list[i][06],
+            noise_params = decoration_list[i][07],
+            y_max = decoration_list[i][08],
+            y_min = decoration_list[i][09],
+            decoration = decoration_list[i][10],
+            spawn_by = decoration_list[i][11],
+            num_spawn_by = decoration_list[i][12],
+            schematic = decoration_list[i][13],
+            flags = decoration_list[i][14],
+            rotation = decoration_list[i][15],
+            param2 = decoration_list[i][16],
+            param2_max = decoration_list[i][17],
+        }
+    )
+    if decoration_list[i][18] ~= 0 then
+        local decoID = minetest.get_decoration_id(decoration_list[i][01])
+        table.insert(decoIDs, decoID)
+        table.insert(nodeNames, decoration_list[i][10])
+        if decoration_list[i][04] then
+            table.insert(y_offsets, decoration_list[i][04])
+        else
+            table.insert(y_offsets, 0)
+        end
+    end
+end
+-- minimal.log("offsets: "..dump(nodeNames))
+-- minimal.log("offsets: "..dump(y_offsets))
+
+---- Start node timers ----
+minetest.set_gen_notify({decoration = true}, decoIDs)
+
+minetest.register_on_generated(
+    function(minp, maxp, blockseed) -- start node timers
+        local gennotify = minetest.get_mapgen_object("gennotify")
+        local poslist = {}
+        for i, _ in ipairs(decoIDs) do
+            for j, pos in ipairs(gennotify["decoration#" .. decoIDs[i]] or {}) do
+                local y = 1
+                if y_offsets[i] then
+                    y = 1 + y_offsets[i]
+                end
+                -- print("start timer for "..nodeNames[i].." at "..minetest.pos_to_string(pos))
+                -- if nodeNames[i] == "nodes_nature:lava_source" then
+                --    minimal.log("["..i.."]("..pos.x..","..pos.y..","..pos.z..") "..y)
+                -- end
+                local pos2 = {x = pos.x, y = pos.y + y, z = pos.z}
+                local node_def = minetest.registered_nodes[nodeNames[i]]
+                node_def.on_construct(pos2)
+            end
+        end
+    end
+)

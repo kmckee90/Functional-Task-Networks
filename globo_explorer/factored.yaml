@@ -1,0 +1,4 @@
+# Factored (branching) control: concurrent move + strafe + jump + look.
+# Overlays default.yaml (only this key changes).
+#   uv run python train.py --config factored.yaml
+action_mode: factored

@@ -1,0 +1,198 @@
+# =============================================================================
+# globo_explorer config  (the only CLI arg is --config; everything lives here)
+#   Run:        uv run python train.py                 # uses this file
+#   Custom:     uv run python train.py --config my.yaml   # overlays this file
+#   A custom --config is layered on top of default.yaml, so it only needs the
+#   keys it changes. Keys may use dashes or underscores.
+# =============================================================================
+#
+# GLOSSARY
+# -----------------------------------------------------------------------------
+# Episode control
+#   episodes          Number of episodes; 0 = run indefinitely (until killed).
+#   max_steps         Per-episode step cap; 0 = no cap (episode ends only on death).
+#   total_steps       Global step cap for a finite run; 0 = unlimited.
+#
+# Reproducible world
+#   seed              Fixes terrain (map generation).
+#   spawn             "x,y,z" static_spawnpoint -> identical start location + facing. null = engine picks.
+#   freeze_daylight   Stop the day/night cycle (stay at midday) so observations don't go dark.
+#   weather_seed      Reseed globo's weather RNG -> reproducible/selectable weather. null = random.
+#   invincible        true = never dies (one endless life); false = dies and restarts.
+#
+# Control
+#   action_mode       "discrete" (single DQN over 10 actions) or "factored"
+#                     (branching DQN over [look_h, look_v, jump, move, strafe]).
+#
+# Observation
+#   obs_width/height  First-person view size in pixels.
+#   init_frames       Frames to load before the first observation.
+#
+# Reservoir (frozen echo-state) + decoder (trained)
+#   reservoir_channels   Hidden channel depth.
+#   reservoir_kernel     cnn1 (down-sampler) kernel size.
+#   reservoir_stride     cnn1 stride (=kernel for non-overlapping downsample). Sets hidden H,W.
+#   reservoir_recur_kernel cnn2 (recurrent) kernel size.
+#   reservoir_input_scale  Input gain into the reservoir.
+#   reservoir_recur_scale  Recurrent gain (effective spectral radius / memory length).
+#   reservoir_tc         Leak/time-constant (1.0 = no leak).
+#   reservoir_sparsity   Fraction of nonzero cnn1 weights.
+#   decoder_layer_size   Conv decoder width (hidden_size).
+#   num_novelty_bins     Novelty one-hot bins in the feedback vector.
+#
+# RECODE (intrinsic exploration reward over the downscaled image). See tuning guide below.
+#   recode_down_h/_w     Downscaled embedding size (the clustering space).
+#   recode_rgb           true = cluster over RGB; false = grayscale.
+#   recode_memory        Max number of cluster atoms.
+#   recode_k             Neighbours for the squared-distance running average (distance scale).
+#   recode_knn_k         k for the kNN novelty reward.
+#   recode_kappa         Relative tolerance for inserting a new atom (cluster spacing).
+#   recode_gamma         Visitation-count discount on each merge.
+#   recode_insertion_probability  Probability of inserting (vs merging) a far observation.
+#   recode_decay         Decay rate of the squared-distance EMA.
+#
+# Reward shaping
+#   use_online_novelty   Add the collection-time novelty to the training reward.
+#   use_offline_novelty  Recompute novelty at train time (vs evolving clusters) and use it.
+#   exploration_coef     Weight on novelty (online and/or offline).
+#   env_reward_coef      Weight on globo's in-game reward (0 = pure exploration).
+#   main_sparse_reward_scale  Bonus multiplier on the frontier state in the main buffer.
+#   goal_sparse_reward_scale  Bonus multiplier on the frontier state in the goal buffer.
+#
+# Goal / prioritized replay  (long-range planning back to the exploration frontier)
+#   goal_memory_length   Capacity of the goal buffer (frontier trajectories).
+#   prioritized_replay   true = oversample goal/last/random trajectories; false = random only.
+#   offline_scan_max     Max transitions scanned per round to locate the frontier (caps cost).
+#
+# RL / DQN
+#   gamma             Discount factor.
+#   lr                Learning rate (Adam).
+#   batch             Minibatch / trajectory length per update.
+#   replay_capacity   Main replay buffer capacity.
+#   target_update_tau Polyak soft target-update rate (the explorer's polyak_beta).
+#   epsilon_start/end Exploration epsilon schedule endpoints.
+#   epsilon_decay     Steps to anneal epsilon start->end.
+#
+# Training cadence (the explorer's per-episode update loop)
+#   train_interval    J: collect J steps between training rounds.
+#   train_iters       K: prioritized updates per round.
+#   warmup            Min stored transitions before training.
+#
+# GIF peeks + centroids
+#   render_window/interval/max_frames/gif_seconds  In-episode GIF peeks (artifacts/).
+#   (Cluster centroids are dumped to artifacts/centroids/<i>.png + !masses.csv at each peek.)
+#
+# Misc
+#   device            "cuda" or "cpu".
+#
+# Not implemented (so not exposed): dual obs/feedback critic, DDPG actor, RMSprop
+# (Adam is used), spectral_radius (use reservoir_recur_scale), ObservationBuffer params.
+#
+# -----------------------------------------------------------------------------
+# RECODE TUNING GUIDE — controlling cluster spacing / granularity
+# -----------------------------------------------------------------------------
+# RECODE keeps a set of "atoms" (cluster centroids) in the embedding space. A new
+# observation is MERGED into its nearest atom unless it is farther than
+# `recode_kappa * d2_ema` (d2_ema = running mean squared distance to neighbours),
+# in which case — with prob `recode_insertion_probability` — a new atom is spawned
+# (evicting the most redundant one if memory is full). Novelty reward = distance to
+# the k-th nearest atom, so sparsely-covered regions read as novel (the frontier).
+#
+# In 3D first-person view, tiny camera moves change many pixels, so clusters tend to
+# be TOO granular (every view looks novel). To make clusters COARSER / wider-spaced:
+#   * recode_kappa  ↑  (primary knob): larger spacing threshold -> fewer, broader
+#       atoms; observations must be much farther apart to count as new states.
+#   * recode_down_h/_w  ↓  and recode_rgb: false : the most effective lever — a
+#       smaller grayscale embedding collapses near-duplicate views into the same
+#       point (it changes the metric itself, not just the threshold).
+#   * recode_memory  ↓ : a hard cap forces merging -> coarser tiling.
+#   * recode_insertion_probability  ↓ : spawns new atoms more reluctantly.
+#   * recode_k  ↑ : larger neighbour set -> larger distance scale -> coarser.
+# For FINER granularity, move each of the above the other way.
+# `recode_decay` (→1) makes the distance scale (and thus granularity) adapt slowly;
+# `recode_gamma` (<1) forgets old visitation mass, refreshing the frontier over time.
+# `recode_knn_k` smooths the novelty signal (it does not change cluster spacing).
+# =============================================================================
+
+# PARAMETERS
+
+# Episode control
+episodes: 0
+max_steps: 0
+total_steps: 0
+
+# Reproducible world
+seed: 42
+spawn: "8,8,115"
+freeze_daylight: true
+weather_seed: 0
+invincible: false
+
+# Control
+action_mode: factored   # or: factored
+
+# Observation
+obs_width: 64
+obs_height: 32
+init_frames: 200
+
+# Reservoir + decoder
+reservoir_channels: 64
+reservoir_kernel: 7
+reservoir_stride: 3
+reservoir_recur_kernel: 3
+reservoir_input_scale: 23.75
+reservoir_recur_scale: 1.49
+reservoir_tc: 1.0
+reservoir_sparsity: 0.5
+decoder_layer_size: 256
+num_novelty_bins: 8
+
+# RECODE
+recode_down_h: 16
+recode_down_w: 32
+recode_rgb: false
+recode_memory: 5000
+recode_k: 10 #For running average
+recode_knn_k: 1 #Reward
+recode_kappa: 0.2
+recode_gamma: 1.0
+recode_insertion_probability: 0.1
+recode_decay: 0.9999
+
+# Reward shaping
+use_online_novelty: True
+use_offline_novelty: true
+exploration_coef: 1.0
+env_reward_coef: 0.0
+main_sparse_reward_scale: 5.0
+goal_sparse_reward_scale: 5.0
+
+# Goal / prioritized replay
+goal_memory_length: 50000
+prioritized_replay: true
+offline_scan_max: 8192
+
+# RL / DQN
+gamma: 0.90
+lr: 0.0003
+batch: 256
+replay_capacity: 100000
+target_update_tau: 1.0
+epsilon_start: 1.0
+epsilon_end: 0.025
+epsilon_decay: 30000
+
+# Training cadence
+train_interval: 20
+train_iters: 100
+warmup: 500
+
+# GIF peeks
+render_window: 3700
+render_interval: 8000
+render_max_frames: 250
+gif_seconds: 0.0
+
+# Misc
+device: cuda

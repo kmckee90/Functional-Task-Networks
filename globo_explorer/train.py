@@ -220,10 +220,12 @@ def main():
         recode_kappa=args.recode_kappa, recode_decay=args.recode_decay,
         recode_density_gamma=args.recode_gamma,
         recode_insertion_probability=args.recode_insertion_probability,
-        gamma=args.gamma, lr=args.lr, minibatch_size=args.batch, memory_length=args.replay_capacity,
+        gamma=args.gamma, lr=args.lr, grad_clip=args.grad_clip,
+        minibatch_size=args.batch, memory_length=args.replay_capacity,
         target_update_tau=args.target_update_tau,
         epsilon=args.epsilon_start, epsilon_end=args.epsilon_end, epsilon_decay_steps=args.epsilon_decay,
-        env_reward_coef=args.env_reward_coef, exploration_coef=args.exploration_coef,
+        env_reward_coef=args.env_reward_coef,
+        online_coef=args.online_coef, offline_coef=args.offline_coef,
         reservoir_kernel=args.reservoir_kernel, reservoir_stride=args.reservoir_stride,
         reservoir_recur_kernel=args.reservoir_recur_kernel,
         reservoir_input_scale=args.reservoir_input_scale, reservoir_recur_scale=args.reservoir_recur_scale,
@@ -274,7 +276,7 @@ def main():
             next_img = obs_to_chw(next_obs, device=args.device)
             intr = agent.intrinsic_reward(next_img)          # online novelty
             emb_next = agent.embed(next_img)                 # stored for offline novelty
-            reward = args.exploration_coef * float(intr) + args.env_reward_coef * float(env_r)
+            reward = args.online_coef * float(intr) + args.env_reward_coef * float(env_r)
             # Record the action/reward that produced next_img BEFORE encoding it, so the
             # reservoir's feedback channel carries a_t/r_t with the state they led to.
             agent.note_action(action, reward)

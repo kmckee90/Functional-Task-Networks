@@ -8,7 +8,7 @@ dependencies = [
     # Not on PyPI; install the prebuilt cp311 manylinux wheel from the GitHub release.
     # This direct URL works for CPython 3.11 / x86_64 only.
     "craftium @ https://github.com/mikelma/craftium/releases/download/v0.0.1/craftium-0.0.1-cp311-cp311-manylinux_2_28_x86_64.whl",
-    "torch>=2.4",
+    "torch==2.6.0",   # pinned: 2.12.x resolved to a broken cu13 build (missing libcudnn.so.9)
     "numpy",
     "imageio",
     # gymnasium is pinned transitively by craftium to ==0.29.1 (do NOT add a

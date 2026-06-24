@@ -23,6 +23,7 @@ the frontier bonus back along that trajectory (long-range planning to the fronti
 
 from __future__ import annotations
 
+import math
 from copy import deepcopy
 from functools import partial
 
@@ -138,7 +139,8 @@ class GloboExplorerDQN:
         # reward shaping
         use_online_novelty: bool = False,
         use_offline_novelty: bool = True,
-        exploration_coef: float = 1.0,
+        online_coef: float = 1.0,
+        offline_coef: float = 1.0,
         env_reward_coef: float = 0.0,
         main_sparse_reward_scale: float = 5.0,
         goal_sparse_reward_scale: float = 5.0,
@@ -149,6 +151,7 @@ class GloboExplorerDQN:
         # RL
         gamma: float = 0.99,
         lr: float = 3e-4,
+        grad_clip: float = 0.0,            # max grad-norm; 0 disables
         memory_length: int = 20000,
         minibatch_size: int = 64,
         target_update_tau: float = 0.01,
@@ -169,6 +172,7 @@ class GloboExplorerDQN:
         self.factored = self.n_heads > 1
         self.in_h, self.in_w = in_h, in_w
         self.gamma = gamma
+        self.grad_clip = grad_clip
         self.minibatch_size = minibatch_size
         self.tau = target_update_tau
         self.epsilon = epsilon
@@ -176,7 +180,8 @@ class GloboExplorerDQN:
         self.epsilon_end = epsilon_end
         self.epsilon_decay_steps = epsilon_decay_steps
         self.env_reward_coef = env_reward_coef
-        self.exploration_coef = exploration_coef
+        self.online_coef = online_coef
+        self.offline_coef = offline_coef
         self.use_online_novelty = use_online_novelty
         self.use_offline_novelty = use_offline_novelty
         self.main_sparse_reward_scale = main_sparse_reward_scale
@@ -211,6 +216,9 @@ class GloboExplorerDQN:
         # ----- RECODE density over downscaled images -----
         chans = 1 if recode_grayscale else 3
         obs_emb_size = recode_down_h * recode_down_w * chans
+        # Normalize the kNN Euclidean distance by sqrt(embedding dim) -> RMS per-dimension
+        # distance, so novelty magnitude is stable regardless of the downscale resolution.
+        self.nov_scale = 1.0 / math.sqrt(max(1, obs_emb_size))
         reward_func = partial(knn_reward, k=recode_knn_k) if recode_knn_k > 0 else adaptive_knn_reward
         self.density = RECODE(
             observation_size=obs_emb_size, memory_size=recode_memory_size, k=recode_k,
@@ -260,8 +268,14 @@ class GloboExplorerDQN:
         return downscale_embedding(img_chw.to(self.device), *self.recode_down, grayscale=self.recode_grayscale)
 
     @torch.no_grad()
+    def _novelty(self, emb: torch.Tensor) -> torch.Tensor:
+        """RECODE kNN distance, dimensionality-normalized (RMS per dim) so the
+        reward scale is independent of the embedding size."""
+        return self.density.get_reward(emb) * self.nov_scale
+
+    @torch.no_grad()
     def intrinsic_reward(self, img_chw: torch.Tensor) -> torch.Tensor:
-        return self.density.get_reward(self.embed(img_chw).unsqueeze(0)).squeeze()
+        return self._novelty(self.embed(img_chw).unsqueeze(0)).squeeze()
 
     def update_density(self, img_chw: torch.Tensor):
         self.density.update(self.embed(img_chw).unsqueeze(0))
@@ -303,12 +317,12 @@ class GloboExplorerDQN:
             return None
         z, a, z_next, terminal = B.z[idx], B.action[idx], B.z_next[idx], B.terminal[idx]
         with torch.no_grad():
-            offline_nov = self.density.get_reward(B.emb[idx])
+            offline_nov = self._novelty(B.emb[idx])   # dimensionality-normalized
         r = self.env_reward_coef * B.env_r[idx]
         if self.use_online_novelty:
-            r = r + self.exploration_coef * B.online_nov[idx]
+            r = r + self.online_coef * B.online_nov[idx]    # online_nov stored already normalized
         if self.use_offline_novelty:
-            r = r + self.exploration_coef * offline_nov
+            r = r + self.offline_coef * offline_nov
         # sparse bonus on the frontier-most (highest novelty) state in this trajectory
         scale = self.goal_sparse_reward_scale if is_goal else self.main_sparse_reward_scale
         best = int(offline_nov.argmax())
@@ -323,6 +337,8 @@ class GloboExplorerDQN:
         loss = total / self.n_heads
         self.optimizer.zero_grad()
         loss.backward()
+        if self.grad_clip and self.grad_clip > 0:
+            nn.utils.clip_grad_norm_(self.q_net.parameters(), self.grad_clip)
         self.optimizer.step()
         with torch.no_grad():
             for tp, p in zip(self.q_target.parameters(), self.q_net.parameters()):
@@ -342,7 +358,7 @@ class GloboExplorerDQN:
                 scan = torch.arange(M.size, device=self.device)
             else:
                 scan = torch.randperm(M.size, device=self.device)[:self.offline_scan_max]
-            nov_scan = self.density.get_reward(M.emb[scan])
+            nov_scan = self._novelty(M.emb[scan])
         fpos = int(nov_scan.argmax())
         frontier = int(scan[fpos])
         main_best = float(nov_scan[fpos]) * self.main_sparse_reward_scale
@@ -350,7 +366,7 @@ class GloboExplorerDQN:
         goal_best = 0.0
         if self.goal.size >= 1:
             with torch.no_grad():
-                gnov = self.density.get_reward(self.goal.emb[:self.goal.size])
+                gnov = self._novelty(self.goal.emb[:self.goal.size])
             goal_best = float(gnov.max()) * self.goal_sparse_reward_scale
 
         # --- move the cohesive trajectory leading to the frontier into the goal buffer ---
@@ -363,7 +379,7 @@ class GloboExplorerDQN:
         gnov_full, gseg = None, None
         if self.goal.size >= self.minibatch_size:
             with torch.no_grad():
-                gnov_full = self.density.get_reward(self.goal.emb[:self.goal.size])
+                gnov_full = self._novelty(self.goal.emb[:self.goal.size])
             gseg = self.goal.segments()
         modes = ["goal", "last", "random"] if self.prioritized_replay else ["random"]
 

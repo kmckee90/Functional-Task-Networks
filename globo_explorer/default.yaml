@@ -52,9 +52,12 @@
 #   recode_decay         Decay rate of the squared-distance EMA.
 #
 # Reward shaping
-#   use_online_novelty   Add the collection-time novelty to the training reward.
-#   use_offline_novelty  Recompute novelty at train time (vs evolving clusters) and use it.
-#   exploration_coef     Weight on novelty (online and/or offline).
+#   Novelty = RECODE kNN Euclidean distance, divided by sqrt(embedding dim) (RMS per
+#   dimension) so its scale is stable regardless of recode_down resolution. Then:
+#   use_online_novelty   Add the collection-time (stored) novelty to the loss reward.
+#   use_offline_novelty  Recompute novelty at train time (vs evolving clusters), add to loss.
+#   online_coef          Weight on the online novelty term in the loss.
+#   offline_coef         Weight on the offline novelty term in the loss.
 #   env_reward_coef      Weight on globo's in-game reward (0 = pure exploration).
 #   main_sparse_reward_scale  Bonus multiplier on the frontier state in the main buffer.
 #   goal_sparse_reward_scale  Bonus multiplier on the frontier state in the goal buffer.
@@ -67,6 +70,7 @@
 # RL / DQN
 #   gamma             Discount factor.
 #   lr                Learning rate (Adam).
+#   grad_clip         Max gradient norm for the decoder update; 0 disables.
 #   batch             Minibatch / trajectory length per update.
 #   replay_capacity   Main replay buffer capacity.
 #   target_update_tau Polyak soft target-update rate (the explorer's polyak_beta).
@@ -78,10 +82,11 @@
 #   train_iters       K: prioritized updates per round.
 #   warmup            Min stored transitions before training.
 #
-# GIF peeks + centroids
-#   render_window/interval/max_frames/gif_seconds  In-episode GIF peeks (artifacts/).
-#   (Cluster centroids are dumped to artifacts/centroids/<i>.png + !masses.csv at each peek.)
-#
+# In-episode GIF peeks (game-time ~3-7 ms/step, so ~10s ~= 2700-3700 steps)
+#   render_window     Steps each GIF spans.
+#   render_interval   Steps between GIF captures.
+#   render_max_frames Frame cap per GIF (the window is stride-subsampled to this).
+#   gif_seconds       Fixed GIF playback length; 0 = real game-time from engine dtime.
 # Misc
 #   device            "cuda" or "cpu".
 #
@@ -122,7 +127,7 @@ max_steps: 0
 total_steps: 0
 
 # Reproducible world
-seed: 42
+seed: 7
 spawn: "8,8,115"
 freeze_daylight: true
 weather_seed: 0
@@ -139,7 +144,7 @@ init_frames: 200
 # Reservoir + decoder
 reservoir_channels: 64
 reservoir_kernel: 7
-reservoir_stride: 3
+reservoir_stride: 4
 reservoir_recur_kernel: 3
 reservoir_input_scale: 23.75
 reservoir_recur_scale: 1.49
@@ -154,16 +159,17 @@ recode_down_w: 32
 recode_rgb: false
 recode_memory: 5000
 recode_k: 10 #For running average
-recode_knn_k: 1 #Reward
+recode_knn_k: 10 #Reward
 recode_kappa: 0.2
-recode_gamma: 1.0
-recode_insertion_probability: 0.1
-recode_decay: 0.9999
+recode_gamma: 0.999
+recode_insertion_probability: 0.5
+recode_decay: 0.999
 
 # Reward shaping
-use_online_novelty: True
+use_online_novelty: true
 use_offline_novelty: true
-exploration_coef: 1.0
+online_coef: 1.0
+offline_coef: 1.0
 env_reward_coef: 0.0
 main_sparse_reward_scale: 5.0
 goal_sparse_reward_scale: 5.0
@@ -176,21 +182,22 @@ offline_scan_max: 8192
 # RL / DQN
 gamma: 0.90
 lr: 0.0003
+grad_clip: 1.0   # max grad-norm; 0 disables
 batch: 256
 replay_capacity: 100000
 target_update_tau: 1.0
 epsilon_start: 1.0
 epsilon_end: 0.025
-epsilon_decay: 30000
+epsilon_decay: 10000
 
 # Training cadence
-train_interval: 20
-train_iters: 100
+train_interval: 10
+train_iters: 10
 warmup: 500
 
 # GIF peeks
 render_window: 3700
-render_interval: 8000
+render_interval: 5000
 render_max_frames: 250
 gif_seconds: 0.0
 

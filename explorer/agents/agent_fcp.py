@@ -1,0 +1,390 @@
+from collections.abc import Iterator
+from copy import deepcopy
+from functools import partial
+
+import torch
+import torch.nn as nn
+from torch import Tensor
+
+from recode.observation_buffer import ObservationBuffer
+from recode.recode import RECODE, adaptive_knn_reward, knn_reward, rbf_kernel, soft_visitation_reward
+from assets.reservoir_local_connectivity import ReservoirLocalConnectivityBatchSeq, ReservoirBatchSeq
+from assets.tensor_circular_buffer import TimeFirstCircularBuffer
+
+
+class ExplorerPolicy(nn.Module):
+    def __init__(
+        self,
+        input_size,
+        hidden_size,
+        output_size,
+        normalize_output=False,
+    ):
+        super().__init__()
+        self.input_size = input_size
+        self.hidden_size = hidden_size
+        self.output_size = output_size
+
+        self.model = nn.Sequential(
+            nn.Linear(self.input_size, self.hidden_size),
+            nn.ReLU(),
+            nn.Linear(self.hidden_size, self.hidden_size),
+            nn.ReLU(),
+            nn.Linear(self.hidden_size, self.hidden_size),
+            nn.ReLU(),
+            nn.Linear(self.hidden_size, self.output_size),
+        )
+        if normalize_output:
+            self.model = nn.Sequential(self.model, nn.Tanh())
+
+    def forward(self, x):
+        return self.model(x)
+
+
+class RDDPGMemory(nn.Module):
+    def __init__(self, length: int = 10000):
+        super().__init__()
+        self.obs = TimeFirstCircularBuffer(capacity=length)
+        self.next_obs = TimeFirstCircularBuffer(capacity=length)
+        self.reward = TimeFirstCircularBuffer(capacity=length)
+        self.action = TimeFirstCircularBuffer(capacity=length)
+        self.done = TimeFirstCircularBuffer(capacity=length)
+        self.feedback = TimeFirstCircularBuffer(capacity=length)
+        self.next_feedback = TimeFirstCircularBuffer(capacity=length)
+
+    def remember(
+        self,
+        obs: Tensor,
+        feedback: Tensor,
+        next_obs: Tensor,
+        next_feedback: Tensor,
+        action: Tensor,
+        reward: Tensor,
+        done: Tensor,
+    ):
+        """Stores an experience in the replay buffer."""
+        self.obs.append(obs)
+        self.feedback.append(feedback)
+        self.next_obs.append(next_obs)
+        self.next_feedback.append(next_feedback)
+        self.action.append(action)
+        self.reward.append(reward)
+        self.done.append(done)
+
+    def recall(self, idx: Tensor):
+        return (
+            self.obs[idx],
+            self.feedback[idx],
+            self.next_obs[idx],
+            self.next_feedback[idx],
+            self.action[idx],
+            self.reward[idx],
+            self.done[idx],
+            idx,
+        )
+
+    def length(self):
+        return len(self.obs)
+
+
+class RDDPG_Dual(nn.Module):
+    def __init__(
+        self,
+        observation_size: int,
+        action_size: int,
+        action_bounds: tuple[torch.Tensor, torch.Tensor],
+        reservoir_type: str = "Local",
+        **kwargs,
+    ):
+        super().__init__()
+        self.config = kwargs
+        self.action_size = action_size
+        self.action_bounds = action_bounds
+        self.cur_step = 0
+        self.feedback_size = self.action_size + 1 + kwargs["num_negdensity_bins"] + kwargs["extra_zeros"]
+        self.input_size = observation_size + self.feedback_size
+
+        this_seed = torch.randint(0, 99999, ()).item()
+        torch.manual_seed(130)
+        self.state_model_f = ReservoirLocalConnectivityBatchSeq(
+            self.feedback_size, num_unique=60, num_shared=40, spectral_radius=kwargs["spectral_radius"]
+        )
+        if reservoir_type == "Local":            
+            self.state_model_o = ReservoirLocalConnectivityBatchSeq(
+                observation_size, num_unique=60, num_shared=40, spectral_radius=kwargs["spectral_radius"]
+            )
+        else:
+            reservoir_N = 4096
+            self.state_model_o = ReservoirBatchSeq(
+                observation_size, 
+                hidden_size = reservoir_N,
+                connection_probability = 0.2,
+                input_connection_probability = 60/reservoir_N,
+                spectral_radius=kwargs["spectral_radius"],
+            )
+
+        self.state_model_o_targ = deepcopy(self.state_model_o)
+        self.state_model_f_targ = deepcopy(self.state_model_f)
+
+        self.rnn_size_o = self.state_model_o.hidden_size
+        self.rnn_size_f = self.state_model_f.hidden_size
+
+        self.q_pred_o = ExplorerPolicy(self.rnn_size_o + action_size, kwargs["hidden_size"], 1)
+        self.q_pred_f = ExplorerPolicy(self.rnn_size_f + action_size, kwargs["hidden_size"], 1)
+        self.act_pred = ExplorerPolicy(
+            self.rnn_size_o + self.rnn_size_f, kwargs["hidden_size"], action_size, normalize_output=True
+        )
+        self.q_target_o = deepcopy(self.q_pred_o)
+        self.q_target_f = deepcopy(self.q_pred_f)
+        self.act_target = deepcopy(self.act_pred)
+
+        torch.manual_seed(this_seed)
+
+        self.optimizer_o = torch.optim.RMSprop(self.q_pred_o.parameters(), lr=kwargs["lr"])
+        self.optimizer_f = torch.optim.RMSprop(self.q_pred_f.parameters(), lr=kwargs["lr"])
+        self.optimizer_a = torch.optim.RMSprop(self.act_pred.parameters(), lr=kwargs["lr"])
+
+        with torch.no_grad():
+            for param in self.act_target.parameters():
+                param.requires_grad = False
+            for param in self.q_target_o.parameters():
+                param.requires_grad = False
+            for param in self.q_target_f.parameters():
+                param.requires_grad = False
+
+        self.memory = RDDPGMemory(length=kwargs["memory_length"])
+        self.goal_memory = RDDPGMemory(length=kwargs["goal_memory_length"])
+        self.device = kwargs.get("device", "cpu")
+        if kwargs["density_estimator_name"] == "RECODE":
+            if "rbf_sigma2" in kwargs and kwargs["rbf_sigma2"] > 0:
+                kernel_func = partial(rbf_kernel, sigma2=kwargs["rbf_sigma2"])
+                reward_func = partial(soft_visitation_reward, kernel_func=kernel_func)
+            elif "knn_k" in kwargs and kwargs["knn_k"] > 0:
+                reward_func = partial(knn_reward, k=kwargs["knn_k"])
+            elif "knn_k" in kwargs and kwargs["knn_k"] == -1:
+                reward_func = adaptive_knn_reward
+            else:
+                reward_func = knn_reward
+            self.density_estimator = RECODE(
+                observation_size=observation_size,
+                memory_size=kwargs["sample_memory_length"],
+                k=kwargs["k"],
+                device=self.device,
+                reward_func=reward_func,
+                relative_tolerance=kwargs["recode_kappa"],
+                gamma=kwargs["recode_gamma"],
+                insertion_probability=kwargs["recode_insertion_probability"],
+                decay_rate=kwargs["recode_decay"]
+            )
+        elif kwargs["density_estimator_name"] == "ObservationBuffer":
+            self.density_estimator = ObservationBuffer(
+                memory_size=kwargs["sample_memory_length"],
+                k=kwargs["k"],
+                memory_threshold=kwargs["memory_threshold"],
+                memory_epsilon=kwargs["memory_epsilon"],
+                device=self.device,
+            )
+        else:
+            raise ValueError(f"Unknown density estimator: {kwargs['density_estimator_name']}")
+
+        self.epsilon = kwargs["epsilon"]
+
+        self.goal_location = torch.zeros(observation_size)
+        self.best_main_reward = 0.0
+        self.best_goal_reward = 0.0
+
+        self._metrics: dict[str, float] = {}
+
+    @property
+    def all_pos(self):
+        return self.density_estimator.all_pos
+
+    @property
+    def metrics(self) -> dict[str, float]:
+        self._metrics.update(self.density_estimator.metrics)
+        return self._metrics
+
+
+    def reset_memory(self, **kwargs):
+        # self.memory = RDDPGMemory(length=kwargs["memory_length"])
+        # self.goal_memory = RDDPGMemory(length=kwargs["goal_memory_length"])
+        self.density_estimator.reset()
+        
+    def reset_metrics(self) -> None:
+        self._metrics.clear()
+        self.density_estimator.reset_metrics()
+
+    def get_reward(self, e: Tensor) -> Tensor:
+        return self.density_estimator.get_reward(e)
+
+    def update_density(self, e: Tensor) -> None:
+        self.density_estimator.update(e)
+
+    def forward(self, x: Tensor, f: Tensor) -> Tensor:
+        x = x *  self.config["OCP"]
+        f = f *  self.config["FCP"]
+
+        self.device = x.device
+        if torch.rand(1) <= self.epsilon:
+            return (
+                torch.rand(self.action_size, device=x.device) * (self.action_bounds[1] - self.action_bounds[0])
+                + self.action_bounds[0]
+            )
+        if len(x.shape) == 1:
+            x = x.unsqueeze(0)
+        if len(f.shape) == 1:
+            f = f.unsqueeze(0)
+
+        zo = self.state_model_o(x)
+        zf = self.state_model_f(f)
+        z = torch.cat((zo, zf), -1)
+        act_values = self.act_pred(z)  # Actor chooses action instead of critic
+        return act_values
+
+    def _discretize_unit_intervals(self, x: Tensor):
+        cutpoints = torch.tensor(range(1, self.config["num_negdensity_bins"] + 1)) / self.config["num_negdensity_bins"]
+        cutpoints = cutpoints.to(x.device)
+        b = x.unsqueeze(-1) <= cutpoints
+        c = torch.argmax(b.int(), dim=-1)
+        y = torch.nn.functional.one_hot(c, num_classes=self.config["num_negdensity_bins"])
+        return y
+
+    def _q_values_o(self, obs: Tensor, action: Tensor) -> Tensor:
+        obs_action = torch.cat([obs, action], dim=1)
+        q_values = self.q_pred_o(obs_action).squeeze()
+        return q_values
+
+    def _q_values_f(self, obs: Tensor, action: Tensor) -> Tensor:
+        obs_action = torch.cat([obs, action], dim=1)
+        q_values = self.q_pred_f(obs_action).squeeze()
+        return q_values
+
+    def _q_targets_o(self, reward: Tensor, next_obs: Tensor, done: Tensor) -> Tensor:
+        max_q_values_next = self.q_target_o(next_obs).detach().squeeze()
+        targets = reward.squeeze() + self.config["gamma"] * max_q_values_next * ~done.squeeze()
+        return targets
+
+    def _q_targets_f(self, reward: Tensor, next_obs: Tensor, done: Tensor) -> Tensor:
+        max_q_values_next = self.q_target_f(next_obs).detach().squeeze()
+        targets = reward.squeeze() + self.config["gamma"] * max_q_values_next * ~done.squeeze()
+        return targets
+
+    def _polyak_update(self, target_parameters: Iterator[nn.Parameter], pred_parameters: Iterator[nn.Parameter]):
+        with torch.no_grad():
+            assert isinstance(self.config["polyak_beta"], float)
+            for target, pred in zip(target_parameters, pred_parameters, strict=True):
+                target.mul_(1 - self.config["polyak_beta"]).add_(self.config["polyak_beta"] * pred)
+
+    def _prioritized_recall(self, buffer: RDDPGMemory, recall_type: str = "random"):
+        """Returns a sequence mini-batch of experiences and feedback"""
+        dones_idx = torch.where(buffer.done[:])[0][:-1] + 1  # type: ignore
+        if recall_type == "goal":
+            rewards = self.get_reward(buffer.obs[:])  # type: ignore
+            best = rewards.argmax()
+            start_idx = (best < dones_idx).int().argmax() - 1
+        elif recall_type == "last":
+            start_idx = -1
+        else:
+            start_idx = torch.randint(0, len(dones_idx), (1,))
+
+        minibatch_start_idx = dones_idx[start_idx]
+        minibatch_end_idx = int(min(minibatch_start_idx.item() + self.config["minibatch_size"], buffer.length()))
+        idx = torch.tensor(range(minibatch_start_idx, minibatch_end_idx))
+        return buffer.recall(idx)
+
+    def replay(self):
+        if self.memory.length() < self.config["minibatch_size"]:
+            return
+
+        # Save the real-time context to reinstate later.
+        hidden_f = self.state_model_f.hidden.clone()
+        hidden_o = self.state_model_o.hidden.clone()
+        
+        recall_mode = "random"
+        for _ in range(self.config["n_optimizer_epochs"]):            
+            for step in range(self.config["n_optimizer_steps"]):
+                obs, feedback, next_obs, next_feedback, action, reward, done, idx = self._prioritized_recall(self.memory, recall_mode)
+                
+                #Imaginary extrinsic rewards to promote re-exploring.
+                # The agent always gets rewarded twice per episode at 2 random locations.
+                # It is still trained with novelty to expand its trajectory, so hopefully 
+                # that leads to a feedback between the two where it learns that extrinsic rewards lie further and further out.
+                 
+                aer_idx_ep1 = torch.randint(10, reward.shape[0]//2, (2,))
+                aer_idx_ep2 = torch.randint(reward.shape[0]//2 + 10, reward.shape[0], (2,))
+                reward[aer_idx_ep1] += 5
+                reward[aer_idx_ep2] += 5
+                feedback[aer_idx_ep1,2] += 5.0
+                feedback[aer_idx_ep2,2] += 5.0
+                next_feedback[aer_idx_ep1,2] += 5.0
+                next_feedback[aer_idx_ep2,2] += 5.0
+                feedback[aer_idx_ep1,-3] = 1.0
+                feedback[aer_idx_ep2,-3] = 1.0
+                next_feedback[aer_idx_ep1,-3] = 1.0
+                next_feedback[aer_idx_ep2,-3] = 1.0
+                feedback[aer_idx_ep1,3:-3] = 0.0
+                feedback[aer_idx_ep2,3:-3] = 0.0
+                next_feedback[aer_idx_ep1,3:-3] = 0.0
+                next_feedback[aer_idx_ep2,3:-3] = 0.0
+                                
+
+                states_o = self.state_model_o(obs * self.config["OCP"])
+                next_states_o = self.state_model_o_targ(next_obs)
+
+                states_f = self.state_model_f(feedback *  self.config["FCP"])
+                next_states_f = self.state_model_f_targ(next_feedback)
+
+                states = torch.cat((states_o, states_f), -1)
+                next_states = torch.cat((next_states_o, next_states_f), -1)
+
+                # Critic loss (obs)
+                rewards_o = reward
+                q_values_o = self._q_values_o(states_o, action)
+                next_action = self.act_target(next_states)
+                targets_o = self._q_targets_o(rewards_o, torch.cat([next_states_o, next_action], dim=1).detach(), done)
+                critic_loss_o = torch.nn.functional.mse_loss(q_values_o, targets_o)
+
+                # Critic loss (feedback)
+                rewards_f = reward
+                q_values_f = self._q_values_f(states_f, action)
+                next_action = self.act_target(next_states)
+                targets_f = self._q_targets_f(rewards_f, torch.cat([next_states_f, next_action], dim=1).detach(), done)
+                critic_loss_f = torch.nn.functional.mse_loss(q_values_f, targets_f)
+
+                # Actor loss
+                action = self.act_pred(states)
+                obs_action_o = torch.cat([states_o, action], dim=1)
+                obs_action_f = torch.cat([states_f, action], dim=1)
+                q_values_f = self.q_target_f(obs_action_f).squeeze()
+                q_values_o = self.q_target_o(obs_action_o).squeeze() 
+                actor_loss = -(q_values_o.mean() * self.config["OCP"] + q_values_f.mean() * self.config["FCP"])
+
+                # Update
+                if self.config["OCP"]:
+                    self.optimizer_o.zero_grad()
+                    critic_loss_o.backward()
+                    self.optimizer_o.step()
+
+                if self.config["FCP"]:
+                    self.optimizer_f.zero_grad()
+                    critic_loss_f.backward()
+                    self.optimizer_f.step()
+
+                self.optimizer_a.zero_grad()
+                actor_loss.backward()
+                self.optimizer_a.step()
+
+                if self.config["OCP"]:
+                    self._polyak_update(self.q_target_o.parameters(), self.q_pred_o.parameters())
+                if self.config["FCP"]:
+                    self._polyak_update(self.q_target_f.parameters(), self.q_pred_f.parameters())
+                self._polyak_update(self.act_target.parameters(), self.act_pred.parameters())
+
+        # Reinstate real-world context
+        self.state_model_f.hidden = hidden_f
+        self.state_model_o.hidden = hidden_o
+
+    def step(self):
+        self._metrics.clear()
+        self.density_estimator.step()
+        self.cur_step += 1

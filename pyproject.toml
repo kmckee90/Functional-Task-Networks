@@ -1,0 +1,45 @@
+[project]
+name = "functional_task_networks"
+version = "0.1.0"
+description = ""
+requires-python = "==3.11.*"
+dependencies = [
+    "torch==2.4.0",
+    "torchvision==0.19.0",
+    "torchaudio==2.4.0",
+    "jax>=0.4.33,<0.4.38",
+    "jax_loop_utils[audio-video]",
+    "numpy",
+    "matplotlib",
+    "tqdm",
+    "metaworld>=3.0.0",
+    # explorer/ (torch_explorer) experiment_* scripts
+    "gymnasium>=1.0.0",
+    "gym>=0.26.2",
+    "ale-py>=0.10.1",
+    "mlflow>=2.19.0",
+    "pillow>=11.1.0",
+    "pygame>=2.6.1",
+    "dm-control",
+    # base/ (func_net_spatial) synthetic task experiment visualizations
+    "imageio",
+]
+
+[project.optional-dependencies]
+cuda = ["jax[cuda12]>=0.4.33"]
+
+
+[tool.uv]
+index-strategy = "unsafe-first-match"
+
+[[tool.uv.index]]
+url = "https://download.pytorch.org/whl/cu124"
+
+[[tool.uv.index]]
+url = "https://storage.googleapis.com/jax-releases/jax_cuda_releases.html"
+
+[tool.ruff]
+lint.ignore = ["F401"]
+
+[tool.ruff.format]
+docstring-code-line-length = 120

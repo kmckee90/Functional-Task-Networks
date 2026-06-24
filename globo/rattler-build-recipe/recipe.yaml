@@ -1,0 +1,33 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/prefix-dev/recipe-format/main/schema.json
+# https://prefix-dev.github.io/rattler-build/latest/recipe_file/
+context:
+  version: ${{ env.get("GLOBO_VERSION", default = "0.4.5") }}
+
+source:
+  path: ../
+
+package:
+  name: minetest-globo
+  version: ${{ version }}
+
+build:
+  noarch: generic
+  script:
+    - mkdir -p ${PREFIX}/share/minetest/games/
+    - cp -r . ${PREFIX}/share/minetest/games/globo
+
+requirements:
+  run:
+    - minetest
+
+about:
+  repository: https://github.com/Astera-org/globo
+  summary: 'Globo game for Minetest'
+
+tests:
+  - package_contents:
+      files:
+        - share/minetest/games/globo/game.conf
+  - script:
+    - if [[ $(minetest --gameid list) != "globo" ]]; then exit 1; fi
+

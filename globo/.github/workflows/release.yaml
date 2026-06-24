@@ -1,0 +1,34 @@
+---
+name: release
+on: # yamllint disable-line rule:truthy
+  push:
+    branches:
+      - master
+    paths:
+      - rattler-build-recipe/recipe.yaml
+  workflow_dispatch:
+jobs:
+  rattler-build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: write rattler credentials
+        # Can be removed once https://github.com/prefix-dev/rattler-build-action/issues/4
+        run: |
+          RATTLER_AUTH_FILE=${{ runner.temp }}/credentials.json
+          echo '{"repo.prefix.dev":{"BearerToken":"${{ secrets.PREFIX_DEV_API_KEY }}"}}' > "${RATTLER_AUTH_FILE}"
+          echo "RATTLER_AUTH_FILE=$RATTLER_AUTH_FILE" >> "$GITHUB_ENV"
+      - uses: actions/checkout@v4
+      - name: build
+        uses: prefix-dev/rattler-build-action@v0.2.19
+        with:
+          recipe-path: ./rattler-build-recipe/recipe.yaml
+          build-args: --channel=https://repo.prefix.dev/obelisk --channel=conda-forge
+          upload-artifact: false # don't upload to GitHub
+      - name: upload
+        run: |
+          for pkg in $(find ./output -type f \( -name "*.conda" \) ); do
+            echo "Uploading ${pkg}"
+            rattler-build upload prefix -c obelisk "${pkg}" || echo "Failed to upload ${pkg}"
+          done
+        env:
+          PREFIX_API_KEY: ${{ secrets.PREFIX_DEV_API_KEY }}

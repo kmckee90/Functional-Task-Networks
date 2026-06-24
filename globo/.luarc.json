@@ -1,0 +1,23 @@
+{
+  "$schema": "https://raw.githubusercontent.com/LuaLS/vscode-lua/master/setting/schema.json",
+  "workspace.library": ["minetest-builtins"],
+  "workspace.ignoreDir": [
+    ".vscode",
+    "tools"
+  ],
+  "diagnostics.globals": [
+    "minetest",
+    "globo",
+    "ItemStack",
+    "VH1",
+    "vector",
+    "dump",
+    "default",
+    "PcgRandom",
+    "poschangelib",
+    "twmlib",
+    "VoxelArea"
+  ],
+  "format.enable": false,
+  "runtime.version": "Lua 5.1"
+}

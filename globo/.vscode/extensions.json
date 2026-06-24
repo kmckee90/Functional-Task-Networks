@@ -1,0 +1,7 @@
+{
+    "recommendations": [
+        "sumneko.lua",
+        "greenxenith.minetest-tools",
+        "koihik.vscode-lua-format"
+    ]
+}

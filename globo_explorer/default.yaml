@@ -25,8 +25,28 @@
 #                     (branching DQN over [look_h, look_v, jump, move, strafe]).
 #
 # Observation
-#   obs_width/height  First-person view size in pixels.
+#   obs_width/height  Agent's network input size in pixels (what the reservoir + RECODE see).
+#   render_width/height  Engine render (capture) size. null = same as obs (native, fastest).
+#                     If set LARGER than obs, the engine renders high-res and each frame is
+#                     bilinearly downsampled to obs size before the agent — anti-aliased input
+#                     (cleaner for RECODE) AND a high-res frame to watch in play.py. The agent
+#                     network is unchanged, so only the engine render + one downsample cost more.
+#                     Train and watch through the SAME pipeline by setting this in the config.
 #   init_frames       Frames to load before the first observation.
+#
+# Movement / physics (predictable fixed-velocity controls; replaces craftium's pmul)
+#   frameskip      Engine frames advanced per env step. 1 = ~5ms game-time/step (heavy
+#                  slow-motion -> falls/jumps look floaty/low-gravity even though gravity
+#                  is normal). Higher (e.g. 4-10) advances more game-time/step so
+#                  falls/jumps play at normal speed and the agent sees visible motion
+#                  per action. (Gravity is fine; this is the real "floaty" fix.)
+#   move_speed     Walk speed = fixed target velocity.
+#   move_accel     Ground+air acceleration; high -> near-instant start AND stop (no momentum ramp).
+#   climb_speed    Climb speed on climbable nodes; small -> globo's climbable plants don't launch you.
+#   jump_speed     Jump impulse speed (engine default 6.5).
+#   gravity        Gravity (9.81 = normal; the "floaty" feel was high speed, not low gravity).
+#   mouse_mov      Turn magnitude per look action, normalized to a 64px view -> fixed yaw-per-step
+#                  at any resolution (so turning is predictable and matches across obs sizes).
 #
 # Reservoir (frozen echo-state) + decoder (trained)
 #   reservoir_channels   Hidden channel depth.
@@ -59,6 +79,10 @@
 #   online_coef          Weight on the online novelty term in the loss.
 #   offline_coef         Weight on the offline novelty term in the loss.
 #   env_reward_coef      Weight on globo's in-game reward (0 = pure exploration).
+#   death_penalty        Negative reward applied on death, forming a survival signal. This
+#                        is the *scale* of the death cost; it is INDEPENDENT of
+#                        env_reward_coef (so it still applies when in-game reward is off).
+#                        0 disables it (the env-reward value stream then learns 0).
 #   main_sparse_reward_scale  Bonus multiplier on the frontier state in the main buffer.
 #   goal_sparse_reward_scale  Bonus multiplier on the frontier state in the goal buffer.
 #
@@ -68,12 +92,23 @@
 #   offline_scan_max     Max transitions scanned per round to locate the frontier (caps cost).
 #
 # RL / DQN
-#   gamma             Discount factor.
+#   gamma             Discount factor for the intrinsic (novelty/exploration) value stream.
+#   gamma_env         Discount factor for the environment-reward (survival) value stream.
+#                     Separate from gamma so the death-penalty horizon can be tuned on its
+#                     own — a higher gamma_env propagates the death cost further back in time
+#                     (long-range credit assignment for survival). The two streams are summed
+#                     for action selection.
 #   lr                Learning rate (Adam).
 #   grad_clip         Max gradient norm for the decoder update; 0 disables.
 #   batch             Minibatch / trajectory length per update.
 #   replay_capacity   Main replay buffer capacity.
-#   target_update_tau Polyak soft target-update rate (the explorer's polyak_beta).
+#   target_update_tau Polyak soft target-update rate for the intrinsic stream (the
+#                     explorer's polyak_beta). 1.0 = hard copy every update.
+#   target_update_tau_env  Separate Polyak rate for the environment/survival critic. Its
+#                     high gamma_env combined with a large target_update_tau is a
+#                     deadly-triad recipe (the value stream diverges -> loss explodes), so
+#                     give the env critic a slower target (e.g. 0.01) for stability.
+#                     null = reuse target_update_tau.
 #   epsilon_start/end Exploration epsilon schedule endpoints.
 #   epsilon_decay     Steps to anneal epsilon start->end.
 #
@@ -81,6 +116,9 @@
 #   train_interval    J: collect J steps between training rounds.
 #   train_iters       K: prioritized updates per round.
 #   warmup            Min stored transitions before training.
+#   checkpoint_interval  Steps between model checkpoints (model + config copy, in
+#                     artifacts/checkpoints/). 0 = checkpoint only on each GIF peek and at
+#                     the end of the run. A checkpoint is always written alongside each GIF.
 #
 # In-episode GIF peeks (game-time ~3-7 ms/step, so ~10s ~= 2700-3700 steps)
 #   render_window     Steps each GIF spans.
@@ -137,9 +175,20 @@ invincible: false
 action_mode: factored   # or: factored
 
 # Observation
-obs_width: 64
-obs_height: 32
+obs_width: 48
+obs_height: 24
+render_width: 480    # engine render size; null = same as obs (native/fast). Set larger (e.g. 480) to
+render_height: 240   # render high-res, downsample to obs for the agent, and watch in high-res.
 init_frames: 200
+
+# Movement / physics
+frameskip: 8
+move_speed: 7.5
+move_accel: 1000.0
+climb_speed: 6.0
+jump_speed: 6.5
+gravity: 9.81
+mouse_mov: 0.35
 
 # Reservoir + decoder
 reservoir_channels: 64
@@ -154,23 +203,24 @@ decoder_layer_size: 256
 num_novelty_bins: 8
 
 # RECODE
-recode_down_h: 16
-recode_down_w: 32
+recode_down_h: 32
+recode_down_w: 48
 recode_rgb: false
 recode_memory: 5000
 recode_k: 10 #For running average
 recode_knn_k: 10 #Reward
 recode_kappa: 0.2
-recode_gamma: 0.999
+recode_gamma: 0.9995
 recode_insertion_probability: 0.5
-recode_decay: 0.999
+recode_decay: 0.9995
 
 # Reward shaping
 use_online_novelty: true
 use_offline_novelty: true
 online_coef: 1.0
 offline_coef: 1.0
-env_reward_coef: 0.0
+env_reward_coef: 1.0
+death_penalty: 1.0   # negative reward on death (survival signal); scale to taste, 0 disables
 main_sparse_reward_scale: 5.0
 goal_sparse_reward_scale: 5.0
 
@@ -181,19 +231,22 @@ offline_scan_max: 8192
 
 # RL / DQN
 gamma: 0.90
+gamma_env: 0.9975   # discount for the environment-reward (survival) stream; tune separately
 lr: 0.0003
 grad_clip: 1.0   # max grad-norm; 0 disables
 batch: 256
 replay_capacity: 100000
 target_update_tau: 1.0
+target_update_tau_env: 0.01   # slow Polyak target for the high-gamma_env survival critic (stability)
 epsilon_start: 1.0
 epsilon_end: 0.025
 epsilon_decay: 10000
 
 # Training cadence
-train_interval: 10
-train_iters: 10
+train_interval: 50
+train_iters: 50
 warmup: 500
+checkpoint_interval: 0   # steps between checkpoints; 0 = on each GIF peek + at end
 
 # GIF peeks
 render_window: 3700

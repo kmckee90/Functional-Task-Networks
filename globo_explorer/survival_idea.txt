@@ -1,0 +1,63 @@
+This is a genuinely interesting direction, and the good news is that three of the pieces you'd need already exist in your codebase — so let me first map the idea onto what's actually here, then dig into where I think the real gaps are (especially the "compartmentalization" question, which is the crux).
+
+## What maps to what
+
+**FTN's actual mechanism** (from `base/masks.py` + `NeuroModel`): a *frozen* shared backbone produces a hidden latent `z`, and a task is realized by a sparse binary **mask** over hidden units — `linear(z * m)`. The mask is found by *reconfiguration*: gradient descent on mask logits against a task objective + support batch, then lateral dynamics (smoothing/inhibition) + KWTA to force a spatially-coherent, k-sparse subnetwork. The RL precedents are telling: `rl/robotics` reconfigures the actor mask per MT10 task using a **BC loss on that task's support data**, and `rl/atari` stores a mask per transition and reconfigures per game. So an FTN "option" is concretely: *a mask over decoder features + the support data/objective that induced it.*
+
+**Your proposed hierarchy, in this repo's terms:**
+- **Option = (mask over the decoder's feature units, identity/landmark, termination).** The natural insertion point is to mask `z*m` between the conv-decoder trunk and the Q-heads — a faithful port of `NeuroModel.forward`. Frozen reservoir + frozen decoder trunk are shared; the mask carves the option.
+- **Exploration MDP** = your current RECODE explorer, intrinsic reward, `gamma`. It already produces *two* things you need: training data **and a subgoal stream** (the frontier = lowest-density state; you even maintain a goal buffer of "cohesive trajectory leading to the frontier"). That goal/frontier machinery is essentially a subgoal generator you've already built.
+- **Survival semi-MDP** = a meta-policy over options, trained on the extrinsic death-penalty stream you just added. **`gamma_env` is exactly the semi-MDP discount** — reinterpreted over option-decisions (`gamma_env^(option duration)`) rather than primitive steps. The two-stream split you built *is* the hierarchy boundary: intrinsic stream trains/discovers options; environment stream trains the meta-controller.
+
+So the architecture isn't starting from scratch — it's: frontier → option library (the new FTN part) → meta-policy on the existing env stream.
+
+## Why this should help the sparsity (make the argument precise)
+
+The death penalty is sparse *per primitive step* but not *per option-decision*. If options last ~N steps, the survival policy's horizon to a death event shrinks from O(T) primitive steps to O(T/N) decisions — credit assignment over options is dramatically easier, and `gamma_env` over options propagates the terminal penalty across far fewer bootstraps. Equally important: **exploration gives you a dense, always-on self-supervised signal to build the option library during the long stretches when no death is occurring.** You're never idle waiting for the sparse signal. That's the real win — decoupling "what skills exist" (dense, intrinsic) from "when to use them to stay alive" (sparse, extrinsic).
+
+## The crux: how "phases compartmentalize into uniquely masked policies"
+
+This is where the genuine difficulty lives, and I'd break it into three coupled problems:
+
+**1. What is the "task" each mask is reconfigured against?** FTN needs an objective + support batch. You have no pre-given tasks, so you must manufacture them. Three candidate definitions, roughly in increasing ambition:
+- *Goal-reaching:* anchor options on RECODE landmarks (cluster the centroids into K macro-regions; each is a target). The option's objective is goal-conditioned reach; support data = segments that actually reached it. This reuses your goal buffer directly and is the cleanest first cut.
+- *Behavioral slice (BC):* periodically distill a *coherent recent behavior segment* into a mask via BC loss — exactly the `rl/robotics` reconfig objective. Cheap and faithful to FTN-RL.
+- *MI/diversity (DIAYN-style):* make options that produce *distinguishable* state distributions, with the mask as the skill latent. Most principled for diversity but heaviest.
+
+**2. The compartmentalization trigger — when do you commit one mask and start the next?** This is what makes "phases" real, and it's underspecified in the idea. Options:
+- *Frontier-shift detection:* RECODE's frontier jumps to a new region (the agent "unlocked" a new area) → crystallize the current behavior as an option, start a new mask. Phases = epochs between frontier jumps. This is the most natural given your machinery.
+- *Atom-visitation change-point:* run a change detector on the histogram of which RECODE atoms are being visited; a regime shift = a phase boundary.
+- *Reconfiguration-cost spike:* when the current mask's loss on recent data degrades, the existing option no longer "explains" current behavior → spawn a new one.
+- *Curriculum/time-based:* the trivial baseline; useful as a control.
+
+**3. Preventing collapse / keeping options distinct.** FTN's lateral inhibition + KWTA already pushes masks apart *spatially*, but nothing yet forces *behavioral* distinctness — without pressure, every option drifts toward "maximize novelty" and you get one skill wearing K masks. You need an explicit diversity term (MI between option-id and visited atoms is the obvious one) or to define options on disjoint landmark sets so their support data can't overlap.
+
+## The gaps I'd worry about most (the skeptical part)
+
+- **Option grounding mismatch.** Options discovered to maximize *novelty* are not necessarily the options useful for *survival*. Exploration crystallizes "interesting" subgoals; survival needs "reach water/food/shelter, flee the threat." There's no guarantee the novelty-induced basis spans the survival-relevant skills. Mitigation: once the env/death stream has signal, **bias option induction with the survival TD error** — preferentially crystallize options around states that precede or avert death, not just novelty peaks. I think this is the deepest risk and worth confronting head-on; a pure novelty→options→survival pipeline may produce a beautiful but survival-irrelevant skill library.
+
+- **Non-stationary action set for the meta-policy.** If options keep being reconfigured while the meta-policy trains over them, the meta-policy's "actions" change meaning underneath it — a moving target. The FTN continual-learning property (backward recall) protects old *masks*, but not the *semantics* the meta-policy has learned to rely on. I'd alternate phases: grow/freeze the option library, then train the meta-policy over the frozen set, then unfreeze to grow more (à la options-then-meta, or option-critic with explicit version freezing).
+
+- **Option-level credit assignment for death.** Death happens during option k, but the *cause* may be selecting option k−3 (wandered from water). Even at semi-MDP timescale this is hard with a purely terminal penalty. Your env stream is already a *survival critic* — lean on it as a dense surrogate (it's literally a discounted time-to-death value); consider eligibility traces / MC returns over options rather than one-step semi-MDP bootstraps.
+
+- **Termination functions (β).** Semi-MDPs need them and the idea doesn't specify them: subgoal-reached (landmark proximity in RECODE space), timeout, or learned β. Easiest start: reached-or-timeout.
+
+- **BC-on-exploration pathology.** If you distill behavior via BC, exploration data is full of ε-greedy/near-random actions — cloning it gives a poor "skill." You must select *successful* segments (reached the landmark) or advantage-weight. That selection is itself part of compartmentalization.
+
+## A minimal falsifying experiment
+
+Before the full online machinery, test the core claim — *does an option hierarchy beat your flat two-stream agent on survival?* — with everything fixed:
+1. Cluster current RECODE centroids into K landmarks.
+2. Goal-condition the masked policy to reach each; freeze the K masks.
+3. Train a meta-policy on the **env/death stream** over {K options + one "keep exploring" option}, with reached-or-timeout termination.
+4. Compare survival time vs. the current flat agent.
+
+If the *fixed* library doesn't beat flat, the online moving-library version won't either — so this isolates "do options help survival at all" from the much harder "can we discover/compartmentalize them online." Cheap to run, and it de-risks the whole program.
+
+## Where it sits in the literature (to sharpen the contribution)
+
+Individually these are all known — options/semi-MDP (Sutton–Precup–Singh), option-critic (Bacon), FuN/feudal (Vezhnevets), skill discovery (DIAYN/VIC/DADS), frontier-as-subgoal (Go-Explore), goal-conditioned HRL (HIRO/HAC), skills-as-subnetworks (supermasks/PackNet-RL). The **novel triple** is: *intrinsic-exploration frontier as the subgoal stream* × *FTN masks as the option parameterization* (cheap, interference-resistant, continually growable — the thing other skill-discovery methods lack) × *a survival semi-MDP reusing a separately-discounted extrinsic value head*. That combination is under-explored, and the FTN-as-option-substrate is the part that's most yours.
+
+---
+
+Two questions that would most shape the design: **(a)** do you want options to be *goal-conditioned reachers* (reuse your frontier/goal buffer directly) or *BC-distilled behavior slices* (closer to your FTN-RL precedent)? And **(b)** are you willing to alternate freeze/grow phases for the option library, or do you specifically want options and meta-policy learning *fully concurrently* (much harder, but more in the spirit of "continually learns options during exploration")? Your answer to (b) basically determines whether the non-stationarity problem is something you design around or something you have to solve.

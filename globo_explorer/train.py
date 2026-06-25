@@ -13,13 +13,14 @@ Training cadence is decoupled from data collection: every --train-interval (J)
 collected steps, the agent does --train-iters (K) gradient updates (cf. the
 explorer's per-episode update loop).
 
-All run parameters come from a YAML config (see default.yaml); the only CLI
-argument is --config.
+All run parameters come from a YAML config (see default.yaml); the CLI flags are
+--config (the YAML to run) and --name (a prefix for all output filenames).
 
 Examples:
     python train.py                         # uses default.yaml
     python train.py --config smoke.yaml     # tiny end-to-end smoke run
     python train.py --config my_run.yaml    # overlays default.yaml with your keys
+    python train.py --name run1             # outputs prefixed: run1_globo_*.gif, run1_*.png
 """
 
 from __future__ import annotations
@@ -35,11 +36,12 @@ import numpy as np
 import torch
 
 from agent import GloboExplorerDQN
-from env import make_globo_env, obs_to_chw
+from env import downsample_obs, make_globo_env, obs_to_chw, resolve_render_size
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ARTIFACTS = os.path.join(HERE, "artifacts")
 CENTROIDS = os.path.join(ARTIFACTS, "centroids")
+CHECKPOINTS = os.path.join(ARTIFACTS, "checkpoints")
 
 
 def _annotate(rgb_big, text):
@@ -73,10 +75,11 @@ class PeekRecorder:
     unless a fixed `gif_seconds` is given.
     """
 
-    def __init__(self, window, interval, gif_seconds, max_frames=200, min_ms=30, max_ms=250):
+    def __init__(self, window, interval, gif_seconds, max_frames=200, min_ms=30, max_ms=250, prefix=""):
         self.window = window                    # number of collected steps a GIF spans
         self.interval = interval
         self.gif_seconds = gif_seconds          # >0: fixed playback; else real-time
+        self.prefix = prefix                    # filename prefix for the saved GIFs
         self.stride = max(1, round(window / max(1, max_frames)))  # subsample to cap frames
         self.min_s, self.max_s = min_ms / 1000, max_ms / 1000
         self.active = False
@@ -116,7 +119,7 @@ class PeekRecorder:
         n = len(self.frames)
         gt_span = max(0.0, self.last_gt - self.start_gt)        # real in-game seconds covered
         durs = [self.gif_seconds / n] * n if self.gif_seconds > 0 else self.durs
-        path = os.path.join(ARTIFACTS, f"globo_ep{ep:03d}_s{self.start_step:07d}.gif")
+        path = os.path.join(ARTIFACTS, f"{self.prefix}globo_ep{ep:03d}_s{self.start_step:07d}.gif")
         save_gif(self.frames, self.caps, durs, path)
         info = dict(path=path, n=n, start=self.start_step, gt_span=gt_span,
                     mean_ms=1000 * gt_span / max(1, n))
@@ -137,14 +140,16 @@ def _load_config(path):
 
 
 def load_config():
-    """Single CLI argument: the YAML config to run. Every run parameter lives in
-    the YAML — there are no other CLI flags. `default.yaml` defines the complete
-    parameter set; any other `--config` is overlaid on top of it, so a custom file
-    only needs the keys it changes."""
+    """CLI args: --config (the YAML config to run) and --name (an optional prefix
+    for all output filenames). Every run parameter lives in the YAML. `default.yaml`
+    defines the complete parameter set; any other `--config` is overlaid on top of
+    it, so a custom file only needs the keys it changes."""
     default_cfg = os.path.join(HERE, "default.yaml")
     p = argparse.ArgumentParser(description="Train the globo explorer. All parameters come from the YAML config.")
     p.add_argument("--config", type=str, default=default_cfg,
                    help="YAML/JSON config with run parameters (see default.yaml); defaults to default.yaml")
+    p.add_argument("--name", type=str, default="",
+                   help="prefix for all output filenames (gif, centroids, masses), e.g. --name run1")
     cli = p.parse_args()
 
     base = _load_config(default_cfg)            # the full parameter set + default values
@@ -156,7 +161,61 @@ def load_config():
             raise SystemExit(f"Unknown config keys: {sorted(unknown)}. Known: {sorted(base)}")
         cfg.update(over)
     cfg["config"] = cli.config
+    # filename prefix for all outputs (empty => unchanged); "run1" => "run1_…"
+    cfg["name"] = f"{cli.name}_" if cli.name else ""
     return SimpleNamespace(**cfg)
+
+
+def build_agent(args, env):
+    """Construct the agent from a config namespace + a built env. Shared by training
+    (train.py) and the demo (play.py --agent) so both build the identical model."""
+    factored = args.action_mode == "factored"
+    action_groups = [int(n) for n in env.action_space.nvec] if factored else None
+    return GloboExplorerDQN(
+        num_actions=(None if factored else env.action_space.n),
+        action_groups=action_groups, in_h=args.obs_height, in_w=args.obs_width,
+        reservoir_channels=args.reservoir_channels, decoder_layer_size=args.decoder_layer_size,
+        num_novelty_bins=args.num_novelty_bins,
+        recode_down_h=args.recode_down_h, recode_down_w=args.recode_down_w,
+        recode_grayscale=not args.recode_rgb, recode_memory_size=args.recode_memory,
+        recode_k=args.recode_k, recode_knn_k=args.recode_knn_k,
+        recode_kappa=args.recode_kappa, recode_decay=args.recode_decay,
+        recode_density_gamma=args.recode_gamma,
+        recode_insertion_probability=args.recode_insertion_probability,
+        gamma=args.gamma, gamma_env=args.gamma_env, death_penalty=args.death_penalty,
+        lr=args.lr, grad_clip=args.grad_clip,
+        minibatch_size=args.batch, memory_length=args.replay_capacity,
+        target_update_tau=args.target_update_tau, target_update_tau_env=args.target_update_tau_env,
+        epsilon=args.epsilon_start, epsilon_end=args.epsilon_end, epsilon_decay_steps=args.epsilon_decay,
+        env_reward_coef=args.env_reward_coef,
+        online_coef=args.online_coef, offline_coef=args.offline_coef,
+        reservoir_kernel=args.reservoir_kernel, reservoir_stride=args.reservoir_stride,
+        reservoir_recur_kernel=args.reservoir_recur_kernel,
+        reservoir_input_scale=args.reservoir_input_scale, reservoir_recur_scale=args.reservoir_recur_scale,
+        reservoir_tc=args.reservoir_tc, reservoir_sparsity=args.reservoir_sparsity,
+        use_online_novelty=args.use_online_novelty, use_offline_novelty=args.use_offline_novelty,
+        main_sparse_reward_scale=args.main_sparse_reward_scale,
+        goal_sparse_reward_scale=args.goal_sparse_reward_scale,
+        goal_memory_length=args.goal_memory_length, prioritized_replay=args.prioritized_replay,
+        offline_scan_max=args.offline_scan_max,
+        device=args.device, seed=args.seed,
+    )
+
+
+def save_checkpoint(agent, args, global_step, prefix=""):
+    """Save the agent's model + a copy of the config it trained with. Writes a
+    self-contained <prefix>ckpt_s<step>.pt (model + embedded config) plus a
+    human-readable <prefix>ckpt_s<step>.yaml sidecar. The .pt is all the demo needs."""
+    import yaml
+    os.makedirs(CHECKPOINTS, exist_ok=True)
+    # config as a plain dict of just the run parameters (drop the CLI-only keys),
+    # which is exactly the default.yaml key set -> reusable as a --config overlay.
+    cfg = {k: v for k, v in vars(args).items() if k not in ("config", "name")}
+    path = os.path.join(CHECKPOINTS, f"{prefix}ckpt_s{global_step:07d}.pt")
+    torch.save({"agent": agent.state_dict(), "config": cfg, "global_step": global_step}, path)
+    with open(path.replace(".pt", ".yaml"), "w") as f:
+        yaml.safe_dump(cfg, f, sort_keys=False)
+    return path
 
 
 def main():
@@ -166,11 +225,18 @@ def main():
     np.random.seed(args.seed)
     os.makedirs(ARTIFACTS, exist_ok=True)
 
+    render_w, render_h = resolve_render_size(args.obs_width, args.obs_height,
+                                             args.render_width, args.render_height)
+    downscaling = (render_w, render_h) != (args.obs_width, args.obs_height)
     print(f"[setup] device={args.device} obs={args.obs_width}x{args.obs_height} "
+          f"render={render_w}x{render_h}{' (downsampled->obs)' if downscaling else ' (==obs)'} "
           f"recode_down={args.recode_down_h}x{args.recode_down_w} grayscale={not args.recode_rgb} "
           f"invincible={args.invincible}")
     print(f"[setup] action_mode={args.action_mode}; train: {args.train_iters} updates every "
           f"{args.train_interval} steps; peek: {args.render_window} steps every {args.render_interval} steps")
+    print(f"[setup] reward streams: intrinsic gamma={args.gamma} tau={args.target_update_tau}; "
+          f"environment gamma_env={args.gamma_env} tau_env={args.target_update_tau_env} "
+          f"env_reward_coef={args.env_reward_coef} death_penalty={args.death_penalty}")
 
     max_timesteps = None if args.max_steps <= 0 else args.max_steps
     n_episodes = None if args.episodes <= 0 else args.episodes
@@ -181,11 +247,14 @@ def main():
 
     def build_env():
         return make_globo_env(
-            obs_width=args.obs_width, obs_height=args.obs_height,
+            obs_width=render_w, obs_height=render_h,   # engine renders at the (possibly higher) render size
             max_timesteps=max_timesteps, init_frames=args.init_frames, seed=args.seed,
             action_mode=args.action_mode,
             invincible=args.invincible, freeze_daylight=args.freeze_daylight, spawn=args.spawn,
             weather_seed=args.weather_seed,
+            frameskip=args.frameskip,
+            move_speed=args.move_speed, move_accel=args.move_accel, climb_speed=args.climb_speed,
+            jump_speed=args.jump_speed, gravity=args.gravity, mouse_mov=args.mouse_mov,
         )
 
     env = build_env()
@@ -209,38 +278,11 @@ def main():
     signal.signal(signal.SIGTERM, _shutdown)
     signal.signal(signal.SIGINT, _shutdown)
 
-    agent = GloboExplorerDQN(
-        num_actions=(None if factored else env.action_space.n),
-        action_groups=action_groups, in_h=args.obs_height, in_w=args.obs_width,
-        reservoir_channels=args.reservoir_channels, decoder_layer_size=args.decoder_layer_size,
-        num_novelty_bins=args.num_novelty_bins,
-        recode_down_h=args.recode_down_h, recode_down_w=args.recode_down_w,
-        recode_grayscale=not args.recode_rgb, recode_memory_size=args.recode_memory,
-        recode_k=args.recode_k, recode_knn_k=args.recode_knn_k,
-        recode_kappa=args.recode_kappa, recode_decay=args.recode_decay,
-        recode_density_gamma=args.recode_gamma,
-        recode_insertion_probability=args.recode_insertion_probability,
-        gamma=args.gamma, lr=args.lr, grad_clip=args.grad_clip,
-        minibatch_size=args.batch, memory_length=args.replay_capacity,
-        target_update_tau=args.target_update_tau,
-        epsilon=args.epsilon_start, epsilon_end=args.epsilon_end, epsilon_decay_steps=args.epsilon_decay,
-        env_reward_coef=args.env_reward_coef,
-        online_coef=args.online_coef, offline_coef=args.offline_coef,
-        reservoir_kernel=args.reservoir_kernel, reservoir_stride=args.reservoir_stride,
-        reservoir_recur_kernel=args.reservoir_recur_kernel,
-        reservoir_input_scale=args.reservoir_input_scale, reservoir_recur_scale=args.reservoir_recur_scale,
-        reservoir_tc=args.reservoir_tc, reservoir_sparsity=args.reservoir_sparsity,
-        use_online_novelty=args.use_online_novelty, use_offline_novelty=args.use_offline_novelty,
-        main_sparse_reward_scale=args.main_sparse_reward_scale,
-        goal_sparse_reward_scale=args.goal_sparse_reward_scale,
-        goal_memory_length=args.goal_memory_length, prioritized_replay=args.prioritized_replay,
-        offline_scan_max=args.offline_scan_max,
-        device=args.device, seed=args.seed,
-    )
+    agent = build_agent(args, env)
     print(f"[agent] reservoir hidden {agent.hidden_shape}; feedback_size={agent.feedback_size}")
 
     rec = PeekRecorder(args.render_window, args.render_interval, args.gif_seconds,
-                       max_frames=args.render_max_frames)
+                       max_frames=args.render_max_frames, prefix=args.name)
 
     global_step = 0
     game_time = 0.0           # cumulative in-game seconds
@@ -257,7 +299,7 @@ def main():
             env = build_env()
         obs, info = env.reset(seed=args.seed)
         agent.reset_hidden()
-        img = obs_to_chw(obs, device=args.device)
+        img = obs_to_chw(downsample_obs(obs, args.obs_width, args.obs_height), device=args.device)
         novelty = agent.intrinsic_reward(img)
         z = agent.encode(img, novelty)
         agent.update_density(img)
@@ -273,7 +315,8 @@ def main():
             dtime = float(info.get("mt_dtime", 0.0) or 0.0)
             game_time += dtime
 
-            next_img = obs_to_chw(next_obs, device=args.device)
+            next_small = downsample_obs(next_obs, args.obs_width, args.obs_height)  # render-size -> agent input
+            next_img = obs_to_chw(next_small, device=args.device)
             intr = agent.intrinsic_reward(next_img)          # online novelty
             emb_next = agent.embed(next_img)                 # stored for offline novelty
             reward = args.online_coef * float(intr) + args.env_reward_coef * float(env_r)
@@ -287,13 +330,20 @@ def main():
             agent.remember(z, action, float(env_r), float(intr), emb_next, z_next,
                            terminal=bool(term), boundary=bool(term or trunc))
 
-            saved = rec.add(next_obs, ep, global_step, game_time, dtime)
+            saved = rec.add(next_small, ep, global_step, game_time, dtime)   # GIF peeks = the agent's view
             if saved:
                 print(f"        [gif] {os.path.relpath(saved['path'], HERE)} "
                       f"{saved['n']} frames = {saved['gt_span']:.1f}s game-time "
                       f"(~{saved['mean_ms']:.0f} ms/step)", flush=True)
-                n = agent.dump_centroids(CENTROIDS)
+                n = agent.dump_centroids(CENTROIDS, prefix=args.name)
                 print(f"        [centroids] wrote {n} -> {os.path.relpath(CENTROIDS, HERE)}/", flush=True)
+                ckpt = save_checkpoint(agent, args, global_step, prefix=args.name)
+                print(f"        [ckpt] {os.path.relpath(ckpt, HERE)}", flush=True)
+
+            # optional fixed-interval checkpointing, independent of GIF peeks
+            if args.checkpoint_interval and global_step % args.checkpoint_interval == 0:
+                ckpt = save_checkpoint(agent, args, global_step, prefix=args.name)
+                print(f"        [ckpt] {os.path.relpath(ckpt, HERE)}", flush=True)
 
             ep_intr += float(intr)
 
@@ -326,7 +376,9 @@ def main():
         if args.total_steps and global_step >= args.total_steps:
             break
 
-    agent.dump_centroids(CENTROIDS)
+    agent.dump_centroids(CENTROIDS, prefix=args.name)
+    ckpt = save_checkpoint(agent, args, global_step, prefix=args.name)
+    print(f"[ckpt] final -> {os.path.relpath(ckpt, HERE)}", flush=True)
     env.close()
     sps = global_step / max(1e-9, time.time() - t_start)
     print(f"[done] {global_step} steps over {game_time:.1f}s game-time in "

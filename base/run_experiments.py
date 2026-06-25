@@ -36,7 +36,7 @@ from PIL import Image
 
 Model = models.NeuroModel
 DataGen = tasks.DataGenSine
-MaskConfigurer = masks.KWTA
+MaskConfigurer = masks.SmoothKWTA
 Config = config.Default()
 
 

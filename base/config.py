@@ -19,21 +19,21 @@ class Default:
     DOMAIN_SHIFT_FACTOR = 0
 
     # Model hyperpars
-    K = 512
-    SQUARE_DIM = int((K * (4)) ** 0.5)
+    K = 128
+    SQUARE_DIM = 48#int((K * (4)) ** 0.5)
     LAYERS = 8
     DROPOUT = 0.2
     INNER_DIM = 8
 
-    LATERAL_B = 0.0
-    LATERAL_STEPS = 0
-    KERNEL_SIZE = 3
+    LATERAL_B = 0.1
+    LATERAL_STEPS = 1
+    KERNEL_SIZE = 5
     TORUS = True
 
-    CONFIGURE_PER_BATCH = True
+    CONFIGURE_PER_BATCH = False
 
     # Data sizes
-    TRAIN_DURATION = 500
+    TRAIN_DURATION = 200
     N_EPOCHS = 1
     N_SAMPLE_PER_TASK = 200
     N_EVAL_EPOCHS = 1
@@ -82,8 +82,8 @@ class Default:
         return {
             "k": self.K,
             "torus": self.TORUS,
-            "reconfig_steps": 30,
-            "reconfig_lr": 0.3,
+            "reconfig_steps": 1,
+            "reconfig_lr": 1,
             "reconfig_sample_size": 256,
         }
 

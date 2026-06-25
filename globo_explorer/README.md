@@ -91,6 +91,7 @@ known ones. `default.yaml` lists and documents every parameter and mirrors the c
 | `models.py` | `Conv2dReservoir` (fixed ESN), `DeepConvDecoder` (trained readout), feedback→channel projection, RECODE downscaling. |
 | `agent.py` | `GloboExplorerDQN`: reservoir front-end + conv-decoder Q-net + RECODE-over-images intrinsic reward + replay. |
 | `train.py` | Training loop; saves GIF artifacts. |
+| `play.py` | Human play in the browser over SSH (same world as the agent). `--parity` for agent-faithful one-step-per-action control. |
 | `recode/` | RECODE density estimator (from `/explorer`). |
 | `globo_game/` | Vendored copy of the globo Minetest game (committed; makes this project self-contained). |
 | `craftium_globo_env/` | Generated craftium env dir (built from `globo_game/`; gitignored/regenerable). |

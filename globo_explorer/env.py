@@ -27,6 +27,10 @@ DEFAULT_ENV_DIR = os.path.join(HERE, "craftium_globo_env")
 # self-contained and does not depend on the repo's top-level /globo subtree.
 DEFAULT_GLOBO_SRC = os.path.join(HERE, "globo_game")
 
+# Reference obs width for normalizing turn magnitude (the agent's view width), so
+# mouse_mov maps to a fixed yaw-per-step independent of the actual resolution.
+REF_OBS_WIDTH = 64
+
 # Discrete action set for exploration (DiscreteActionWrapper adds a no-op -> n+1).
 DEFAULT_ACTIONS = [
     "forward", "backward", "left", "right", "jump",
@@ -105,6 +109,12 @@ minetest.register_on_joinplayer(function(player, _last_login)
     -- Deterministic initial facing so a fixed seed+spawn gives the same first view.
     player:set_look_horizontal(0.0)
     player:set_look_vertical(0.0)
+    -- Revoke fly/fast/noclip (singleplayer gets them by default) so the agent/human
+    -- can't accidentally toggle fly/fast and launch into the sky.
+    local _name = player:get_player_name()
+    local _privs = minetest.get_player_privs(_name)
+    _privs.fly = nil; _privs.fast = nil; _privs.noclip = nil
+    minetest.set_player_privs(_name, _privs)
     player:hud_set_flags({
         hotbar = false, crosshair = false, healthbar = false,
         chat = false, minimap = false, breathbar = false, wielditem = false,
@@ -223,11 +233,17 @@ def make_globo_env(
     seed: int | None = None,
     env_dir: str = DEFAULT_ENV_DIR,
     run_dir_prefix: str | None = None,
-    pmul: int = 20,
     invincible: bool = False,
     freeze_daylight: bool = False,
     spawn: tuple[float, float, float] | str | None = None,
     weather_seed: int | None = None,
+    # explicit, predictable physics (replaces craftium's opaque pmul speed inflation)
+    frameskip: int = 1,            # engine frames advanced per env step (more game-time/step)
+    move_speed: float = 8.0,       # movement_speed_walk (fixed velocity)
+    move_accel: float = 500.0,     # movement_acceleration_default/_air (high -> snappy start/stop)
+    climb_speed: float = 3.0,      # movement_speed_climb (small -> no climbable-plant launch)
+    jump_speed: float = 6.5,       # movement_speed_jump
+    gravity: float = 9.81,         # movement_gravity (normal)
     extra_minetest_conf: dict | None = None,
 ):
     """Construct a headless, discrete-action globo env. Returns a gymnasium env.
@@ -241,8 +257,8 @@ def make_globo_env(
     """
     from craftium import CraftiumEnv, DiscreteActionWrapper
 
-    if action_mode not in ("discrete", "factored"):
-        raise ValueError(f"action_mode must be 'discrete' or 'factored', got {action_mode!r}")
+    if action_mode not in ("discrete", "factored", "raw"):
+        raise ValueError(f"action_mode must be 'discrete', 'factored', or 'raw', got {action_mode!r}")
 
     ensure_env_dir(env_dir, invincible=invincible)
     if run_dir_prefix is None:
@@ -255,6 +271,14 @@ def make_globo_env(
         "enable_fog": False,
         "craftium_invincible": "true" if invincible else "false",
         "craftium_freeze_daylight": "true" if freeze_daylight else "false",
+        # explicit physics: high accel -> near-instant to a fixed speed + fast stop;
+        # small climb speed -> climbable plants no longer launch you; normal gravity.
+        "movement_speed_walk": move_speed,
+        "movement_acceleration_default": move_accel,
+        "movement_acceleration_air": move_accel,
+        "movement_speed_climb": climb_speed,
+        "movement_speed_jump": jump_speed,
+        "movement_gravity": gravity,
     }
     if freeze_daylight:
         minetest_conf["time_speed"] = 0      # stop the day/night clock engine-side
@@ -280,17 +304,48 @@ def make_globo_env(
         max_timesteps=max_timesteps,
         sync_mode=False,            # CRITICAL: True crashes ("semaphore A")
         seed=seed,
-        pmul=pmul,
+        frameskip=frameskip,        # advance `frameskip` engine frames per env step
+        pmul=1,                     # neutralize craftium's speed inflation; physics set above
         run_dir_prefix=os.path.abspath(run_dir_prefix),
         mt_listen_timeout=120_000,
         minetest_conf=minetest_conf,
     )
+    # The engine turns by int(mouse * obs_width//2), so turn-per-step scales with
+    # resolution. Normalize to a 64px reference so a given mouse_mov yields the same
+    # yaw regardless of obs size (keeps the agent's turning fixed/predictable and
+    # makes higher-res human play turn identically to the agent).
+    mm = mouse_mov * (REF_OBS_WIDTH / obs_width)
+    if action_mode == "raw":
+        return base   # unwrapped: step() takes craftium's native Dict action (keys + mouse)
     if action_mode == "factored":
-        return FactoredActionWrapper(base, groups=FACTORED_GROUPS, mouse_mov=mouse_mov)
-    return DiscreteActionWrapper(base, actions=actions or DEFAULT_ACTIONS, mouse_mov=mouse_mov)
+        return FactoredActionWrapper(base, groups=FACTORED_GROUPS, mouse_mov=mm)
+    return DiscreteActionWrapper(base, actions=actions or DEFAULT_ACTIONS, mouse_mov=mm)
 
 
 def obs_to_chw(obs: np.ndarray, device=None) -> torch.Tensor:
     """craftium (H, W, 3) uint8 -> torch (3, H, W) float in [0,1]."""
     t = torch.as_tensor(np.asarray(obs), dtype=torch.float32, device=device) / 255.0
     return t.permute(2, 0, 1).contiguous()
+
+
+def resolve_render_size(obs_w: int, obs_h: int, render_w=None, render_h=None) -> tuple[int, int]:
+    """Engine render (capture) size. Falls back to the obs size when unset (or 0), so the
+    default render==obs case needs no extra config."""
+    return (int(obs_w) if not render_w else int(render_w),
+            int(obs_h) if not render_h else int(render_h))
+
+
+def downsample_obs(obs: np.ndarray, out_w: int, out_h: int) -> np.ndarray:
+    """Downsample a rendered (H, W, 3) uint8 frame to the agent's (out_h, out_w) input.
+
+    Returns the frame UNCHANGED when it already matches (render==obs fast path), so the
+    high-res render pipeline costs nothing when render size == obs size. Bilinear (so it
+    anti-aliases on downscale). This is the SINGLE shared downsample used by train.py, the
+    --agent demo, and the live trainer, so the agent sees an identical input pipeline
+    regardless of the render resolution it is being watched at.
+    """
+    a = np.asarray(obs)
+    if a.shape[0] == out_h and a.shape[1] == out_w:
+        return a
+    from PIL import Image
+    return np.asarray(Image.fromarray(a[:, :, :3]).resize((int(out_w), int(out_h)), Image.BILINEAR))

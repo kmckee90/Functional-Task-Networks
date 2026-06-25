@@ -142,6 +142,7 @@ class GloboExplorerDQN:
         online_coef: float = 1.0,
         offline_coef: float = 1.0,
         env_reward_coef: float = 0.0,
+        death_penalty: float = 0.0,        # negative env reward applied on death; 0 disables
         main_sparse_reward_scale: float = 5.0,
         goal_sparse_reward_scale: float = 5.0,
         # goal / prioritized replay
@@ -150,11 +151,13 @@ class GloboExplorerDQN:
         offline_scan_max: int = 8192,
         # RL
         gamma: float = 0.99,
+        gamma_env: float = 0.99,           # separate discount for the environment-reward stream
         lr: float = 3e-4,
         grad_clip: float = 0.0,            # max grad-norm; 0 disables
         memory_length: int = 20000,
         minibatch_size: int = 64,
         target_update_tau: float = 0.01,
+        target_update_tau_env: float | None = None,   # env-stream target tau; None -> same as intrinsic
         epsilon: float = 1.0,
         epsilon_end: float = 0.05,
         epsilon_decay_steps: int = 20000,
@@ -172,9 +175,15 @@ class GloboExplorerDQN:
         self.factored = self.n_heads > 1
         self.in_h, self.in_w = in_h, in_w
         self.gamma = gamma
+        self.gamma_env = gamma_env
+        self.death_penalty = death_penalty
         self.grad_clip = grad_clip
         self.minibatch_size = minibatch_size
         self.tau = target_update_tau
+        # The env/survival critic uses a high gamma_env, which under hard target updates
+        # (large tau) and off-policy prioritized replay is prone to deadly-triad divergence.
+        # Give it its own (typically slower) Polyak tau, independent of the exploration tau.
+        self.tau_env = target_update_tau if target_update_tau_env is None else target_update_tau_env
         self.epsilon = epsilon
         self.epsilon_start = epsilon
         self.epsilon_end = epsilon_end
@@ -206,12 +215,21 @@ class GloboExplorerDQN:
         c, hh, hw = self.reservoir.hidden_shape(in_h, in_w)
         self.hidden_shape = (c, hh, hw)
 
-        # ----- trained conv decoder (Q-heads) + target -----
+        # ----- trained conv decoders (Q-heads) + targets -----
+        # Two value streams with independent discounts: q_net = intrinsic (novelty +
+        # frontier bonus, discounted at gamma); q_env = environment/survival (in-game
+        # reward + death penalty, discounted at gamma_env). The behavior policy acts on
+        # their SUM, and each stream bootstraps off the combined greedy action so both
+        # value functions stay consistent with one coherent policy (cf. NGU/Agent57's
+        # split intrinsic/extrinsic value with separate discount factors).
         self.q_net = DeepConvDecoder(c, hh, hw, self.head_sizes, layer_size=decoder_layer_size).to(self.device)
         self.q_target = deepcopy(self.q_net)
-        for p in self.q_target.parameters():
+        self.q_env = DeepConvDecoder(c, hh, hw, self.head_sizes, layer_size=decoder_layer_size).to(self.device)
+        self.q_env_target = deepcopy(self.q_env)
+        for p in (*self.q_target.parameters(), *self.q_env_target.parameters()):
             p.requires_grad = False
-        self.optimizer = torch.optim.RMSprop(self.q_net.parameters(), lr=lr)
+        self._trainable_params = list(self.q_net.parameters()) + list(self.q_env.parameters())
+        self.optimizer = torch.optim.RMSprop(self._trainable_params, lr=lr)
 
         # ----- RECODE density over downscaled images -----
         chans = 1 if recode_grayscale else 3
@@ -283,13 +301,14 @@ class GloboExplorerDQN:
     # ---------- acting ----------
     @torch.no_grad()
     def act(self, hidden_feat: torch.Tensor, greedy: bool = False):
-        qs = self.q_net(hidden_feat.unsqueeze(0))
+        h = hidden_feat.unsqueeze(0)
+        qs_i, qs_e = self.q_net(h), self.q_env(h)   # intrinsic + environment streams
         out = []
-        for q, n in zip(qs, self.head_sizes):
+        for q_i, q_e, n in zip(qs_i, qs_e, self.head_sizes):
             if (not greedy) and torch.rand(1).item() < self.epsilon:
                 out.append(int(torch.randint(0, n, (1,)).item()))
             else:
-                out.append(int(q.argmax(dim=1).item()))
+                out.append(int((q_i + q_e).argmax(dim=1).item()))   # act on the combined value
         return out
 
     def note_action(self, action, reward):
@@ -316,33 +335,49 @@ class GloboExplorerDQN:
         if len(idx) == 0:
             return None
         z, a, z_next, terminal = B.z[idx], B.action[idx], B.z_next[idx], B.terminal[idx]
+        not_term = (~terminal).float()
         with torch.no_grad():
             offline_nov = self._novelty(B.emb[idx])   # dimensionality-normalized
-        r = self.env_reward_coef * B.env_r[idx]
+        # --- intrinsic reward stream (novelty + sparse frontier bonus) ---
+        r_intr = torch.zeros(len(idx), device=self.device)
         if self.use_online_novelty:
-            r = r + self.online_coef * B.online_nov[idx]    # online_nov stored already normalized
+            r_intr = r_intr + self.online_coef * B.online_nov[idx]    # online_nov stored already normalized
         if self.use_offline_novelty:
-            r = r + self.offline_coef * offline_nov
+            r_intr = r_intr + self.offline_coef * offline_nov
         # sparse bonus on the frontier-most (highest novelty) state in this trajectory
         scale = self.goal_sparse_reward_scale if is_goal else self.main_sparse_reward_scale
         best = int(offline_nov.argmax())
-        r[best] = r[best] * scale
-        qs, qs_next = self.q_net(z), self.q_target(z_next)
+        r_intr[best] = r_intr[best] * scale
+        # --- environment (survival) reward stream: in-game reward + death penalty ---
+        # death_penalty is applied on terminal (death) transitions independently of
+        # env_reward_coef, so a survival signal exists even with globo's reward off.
+        r_env = self.env_reward_coef * B.env_r[idx] - self.death_penalty * terminal.float()
+
+        qs_i, qs_e = self.q_net(z), self.q_env(z)
+        with torch.no_grad():
+            qn_i, qn_e = self.q_target(z_next), self.q_env_target(z_next)
         total = 0.0
-        for i, (q, qn) in enumerate(zip(qs, qs_next)):
-            q_sa = q.gather(1, a[:, i:i + 1]).squeeze(1)
+        for i in range(self.n_heads):
+            q_i, q_e, qn_i_h, qn_e_h = qs_i[i], qs_e[i], qn_i[i], qn_e[i]
             with torch.no_grad():
-                tgt = r + self.gamma * qn.max(dim=1).values * (~terminal)
-            total = total + F.mse_loss(q_sa, tgt)
+                # combined greedy next action -> consistent bootstrap for both streams
+                a_next = (qn_i_h + qn_e_h).argmax(dim=1, keepdim=True)
+                tgt_i = r_intr + self.gamma * qn_i_h.gather(1, a_next).squeeze(1) * not_term
+                tgt_e = r_env + self.gamma_env * qn_e_h.gather(1, a_next).squeeze(1) * not_term
+            q_i_sa = q_i.gather(1, a[:, i:i + 1]).squeeze(1)
+            q_e_sa = q_e.gather(1, a[:, i:i + 1]).squeeze(1)
+            total = total + F.mse_loss(q_i_sa, tgt_i) + F.mse_loss(q_e_sa, tgt_e)
         loss = total / self.n_heads
         self.optimizer.zero_grad()
         loss.backward()
         if self.grad_clip and self.grad_clip > 0:
-            nn.utils.clip_grad_norm_(self.q_net.parameters(), self.grad_clip)
+            nn.utils.clip_grad_norm_(self._trainable_params, self.grad_clip)
         self.optimizer.step()
         with torch.no_grad():
             for tp, p in zip(self.q_target.parameters(), self.q_net.parameters()):
                 tp.mul_(1 - self.tau).add_(self.tau * p)
+            for tp, p in zip(self.q_env_target.parameters(), self.q_env.parameters()):
+                tp.mul_(1 - self.tau_env).add_(self.tau_env * p)
         return float(loss.item())
 
     def train_round(self, n_updates: int) -> float | None:
@@ -407,16 +442,51 @@ class GloboExplorerDQN:
         self.epsilon = self.epsilon_start + frac * (self.epsilon_end - self.epsilon_start)
         self.density.step()
 
+    # ---------- checkpointing ----------
+    def state_dict(self) -> dict:
+        """Everything needed to reproduce the agent's behaviour: both Q streams +
+        their targets, optimizer, the frozen reservoir/feedback modules (saved for
+        exactness even though they're seed-deterministic), the RECODE density (so the
+        novelty feedback channel matches), and the epsilon schedule position. The
+        replay buffers are intentionally NOT saved (not needed for demo/inference)."""
+        return {
+            "q_net": self.q_net.state_dict(),
+            "q_target": self.q_target.state_dict(),
+            "q_env": self.q_env.state_dict(),
+            "q_env_target": self.q_env_target.state_dict(),
+            "optimizer": self.optimizer.state_dict(),
+            "reservoir": self.reservoir.state_dict(),
+            "feedback_to_channel": self.feedback_to_channel.state_dict(),
+            "density": self.density.state,
+            "epsilon": self.epsilon,
+            "cur_step": self.cur_step,
+        }
+
+    def load_state_dict(self, sd: dict, *, load_optimizer: bool = True) -> None:
+        self.q_net.load_state_dict(sd["q_net"])
+        self.q_target.load_state_dict(sd["q_target"])
+        self.q_env.load_state_dict(sd["q_env"])
+        self.q_env_target.load_state_dict(sd["q_env_target"])
+        self.reservoir.load_state_dict(sd["reservoir"])
+        self.feedback_to_channel.load_state_dict(sd["feedback_to_channel"])
+        if load_optimizer and "optimizer" in sd:
+            self.optimizer.load_state_dict(sd["optimizer"])
+        # move restored density tensors onto this agent's device
+        dens = {k: (v.to(self.device) if torch.is_tensor(v) else v) for k, v in sd["density"].items()}
+        self.density.set_state(dens)
+        self.epsilon = sd.get("epsilon", self.epsilon)
+        self.cur_step = sd.get("cur_step", self.cur_step)
+
     # ---------- centroid export ----------
-    def dump_centroids(self, out_dir: str, upscale: int = 8) -> int:
-        """Write each RECODE cluster centroid (a downscaled image) as <i>.png, plus
-        masses.csv (per-centroid visitation mass = RECODE count)."""
+    def dump_centroids(self, out_dir: str, upscale: int = 8, prefix: str = "") -> int:
+        """Write each RECODE cluster centroid (a downscaled image) as <prefix><i>.png,
+        plus <prefix>!masses.csv (per-centroid visitation mass = RECODE count)."""
         import os
         import numpy as np
         import imageio.v2 as imageio
         os.makedirs(out_dir, exist_ok=True)
         for f in os.listdir(out_dir):
-            if f.endswith(".png"):
+            if f.startswith(prefix) and f.endswith(".png"):
                 os.remove(os.path.join(out_dir, f))
         n = self.density.size
         mem = self.density.memory[:n].detach().cpu().numpy()
@@ -430,9 +500,9 @@ class GloboExplorerDQN:
             if ch == 1:
                 img = np.stack([img] * 3, axis=-1)
             img = np.kron(img, np.ones((upscale, upscale, 1), dtype=np.uint8))
-            imageio.imwrite(os.path.join(out_dir, f"{i}.png"), img)
+            imageio.imwrite(os.path.join(out_dir, f"{prefix}{i}.png"), img)
         # leading '!' (ASCII 33 < '0') sorts the log above the numbered centroid PNGs
-        with open(os.path.join(out_dir, "!masses.csv"), "w") as f:
+        with open(os.path.join(out_dir, f"{prefix}!masses.csv"), "w") as f:
             f.write("index,mass\n")
             for i, c in enumerate(counts):
                 f.write(f"{i},{float(c):.6f}\n")

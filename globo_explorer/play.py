@@ -73,6 +73,19 @@ def load_env_cfg(config_path: str) -> dict:
     return {str(k).replace("-", "_"): v for k, v in cfg.items()}
 
 
+def overlay_cfg(base: dict, config_path: str) -> dict:
+    """Overlay a --config YAML on top of a base config (e.g. a checkpoint's embedded config).
+    Lets --agent / --train demos override world keys (seed, spawn, weather_seed, clear_sky, …)
+    without editing the checkpoint. NOTE: the demo reads the config embedded in the .pt, NOT the
+    sidecar .yaml — pass overrides via --config. Architectural keys must still match the weights."""
+    cfg = dict(base)
+    base_path = os.path.join(HERE, "default.yaml")
+    if config_path and os.path.abspath(config_path) != os.path.abspath(base_path):
+        over = yaml.safe_load(open(config_path)) or {}
+        cfg.update({str(k).replace("-", "_"): v for k, v in over.items()})
+    return cfg
+
+
 def encode_jpeg(obs) -> bytes:
     buf = io.BytesIO()
     Image.fromarray(np.asarray(obs)[:, :, :3]).save(buf, format="JPEG", quality=JPEG_Q)
@@ -314,7 +327,10 @@ class Handler(BaseHTTPRequestHandler):
 def main():
     global ENV, SEED, JPEG_Q, PARITY, MODE, AGENT, _running
     p = argparse.ArgumentParser(description="Play globo in a browser over SSH (same world as the agent).")
-    p.add_argument("--config", default=os.path.join(HERE, "default.yaml"))
+    p.add_argument("--config", default=os.path.join(HERE, "default.yaml"),
+                   help="config YAML. For --agent/--train it OVERLAYS the checkpoint's embedded "
+                        "config, so use it to override world keys for a demo (seed, spawn, "
+                        "weather_seed, clear_sky). The sidecar .yaml next to the .pt is NOT read.")
     p.add_argument("--parity", action="store_true",
                    help="agent-faithful: env waits for each action, steps once, using the agent's "
                         "action wrapper (discrete/factored from default.yaml) with mouse_mov=0.5")
@@ -346,7 +362,7 @@ def main():
         ckpt = None
         if a.agent:
             ckpt = torch.load(a.agent, map_location="cpu", weights_only=False)
-            cfg = ckpt["config"]
+            cfg = overlay_cfg(ckpt["config"], a.config)   # --config overlays the checkpoint config
         else:
             cfg = load_env_cfg(a.config)
         TRAIN = True
@@ -382,7 +398,7 @@ def main():
         # load on CPU to read the embedded config; module weights copy onto the agent's
         # device at build time, and density tensors are moved in load_state_dict.
         ckpt = torch.load(a.agent, map_location="cpu", weights_only=False)
-        cfg = ckpt["config"]
+        cfg = overlay_cfg(ckpt["config"], a.config)   # --config overlays the checkpoint's embedded config
         AGENT = True
         PARITY = False
         MODE = str(cfg.get("action_mode", "discrete"))   # use the agent's own action wrapper
@@ -408,6 +424,7 @@ def main():
         action_mode=MODE,                         # raw (free-roam) or the agent's wrapper (parity)
         invincible=bool(cfg.get("invincible", False)),
         freeze_daylight=bool(cfg.get("freeze_daylight", False)),
+        clear_sky=bool(cfg.get("clear_sky", False)),
         spawn=cfg.get("spawn"), weather_seed=cfg.get("weather_seed"),
         frameskip=int(cfg.get("frameskip", 1)),
         move_speed=float(cfg.get("move_speed", 8.0)), move_accel=float(cfg.get("move_accel", 500.0)),

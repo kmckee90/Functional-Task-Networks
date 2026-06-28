@@ -1,0 +1,221 @@
+OPTIONS/JAX OPTION-TRAINING DIAGNOSTIC
+======================================
+Scope: why the DDPG options (train_options_2.py -> train_on_policy.py) are not
+reliably learning to drive the agent to each centroid. I read agent.py, ftn.py,
+collect.py, color_world.py, train_options_2.py, train_on_policy.py, config.py and
+measured your two existing H=1024 checkpoints (checkpoint.pkl = off-policy only;
+checkpoint_on_policy.pkl = after the on-policy loop). I did NOT modify your code.
+Eval harness: scratchpad/eval_options.py (greedy rollouts + direction alignment +
+critic value/action-gradient probes). Run on GPU 6.
+
+
+TL;DR (the headline)
+--------------------
+1. The CRITIC is fine. It learns a correct value function: Q at the goal cell is
+   ~0.5 higher than the mean Q elsewhere, in BOTH checkpoints. The reward and the
+   Bellman backup are working.
+
+2. The ACTOR is the failure. Off-policy, the options' greedy direction points
+   toward their goal with cosine alignment ~+0.02 (i.e. RANDOM). 13/20 options are
+   "dead" (adjacent-cell alignment < 0.1). Greedy goal-occupancy is only ~0.15.
+
+3. Your on-policy idea WORKS and is the right instinct. It lifts actor alignment
+   from +0.02 -> +0.27 (adjacent +0.03 -> +0.44), good options 4/20 -> 15/20, and
+   goal-occupancy 0.15 -> 0.30. It is not broken; it is under-powered/slow.
+
+So this is not "RL isn't learning." It's specifically a DDPG ACTOR problem on an
+observation that is harder than it looks, and the off-policy random-walk data is
+the wrong distribution to fix the actor with.
+
+
+MEASUREMENTS (scratchpad/eval_options.py, torus=True, 20 options)
+-----------------------------------------------------------------
+                                          off-policy      on-policy
+                                          checkpoint.pkl  checkpoint_on_policy.pkl
+greedy ever-reach (rand / adjacent)       0.67 / 0.54     0.93 / 0.93
+greedy OCCUPANCY  (rand / adjacent)       0.15 / 0.14     0.30 / 0.33
+dir alignment to goal (all / adjacent)    +0.02 / +0.03   +0.27 / +0.44
+options GOOD(align>0.3) / DEAD(<0.1)      4 / 13          15 / 3
+critic Q-gap  (Q[goal] - mean Q[others])  +0.51           +0.43
+critic-ARGMAX dir alignment (32-dir ring) +0.19           +0.39
+mean |greedy action| (tanh, max ~1.41)    1.18            1.31
+
+How to read these:
+- "ever-reach" overstates competence: on a small torus an agent with a non-zero
+  but mis-aligned velocity DIFFUSES into the goal cell within H steps by chance.
+  That's why off-policy shows 0.67 ever-reach but only 0.15 occupancy and ~0
+  alignment. Occupancy and alignment are the honest metrics; ignore ever-reach.
+- "critic-ARGMAX alignment" = brute-force best of 32 ring directions under the
+  learned critic. It is the BEST the actor could do if it perfectly maximized the
+  critic. Off-policy it is only +0.19; on-policy +0.39.
+
+
+ROOT CAUSE (two compounding failures, both on the actor side)
+-------------------------------------------------------------
+A. The critic's ACTION-gradient is weak, even though its VALUE function is right.
+   Q-gap +0.51 says the critic knows goal cells are worth more (good V). But the
+   critic-argmax over actions only aligns +0.19 off-policy: i.e. argmax_a Q(cell,a)
+   barely points toward the goal. The actor can be no better than this ceiling.
+   Two reasons the action-gradient is weak:
+     (i) PARTIAL OBSERVABILITY. obs = the color of the current Voronoi cell only.
+         It is piecewise-constant within a cell and encodes NO position. So the
+         transition (cell, action) -> next cell is genuinely stochastic in the
+         observation: the same (color, a) maps to different next cells depending
+         on WHERE in the cell the agent is (hidden). Q(color, a) is therefore an
+         average over hidden position, which blurs the dependence of value on the
+         action direction. The value function over cells survives the averaging
+         (hence good Q-gap); the within-cell action-gradient largely does not.
+     (ii) OFF-POLICY ACTION DISTRIBUTION. The random-walk buffer has actions ~
+         U(-1,1)^2. The critic is only well-constrained where it has data; a
+         deterministic actor then takes argmax_a, which drifts into action regions
+         the critic estimated poorly -> the classic DDPG "actor exploits critic
+         error on out-of-distribution actions" pathology. Mean |action| ~1.18-1.31
+         (tanh saturating toward the corners) is consistent with this.
+
+B. The actor underperforms even the weak critic it has. Off-policy the actor
+   aligns +0.02 while the critic's own argmax aligns +0.19 -- the actor is not even
+   reaching the (already weak) maximum. DDPG's deterministic policy-gradient gets
+   stuck / chases saturated corners. On-policy, the gap closes (actor +0.27 vs
+   argmax +0.39): once the critic is accurate AROUND the policy's own actions, the
+   policy gradient points somewhere useful.
+
+WHY ON-POLICY HELPS (confirms your hypothesis): collecting under the option's own
+epsilon-greedy policy concentrates the action distribution where the actor
+actually operates, so the critic's action-gradient there becomes meaningful
+(argmax alignment +0.19 -> +0.39) and the actor can follow it (+0.02 -> +0.27).
+This is the textbook on-policy benefit for actor-critic under distribution shift.
+
+
+WHY THE ON-POLICY LOOP IS STILL SLOW / PARTIAL (what's holding it back)
+----------------------------------------------------------------------
+1. COLD-START REWARD STARVATION (chicken-and-egg). A fresh option's policy is bad,
+   so on-policy episodes from random start poses rarely reach the goal. Your own
+   'reach' log printed ~0.01, which is BELOW the goal cell's area fraction (~1/20
+   = 0.05): on-policy data from a bad policy visits the goal LESS than random does.
+   So early on, pure on-policy collection has fewer reward transitions than the
+   random walk it replaced -> the critic/actor get almost no goal signal until the
+   policy is already decent. It bootstraps, but slowly, over your 10 epochs.
+
+2. PURE-ON-POLICY DISCARDS THE GOAL-RICH RANDOM DATA. train_on_policy replaces the
+   buffer entirely with ~2400 on-policy transitions per option. The random-walk
+   buffer (train_options_2) actually has BETTER goal coverage early (~5% in-goal vs
+   ~1%). Throwing it away removes the one distribution that reliably contains
+   reward. A mixed buffer (random + on-policy) would keep reward coverage while
+   adding the near-policy actions the critic needs.
+
+3. TINY COVERAGE. OnPolicyConfig.workers=8, steps_per_option=2400 -> only 8 parallel
+   episodes, ~3 episodes each (episode_max_steps=100). That's thin coverage of 20
+   cells, and few independent goal approaches per option. On a GPU you can run
+   256-1024 parallel rollouts essentially for free (the actor forward is batched).
+
+4. ALL EPISODES START UNIFORMLY OVER THE WHOLE WORLD. No curriculum. From a far
+   start a per-cell-constant policy must get many cells' directions right in a row
+   to ever see reward. Starting episodes in/near the goal cell first (then widening)
+   would give immediate reward signal and bootstrap far faster.
+
+5. done-on-TRUNCATION bias (minor). In both collectors the boundary flag is set on
+   timeout, and training uses d = clip(member + boundary); so a timeout transition
+   is treated as TERMINAL (target = r, no bootstrap). Time-limit truncation is not a
+   true terminal -- this biases values downward near the horizon. Standard fix:
+   bootstrap on truncation (only treat goal-reach as terminal). Small effect here
+   but free to fix.
+
+6. SHARED-NET INTERFERENCE (secondary). One actor/critic backbone + one linear
+   readout shared across 20 options, masks of k=128 in H=1024 (so 20*128=2560 unit-
+   slots crammed into 1024 -> heavy overlap). Sequential training lets later options
+   perturb earlier ones through shared units/readout rows; the 3-sibling
+   consolidation + your 10 epochs partially re-heal this. It is not the primary
+   cause (the dead options are not simply the early ones), but it caps quality.
+
+
+HOW I WOULD TRAIN N OPTIONS TO MAKE THIS SUCCEED (ranked by leverage)
+---------------------------------------------------------------------
+The ceiling problem is the critic's action-gradient under a position-free
+observation. The highest-leverage fixes raise that ceiling; the rest help the
+actor reach it and speed convergence.
+
+(1) ASYMMETRIC ACTOR-CRITIC (privileged critic). Biggest win, cleanly Markov.
+    Give the CRITIC the position (or [pos, color]) while the ACTOR keeps only the
+    color obs. You already have pos/next_pos in the buffer (buf[3]/buf[4]) and they
+    are NOT used for learning today. With a position-aware critic the transition is
+    Markov, Q(pos, a) has a sharp, correct action-gradient, and the deterministic
+    policy gradient trains the (color-only) actor properly. This directly fixes
+    cause A(i). Common and well-tested for POMDPs.
+
+(2) SPATIAL SHAPING REWARD (dense, privileged). Today option_shaping is forced to
+    0.0 because the shaping term uses COLOR distance (meaningless for navigation).
+    Replace it with SPATIAL distance from next_pos to the goal centroid's FOOTPRINT
+    position (registry.pos[cid], already computed). r = goal*member - beta*||next_pos
+    - footprint[cid]||. Even though the policy can't see position, the reward may use
+    it; the per-cell MEAN shaped reward decreases with distance to the goal, giving
+    a clean cross-cell value gradient and a far stronger learning signal than sparse
+    +1. This alone would likely make most options work even off-policy.
+
+(3) TD3-STYLE CRITIC REGULARIZATION. Directly targets cause A(ii)+B:
+    - target policy smoothing: add clipped noise to the target action a' before
+      computing the target Q (regularizes Q in action space so argmax is sane);
+    - twin critics + min (kills the overestimation the actor exploits);
+    - delayed actor updates (let the critic settle before the actor chases it).
+    These are small additions to agent._train and routinely turn a flaky DDPG into
+    a stable one.
+
+(4) MIX RANDOM + ON-POLICY DATA instead of pure on-policy. Keep the train_options_2
+    random buffer (goal-rich coverage) and CONCATENATE fresh on-policy transitions
+    (near-policy actions). Train on the union. This removes the cold-start reward
+    starvation (#1/#2 above) while retaining the on-policy benefit you measured.
+    Cheap and likely the single biggest improvement to train_on_policy as written.
+
+(5) CURRICULUM / GOAL-CENTRIC RESETS for on-policy collection. Start a fraction of
+    episodes inside or adjacent to the goal cell (reset pose near footprint[cid]),
+    then anneal toward uniform. Guarantees reward signal from step 1. (Hindsight
+    relabeling -- treat reached cells as goals -- is an alternative that needs no
+    privileged info.)
+
+(6) MORE COVERAGE: workers 8 -> 256-1024, and/or larger steps_per_option. Batched
+    actor rollouts are cheap on the GPU; this de-noises both collection and the
+    occupancy/reach statistics.
+
+(7) FIX done-on-truncation: bootstrap on timeout, terminal only on goal-reach.
+
+(8) Tuning that helps DDPG here: raise critic LR relative to actor (or do multiple
+    critic steps per actor step) so the actor chases an accurate critic; consider
+    actor_lr/critic_lr 1e-4/3e-4 rather than 1e-4/1e-4; more option_train_steps for
+    the off-policy stage.
+
+If I could make only TWO changes: (2) spatial shaping + (4) mixed buffer. If I
+could make only ONE structural change: (1) asymmetric position-aware critic.
+
+
+ANSWERS TO YOUR INLINE QUESTIONS
+--------------------------------
+Q: Is the agent rewarded for CROSSING into the goal, or for EVERY step it is in the
+   centroid's membership?
+   The reward expression is per-step membership: r = goal*member - shaping*dist -
+   step_cost, with member=1 whenever next_obs's nearest centroid == cid. BUT the
+   done flag is d = clip(member + boundary), so being in the goal is treated as
+   TERMINAL. In the Bellman target (r + gamma*(1-d)*Q'), d=1 zeroes the bootstrap,
+   so each in-goal transition contributes a one-shot terminal +1 rather than an
+   accumulating per-step stream. And in the on-policy collector the episode RESETS
+   on reaching the goal. Net effect: functionally it is "rewarded for entering the
+   goal" (a terminal +1 per entry), NOT "+1 per step accumulated while dwelling."
+   (In the random-walk buffer the walk isn't reset, so consecutive in-goal steps do
+   appear as separate transitions, but each is independently labeled terminal +1 --
+   still no accumulation in the value target.)
+
+Q: In train_on_policy are masks selected deterministically, and are these the same
+   masks the demo selects deterministically?
+   Yes. Both index the per-centroid actor mask m_a by centroid id out of the same
+   options dict loaded from the checkpoint; train_on_policy never reconfigures or
+   alters masks (it only updates the shared backbone), so the mask for centroid c is
+   identical in training and demo. (Caveat: the demo's --mask-polyak/--mask-delay
+   can make the EXECUTED mask a transient blend/lag; with the current defaults
+   mask_polyak=0 it fires the exact stored mask.)
+
+
+WHAT "NOT WORKING" PROBABLY LOOKS LIKE IN YOUR DEMO
+--------------------------------------------------
+The planner chains one option per hop and needs EACH hop's option to be reliable.
+With on-policy occupancy ~0.30 and still 3/20 dead options, any tour whose path
+includes a weak/dead option stalls -- consistent with the demo tours that miss.
+Raising per-option competence (above) is what unblocks the demo, not changing the
+planner.

@@ -18,6 +18,10 @@
 #   spawn             "x,y,z" static_spawnpoint -> identical start location + facing. null = engine picks.
 #   freeze_daylight   Stop the day/night cycle (stay at midday) so observations don't go dark.
 #   weather_seed      Reseed globo's weather RNG -> reproducible/selectable weather. null = random.
+#   clear_sky         true = visually disable weather: static cloudless flat sky, no sun/moon/
+#                     stars, no precipitation particles, so the agent stops fixating on the
+#                     constantly-changing sky. The climate STATE still drives temperature/damage
+#                     (survival physics unchanged) — only the rendering is suppressed.
 #   invincible        true = never dies (one endless life); false = dies and restarts.
 #
 # Control
@@ -165,10 +169,11 @@ max_steps: 0
 total_steps: 0
 
 # Reproducible world
-seed: 7
+seed: 2
 spawn: "8,8,115"
 freeze_daylight: true
 weather_seed: 0
+clear_sky: true   # true = static cloudless sky (stop the agent staring at moving clouds/weather)
 invincible: false
 
 # Control
@@ -219,7 +224,7 @@ use_online_novelty: true
 use_offline_novelty: true
 online_coef: 1.0
 offline_coef: 1.0
-env_reward_coef: 1.0
+env_reward_coef: 10.0
 death_penalty: 1.0   # negative reward on death (survival signal); scale to taste, 0 disables
 main_sparse_reward_scale: 5.0
 goal_sparse_reward_scale: 5.0
@@ -249,9 +254,9 @@ warmup: 500
 checkpoint_interval: 0   # steps between checkpoints; 0 = on each GIF peek + at end
 
 # GIF peeks
-render_window: 3700
+render_window: 1000
 render_interval: 5000
-render_max_frames: 250
+render_max_frames: 1000
 gif_seconds: 0.0
 
 # Misc

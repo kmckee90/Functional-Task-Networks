@@ -58,7 +58,8 @@ def run_live(args, *, infer_device, learn_device, frame_sink, should_run, ckpt=N
         obs_width=render_w, obs_height=render_h,   # engine renders high; agent input is downsampled below
         max_timesteps=max_timesteps, init_frames=args.init_frames, seed=args.seed,
         action_mode=args.action_mode,
-        invincible=args.invincible, freeze_daylight=args.freeze_daylight, spawn=args.spawn,
+        invincible=args.invincible, freeze_daylight=args.freeze_daylight,
+        clear_sky=getattr(args, "clear_sky", False), spawn=args.spawn,
         weather_seed=args.weather_seed, frameskip=args.frameskip,
         move_speed=args.move_speed, move_accel=args.move_accel, climb_speed=args.climb_speed,
         jump_speed=args.jump_speed, gravity=args.gravity, mouse_mov=args.mouse_mov,

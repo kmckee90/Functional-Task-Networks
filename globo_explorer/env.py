@@ -98,6 +98,30 @@ local invincible = minetest.settings:get_bool("craftium_invincible", false)
 -- freeze_daylight: keep the world permanently at midday (no day/night cycle), so a
 -- long episode's observations stay legible (night turns the view black).
 local freeze_daylight = minetest.settings:get_bool("craftium_freeze_daylight", false)
+-- clear_sky: visually disable weather. globo's `climate` mod runs a Markov chain over
+-- ~20 weather states, each re-applying moving clouds / sky / sun / precipitation -- a
+-- constantly-changing up-view that the explorer fixates on (it reads as novelty). This
+-- forces a static, cloudless, featureless sky every step and no-ops the precipitation
+-- particle spawners, WITHOUT pinning the weather state, so climate's temperature/damage
+-- (survival) dynamics are left intact -- only the rendering is suppressed.
+local clear_sky = minetest.settings:get_bool("craftium_clear_sky", false)
+
+-- A fixed flat-blue dome: no clouds, no sun/moon/stars, uniform colour at all times of day.
+local _flat = "#8cbafa"
+local function apply_clear_sky(player)
+    player:set_clouds({density = 0})
+    player:set_sky({
+        type = "regular",
+        clouds = false,
+        sky_color = {
+            day_sky = _flat, day_horizon = _flat, dawn_sky = _flat, dawn_horizon = _flat,
+            night_sky = _flat, night_horizon = _flat, indoors = _flat,
+        },
+    })
+    player:set_sun({visible = false, sunrise_visible = false})
+    player:set_moon({visible = false})
+    player:set_stars({visible = false})
+end
 
 minetest.register_on_dieplayer(function(player, reason)
     if (not invincible) and set_termination ~= nil then set_termination() end
@@ -120,13 +144,25 @@ minetest.register_on_joinplayer(function(player, _last_login)
         chat = false, minimap = false, breathbar = false, wielditem = false,
     })
     if invincible then player:set_armor_groups({immortal = 1}) end
+    if clear_sky then apply_clear_sky(player) end
 end)
 
-if invincible or freeze_daylight then
+if invincible or freeze_daylight or clear_sky then
     local acc = 0.0
+    local acc_sky = 0.0
     minetest.register_globalstep(function(dtime)
         if freeze_daylight then
             minetest.set_timeofday(0.5)  -- re-assert midday every step (cheap)
+        end
+        if clear_sky then
+            -- re-assert a few times/sec so we override climate whenever it changes weather
+            acc_sky = acc_sky + dtime
+            if acc_sky >= 0.2 then
+                acc_sky = 0.0
+                for _, player in ipairs(minetest.get_connected_players()) do
+                    apply_clear_sky(player)
+                end
+            end
         end
         if not invincible then return end
         acc = acc + dtime
@@ -151,6 +187,13 @@ minetest.register_on_mods_loaded(function()
     if _wseed ~= nil and climate ~= nil and climate.active_weather ~= nil then
         minetest.log("action", "[craftium_env] weather_seed=" .. _wseed ..
             " active_weather=" .. tostring(climate.active_weather.name))
+    end
+    -- Suppress precipitation visuals without changing the weather state: no-op the
+    -- particle spawners (climate keeps its active_weather, so temperature/damage are unchanged).
+    if clear_sky and climate ~= nil then
+        if climate.add_particle ~= nil then climate.add_particle = function() end end
+        if climate.add_blizzard_particle ~= nil then climate.add_blizzard_particle = function() end end
+        minetest.log("action", "[craftium_env] clear_sky on: clouds/sky/sun/particles suppressed")
     end
 end)
 """
@@ -235,6 +278,7 @@ def make_globo_env(
     run_dir_prefix: str | None = None,
     invincible: bool = False,
     freeze_daylight: bool = False,
+    clear_sky: bool = False,
     spawn: tuple[float, float, float] | str | None = None,
     weather_seed: int | None = None,
     # explicit, predictable physics (replaces craftium's opaque pmul speed inflation)
@@ -251,7 +295,9 @@ def make_globo_env(
     If ``invincible`` is True the player cannot die (HP/stats pinned by the
     control mod), so a single long episode is possible. If ``freeze_daylight``
     is True the world stays permanently at midday (no day/night cycle), so
-    observations remain legible over long runs. ``max_timesteps=None`` disables
+    observations remain legible over long runs. If ``clear_sky`` is True, weather
+    is visually disabled (static cloudless sky, no sun/precipitation) while the
+    climate state still drives temperature/damage. ``max_timesteps=None`` disables
     truncation (episode ends only on death). ``seed`` fixes the world+spawn, so
     every restart returns to the identical world and location.
     """
@@ -271,6 +317,7 @@ def make_globo_env(
         "enable_fog": False,
         "craftium_invincible": "true" if invincible else "false",
         "craftium_freeze_daylight": "true" if freeze_daylight else "false",
+        "craftium_clear_sky": "true" if clear_sky else "false",
         # explicit physics: high accel -> near-instant to a fixed speed + fast stop;
         # small climb speed -> climbable plants no longer launch you; normal gravity.
         "movement_speed_walk": move_speed,

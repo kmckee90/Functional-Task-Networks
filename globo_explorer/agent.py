@@ -471,6 +471,12 @@ class GloboExplorerDQN:
         self.feedback_to_channel.load_state_dict(sd["feedback_to_channel"])
         if load_optimizer and "optimizer" in sd:
             self.optimizer.load_state_dict(sd["optimizer"])
+            # move optimizer state onto this agent's device (state may have been saved/loaded
+            # on CPU; RMSprop.step() would otherwise hit a device mismatch with cuda params)
+            for st in self.optimizer.state.values():
+                for k, v in st.items():
+                    if torch.is_tensor(v):
+                        st[k] = v.to(self.device)
         # move restored density tensors onto this agent's device
         dens = {k: (v.to(self.device) if torch.is_tensor(v) else v) for k, v in sd["density"].items()}
         self.density.set_state(dens)

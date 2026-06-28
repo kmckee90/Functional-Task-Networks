@@ -14,13 +14,17 @@ collected steps, the agent does --train-iters (K) gradient updates (cf. the
 explorer's per-episode update loop).
 
 All run parameters come from a YAML config (see default.yaml); the CLI flags are
---config (the YAML to run) and --name (a prefix for all output filenames).
+--config (the YAML to run), --name (a prefix for all output filenames), and --resume
+(a checkpoint .pt to continue training from).
 
 Examples:
     python train.py                         # uses default.yaml
     python train.py --config smoke.yaml     # tiny end-to-end smoke run
     python train.py --config my_run.yaml    # overlays default.yaml with your keys
     python train.py --name run1             # outputs prefixed: run1_globo_*.gif, run1_*.png
+    python train.py --resume artifacts/checkpoints/run1_ckpt_s0050000.pt --name run1
+                                            # continue run1 from its checkpoint (its config is
+                                            # the base; add --config to overlay tweaks like total_steps)
 """
 
 from __future__ import annotations
@@ -140,19 +144,32 @@ def _load_config(path):
 
 
 def load_config():
-    """CLI args: --config (the YAML config to run) and --name (an optional prefix
-    for all output filenames). Every run parameter lives in the YAML. `default.yaml`
-    defines the complete parameter set; any other `--config` is overlaid on top of
-    it, so a custom file only needs the keys it changes."""
+    """CLI args: --config (the YAML config to run), --name (an optional output-filename
+    prefix), and --resume (a checkpoint .pt to continue training from). Every run parameter
+    lives in the YAML. `default.yaml` defines the complete parameter set; any other `--config`
+    is overlaid on top of it, so a custom file only needs the keys it changes.
+
+    With --resume, the CHECKPOINT's own config is used as the base (so the architecture matches
+    and the weights load), and --config (if given) is overlaid on top for tweaks (e.g. a larger
+    total_steps). Returns (args, resume_ckpt) where resume_ckpt is the loaded checkpoint or None."""
     default_cfg = os.path.join(HERE, "default.yaml")
     p = argparse.ArgumentParser(description="Train the globo explorer. All parameters come from the YAML config.")
     p.add_argument("--config", type=str, default=default_cfg,
                    help="YAML/JSON config with run parameters (see default.yaml); defaults to default.yaml")
     p.add_argument("--name", type=str, default="",
                    help="prefix for all output filenames (gif, centroids, masses), e.g. --name run1")
+    p.add_argument("--resume", type=str, default="",
+                   help="path to a checkpoint .pt to continue training from (restores weights, "
+                        "optimizer, RECODE density, epsilon schedule and step count; the replay "
+                        "buffer is re-warmed). The checkpoint's config is the base; --config overlays it.")
     cli = p.parse_args()
 
-    base = _load_config(default_cfg)            # the full parameter set + default values
+    resume_ckpt = None
+    if cli.resume:
+        resume_ckpt = torch.load(cli.resume, map_location="cpu", weights_only=False)
+        base = dict(resume_ckpt["config"])      # continue with the architecture/params it trained with
+    else:
+        base = _load_config(default_cfg)        # the full parameter set + default values
     cfg = dict(base)
     if os.path.abspath(cli.config) != os.path.abspath(default_cfg):
         over = _load_config(cli.config)
@@ -161,9 +178,10 @@ def load_config():
             raise SystemExit(f"Unknown config keys: {sorted(unknown)}. Known: {sorted(base)}")
         cfg.update(over)
     cfg["config"] = cli.config
+    cfg["resume"] = cli.resume
     # filename prefix for all outputs (empty => unchanged); "run1" => "run1_…"
     cfg["name"] = f"{cli.name}_" if cli.name else ""
-    return SimpleNamespace(**cfg)
+    return SimpleNamespace(**cfg), resume_ckpt
 
 
 def build_agent(args, env):
@@ -210,8 +228,8 @@ def save_checkpoint(agent, args, global_step, prefix=""):
     os.makedirs(CHECKPOINTS, exist_ok=True)
     # config as a plain dict of just the run parameters (drop the CLI-only keys),
     # which is exactly the default.yaml key set -> reusable as a --config overlay.
-    cfg = {k: v for k, v in vars(args).items() if k not in ("config", "name")}
-    path = os.path.join(CHECKPOINTS, f"{prefix}ckpt_s{global_step:07d}.pt")
+    cfg = {k: v for k, v in vars(args).items() if k not in ("config", "name", "resume")}
+    path = os.path.join(CHECKPOINTS, f"{prefix}ckpt.pt")
     torch.save({"agent": agent.state_dict(), "config": cfg, "global_step": global_step}, path)
     with open(path.replace(".pt", ".yaml"), "w") as f:
         yaml.safe_dump(cfg, f, sort_keys=False)
@@ -219,7 +237,7 @@ def save_checkpoint(agent, args, global_step, prefix=""):
 
 
 def main():
-    args = load_config()
+    args, resume_ckpt = load_config()
 
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
@@ -250,7 +268,8 @@ def main():
             obs_width=render_w, obs_height=render_h,   # engine renders at the (possibly higher) render size
             max_timesteps=max_timesteps, init_frames=args.init_frames, seed=args.seed,
             action_mode=args.action_mode,
-            invincible=args.invincible, freeze_daylight=args.freeze_daylight, spawn=args.spawn,
+            invincible=args.invincible, freeze_daylight=args.freeze_daylight,
+            clear_sky=getattr(args, "clear_sky", False), spawn=args.spawn,
             weather_seed=args.weather_seed,
             frameskip=args.frameskip,
             move_speed=args.move_speed, move_accel=args.move_accel, climb_speed=args.climb_speed,
@@ -281,10 +300,18 @@ def main():
     agent = build_agent(args, env)
     print(f"[agent] reservoir hidden {agent.hidden_shape}; feedback_size={agent.feedback_size}")
 
+    resume_step = 0
+    if resume_ckpt is not None:
+        agent.load_state_dict(resume_ckpt["agent"])
+        resume_step = int(resume_ckpt.get("global_step", 0))
+        print(f"[resume] {args.resume} -> step={resume_step} eps={agent.epsilon:.3f} "
+              f"cur_step={agent.cur_step} atoms={agent.density.size} "
+              f"(weights/optimizer/density restored; replay buffer re-warms from empty)", flush=True)
+
     rec = PeekRecorder(args.render_window, args.render_interval, args.gif_seconds,
                        max_frames=args.render_max_frames, prefix=args.name)
 
-    global_step = 0
+    global_step = resume_step
     game_time = 0.0           # cumulative in-game seconds
     steps_since_train = 0
     recent_loss = []

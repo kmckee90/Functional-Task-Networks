@@ -147,11 +147,17 @@ class DemoEnv:
         self.heading = 0.0
 
     def _obs(self, pos: np.ndarray) -> np.ndarray:
+        if self.w.coord_obs:  # continuous (x,y) in [-1,1]^2 (matches color_world.coord_at)
+            return (pos.astype(np.float32) / self.w.size * 2.0 - 1.0)
         return self.w._cell_color_at(pos[None].astype(np.float32))[0]
 
     def reset(self, seed=None):
         s = self.w.size
-        self.pos = np.random.uniform(0.02 * s, 0.98 * s, size=2).astype(np.float32)
+        for _ in range(64):  # rejection-sample a spawn outside every obstacle
+            p = np.random.uniform(0.02 * s, 0.98 * s, size=2).astype(np.float32)
+            if not bool(self.w.in_obstacle(p)):
+                break
+        self.pos = p
         self.heading = 0.0
         return self._obs(self.pos), {"pos": self.pos.copy(), "heading": self.heading}
 
@@ -161,6 +167,9 @@ class DemoEnv:
             npos = np.mod(self.pos + disp, self.w.size).astype(np.float32)
         else:
             npos = np.clip(self.pos + disp, 0.0, self.w.size).astype(np.float32)
+        # Can't pass through obstacles: reject a move that would enter one.
+        if bool(self.w.in_obstacle(npos)) and not bool(self.w.in_obstacle(self.pos)):
+            npos = self.pos
         if float(np.linalg.norm(disp)) > 1e-6:
             self.heading = float(np.arctan2(disp[1], disp[0]))
         self.pos = npos
@@ -251,6 +260,7 @@ def main():
     print(f"demo env: ColorWorld max_speed={env.max_speed} n_cells={env.n_cells} "
           f"world_seed={env.world_seed} torus={env.torus}", flush=True)
     obs, info = env.reset(seed=args.seed)
+    agent.reset_history()
     cur = agent.membership_np(obs)
 
     H, sq = agent.cfg.ftn_hidden_size, agent.cfg.lateral_square_dim
@@ -294,6 +304,7 @@ def main():
         # Optionally restart the tour from a fresh random pose.
         if not args.continuous:
             obs, info = env.reset()
+            agent.reset_history()
             trail = [tuple(info["pos"])]
         cur = agent.membership_np(obs)
         goal = args.goal if (tour == 1 and args.goal >= 0) else pick_goal(cur)

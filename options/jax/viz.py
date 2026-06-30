@@ -29,6 +29,9 @@ def _new_topdown(env):
     for (x0, y0, x1, y1) in env.obstacles:
         ax.add_patch(Rectangle((x0, y0), x1 - x0, y1 - y0,
                                facecolor=(0.12, 0.12, 0.13), edgecolor="black", lw=1, zorder=1))
+    for poly in getattr(env, "_polys", []):
+        ax.fill(poly[:, 0], poly[:, 1], facecolor=(0.12, 0.12, 0.13),
+                edgecolor="black", lw=1.0, zorder=1)
     return fig, ax
 
 

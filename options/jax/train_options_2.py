@@ -112,11 +112,16 @@ def main():
     p.add_argument("--max-speed", type=float, default=d.max_speed)
     p.add_argument("--torus", action=argparse.BooleanOptionalAction, default=d.torus,
                    help="wrap the world edges (no boundaries) during collection (--no-torus to clip at walls)")
+    p.add_argument("--n-obstacles", type=int, default=d.n_obstacles,
+                   help="random convex polygon obstacles the agent can't pass through (0 = open room)")
+    p.add_argument("--coord-obs", action=argparse.BooleanOptionalAction, default=d.coord_obs,
+                   help="observe the continuous (x,y) position in [-1,1]^2 instead of the Voronoi color "
+                        "patchwork (obs_dim=2; demo renders white space)")
     args = p.parse_args()
 
     pc = ParConfig(workers=args.workers, option_epochs=args.option_epochs,
                    n_cells=args.n_cells, color_dim=args.color_dim, max_speed=args.max_speed,
-                   torus=args.torus)
+                   torus=args.torus, n_obstacles=args.n_obstacles, coord_obs=args.coord_obs)
 
     if args.smoke:
         tc, ac = smoke_config()
@@ -130,10 +135,16 @@ def main():
     # World (identical patchwork to the torch env for the same world_seed).
     ms = 0.6 if pc.max_speed is None else pc.max_speed
     env = ColorWorld(world_seed=pc.world_seed, n_cells=pc.n_cells, color_dim=pc.color_dim,
-                     max_steps=tc.max_steps, max_speed=ms, torus=pc.torus)
+                     max_steps=tc.max_steps, max_speed=ms, torus=pc.torus,
+                     n_obstacles=pc.n_obstacles, obstacle_min_r=pc.obstacle_min_r,
+                     obstacle_max_r=pc.obstacle_max_r, obstacle_max_verts=pc.obstacle_max_verts,
+                     coord_obs=pc.coord_obs)
     env_kwargs = env.config()
     ac.obs_dim = env.obs_dim
     ac.act_dim = 2
+    # Coordinate-obs mode: the obs IS the position, so use a dense negative
+    # distance-to-centroid reward instead of the sparse membership reward.
+    ac.dist_reward = pc.coord_obs
     agent = OptionsAgent(ac, seed=tc.seed, option_train_steps=tc.option_train_steps)
 
     os.makedirs(ART, exist_ok=True)

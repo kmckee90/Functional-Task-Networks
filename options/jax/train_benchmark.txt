@@ -1,0 +1,144 @@
+TRAIN_OPTIONS_2.PY  --  PERFORMANCE BENCHMARK & SPEEDUP ANALYSIS
+================================================================
+Date: 2026-06-28        Hardware: 1x NVIDIA H100 80GB (GPU 1), JAX gpu backend.
+Author: measured by Claude. Experiment code was NOT modified; all numbers come
+from the live run plus three read-only diagnostic harnesses in scratchpad
+(timing_diag.py, cql_diag.py) run on idle GPUs 2/3 so they did not perturb GPU 1.
+
+NOTE ON PARAMS: config.py was edited down (batch_size 1024->128, option_train_steps
+15000->1000) at 09:48, mid-run. Per your instruction this benchmark targets the
+HEAVY params the run was launched with and that the process is still using:
+  rounds=1  explore_steps=24000  workers=102
+  H(ftn_hidden_size)=1024  k=32  ftn_layers=8  ftn_inner_size=8
+  batch_size=1024  _TERMS=4 (1 option + up to 3 consolidation siblings)
+  cql_alpha=1.0  cql_n_actions=10
+  option_train_steps=15000  option_epochs=1
+  target_centroids=20  -> 20 options trained SEQUENTIALLY
+  reconfig_steps=1  reconfig_n=2048
+
+
+1. WHERE THE TIME GOES  (one round, 20 options, single H100)
+-----------------------------------------------------------
+Phase                         one-time compile   steady-state        share of run
+--------------------------    ----------------   -----------------   ------------
+Collection (vmap+scan)        2.3 s             0.02 s  (24k steps)   ~0.00%
+RECODE + FPS centroids +
+  footprints + graph + 3 PNGs  -                <1 s   (host numpy)    ~0.00%
+Reconfig (mask search)        3.9 s             0.35 s/option         ~0.05%
+                                                = ~7 s over 20 opts
+OPTION DDPG TRAINING          ~5-8 s            1045 s/option         >99.9%
+  (the 15000-step lax.scan)                     = ~20,900 s over 20
+
+PROJECTED TOTAL WALL CLOCK  ~= 5.6 - 5.8 hours, essentially ALL of it in the
+sequential option-training scans.
+
+Cross-checks (independent measurements that agree):
+  - Live run: 5/20 options in 84m02s, ETA 252m  -> 16.8 min/option (incl reconfig).
+  - cql_diag per-step extrapolation: 69.7 ms/step x 15000 = 1045 s = 17.4 min/option.
+  - GPU 1 during option training: 100% util, ~585 W of 700 W, 33 GB. The other
+    SEVEN H100s sit idle the entire run.
+
+So: collection, RECODE, centroids, the behavioral graph, PNG dumps, mask reconfig,
+and XLA compilation are ALL negligible. The benchmark is, to three nines, the cost
+of 20 x 15000 = 300,000 sequential DDPG gradient steps.
+
+
+2. ANATOMY OF ONE DDPG STEP  (why each step costs 69.7 ms at B=1024)
+-------------------------------------------------------------------
+Each scan step processes _TERMS*B = 4*1024 = 4096 rows through the FTN backbone.
+Per step it runs, on those 4096 rows:
+  - target actor fwd + target critic fwd  (next-state Q)
+  - online critic fwd (TD term) + its grad
+  - online actor fwd + online critic fwd (actor loss) + grad
+  - CQL: cql_n_actions+1 = 11 EXTRA critic forwards (10 random actions, vmapped,
+    + 1 policy action) for the logsumexp conservative penalty
+  - two manual-Adam updates + two polyak target blends
+
+Measured per-step cost at the real B=1024, H=1024 (cql_diag.py):
+  cql_alpha=1.0, cql_n=10  (current) :  69.7 ms/step   -> 15000 steps = 1045 s
+  cql_alpha=1.0, cql_n=2             :  29.4 ms/step   -> 15000 steps =  441 s
+  cql_alpha=0.0  (pure DDPG)         :  16.0 ms/step   -> 15000 steps =  240 s
+
+==> THE CQL RANDOM-ACTION CRITIC EVALUATIONS ARE 77% OF PER-STEP TIME.
+    CQL turns 1 critic forward into ~12, and that 11x extra critic work is the
+    single biggest cost in the whole program.
+
+Secondary structural cost: the FTN backbone is a bank of H=1024 independent tiny
+MLPs (ftn_layers=8, inner_size=8), evaluated as einsum 'bki,kij->bkj' with the
+contracted dims i=j=8. These are thousands of 8x8 matmuls -- they do NOT use the
+H100 tensor cores and are launch/bandwidth-bound, not FLOP-bound (consistent with
+585 W of 700 W at "100%" util). The H100 is busy but far from its arithmetic peak;
+the kernel shape, not raw FLOPs, is the limiter.
+
+
+3. THE MULTI-GPU QUESTION (and the sequential-training constraint)
+-----------------------------------------------------------------
+The sequential per-option schedule is deliberate (each option capitalizes on the
+backbone the earlier options just moved) and must be preserved. That rules out the
+obvious "train 20 options on 20 GPUs" -- there is a true data dependency from one
+option to the next. The ONLY parallel axis left inside a single run is the per-step
+minibatch within one option.
+
+Why naive multi-GPU data-parallelism does NOT help a single run here:
+  - Option training is a 15,000-iteration lax.scan of SMALL steps (~70 ms, much of
+    it tiny 8x8 matmuls). Sharding the 4096-row batch across GPUs injects a
+    gradient all-reduce into EVERY scan step -> 15,000 sequential cross-device
+    collectives per option, 300,000 per run. At B=1024 the per-step compute is far
+    too small to amortize even NVLink all-reduce latency, so this would likely
+    be NEUTRAL-TO-SLOWER, not faster. Many small sequential steps is the worst
+    possible shape for multi-GPU.
+  - There is no round/epoch parallelism to exploit either: rounds=1, epochs=1.
+
+Net: at the current shape, throwing GPUs at ONE run buys you almost nothing. The
+single-run levers are algorithmic/per-step; the multi-GPU lever is across runs.
+
+
+4. RECOMMENDATIONS, RANKED BY PAYOFF
+------------------------------------
+A) BIGGEST MULTI-GPU WIN (preserves the sequential design exactly):
+   Embarrassingly-parallel FAN-OUT across the 8 H100s -- one full, independent
+   train_options_2.py per GPU for seeds / hyperparameter sweeps / ablations.
+   A 5.8 h run becomes 8 runs in the same 5.8 h (up to 8x research throughput),
+   with ZERO code change beyond CUDA_VISIBLE_DEVICES per process. Given each run
+   is ~6 h and only uses 1 GPU, this is the obvious use of "many GPUs" and the
+   thing actually leaving 7 GPUs idle today.
+
+B) BIGGEST SINGLE-RUN WIN (algorithmic, no multi-GPU needed):
+   Cut the CQL cost -- it is 77% of per-step time.
+     - cql_n_actions 10 -> 2:  per-step 69.7 -> 29.4 ms  => run ~5.8 h -> ~2.5 h (2.4x)
+     - cql_alpha 0 (pure DDPG): per-step 69.7 -> 16.0 ms => run ~5.8 h -> ~1.3 h (4.4x)
+     - or amortize CQL: apply the conservative penalty every K steps instead of
+       every step (keeps most of its regularizing effect at a fraction of cost).
+   (These are config/algorithm choices -- flagged because they dominate, not done.)
+
+C) TURN SPARE SINGLE-GPU CAPACITY INTO SPEED -- bigger batch, fewer steps:
+   The H100 is launch/bandwidth-bound at B=1024, not saturated. A larger
+   batch_size (e.g. 4096) costs well under 4x per step but gives a much better
+   gradient per step, so option_train_steps can be reduced for similar learning at
+   lower wall-clock. This converts the H100's spare memory/FLOPs into throughput
+   on ONE GPU, with no cross-device collectives. (Changes the experiment; flagged
+   as a lever, not applied.)
+
+D) ONLY-IF-YOU-INSIST true multi-GPU inside one run (preserves sequentiality):
+   Make the per-step batch LARGE (tens of thousands of rows -- e.g. raise
+   batch_size and/or fold CQL's action samples into the batch dim), THEN shard
+   that batch across the 8 GPUs with jax.sharding/Mesh so per-step compute finally
+   exceeds all-reduce latency. This only pays off once the step is big enough; at
+   today's B=1024 it is counterproductive. Effectively this is option (C) scaled
+   until data-parallelism becomes worthwhile.
+
+E) HOUSEKEEPING (small, free):
+   - Enable JAX's persistent compilation cache
+     (jax.config.update('jax_compilation_cache_dir', ...)) so the ~5-8 s scan
+     compile is paid once across the sweep runs in (A) and across rounds. Marginal
+     for one round, real for a fan-out of 8+ runs.
+   - ptxas warning (CUDA 12.4 vs >=12.6.3) is benign here; no action needed.
+
+
+5. ONE-LINE SUMMARY
+-------------------
+>99.9% of wall clock is 300,000 sequential DDPG steps; within a step, CQL's 10
+random-action critic evals are 77% of the cost. Because the work is many tiny
+sequential steps, more GPUs do NOT speed a single run -- use them to fan out
+seeds/sweeps (up to 8x), and speed a single run by cutting cql_n_actions and/or
+growing the batch while shrinking the step count.

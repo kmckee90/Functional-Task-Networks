@@ -20,6 +20,7 @@ from __future__ import annotations
 import numpy as np
 import jax
 import jax.numpy as jnp
+from jax.scipy.special import logsumexp
 
 import recode as recode_mod
 from ftn import (actor_forward, actor_init, anneal_ste_mask, critic_forward,
@@ -76,11 +77,12 @@ def membership_dev(obs, centroids):
     return jnp.argmin(d, axis=1)
 
 
-def reward_done(next_obs, cid, centroids, boundary, goal, shaping, step_cost):
+def reward_done(next_obs, cid, centroids, boundary, goal, shaping, step_cost, dist_reward=False):
     ids = membership_dev(next_obs, centroids)
     member = (ids == cid).astype(jnp.float32)
     dist = jnp.linalg.norm(next_obs - centroids[cid], axis=1)
-    reward = goal * member - shaping * dist - step_cost
+    # dist_reward: dense negative distance-to-centroid; else sparse membership reward.
+    reward = -dist if dist_reward else goal * member - shaping * dist - step_cost
     # Continuous-control semantics: membership is a recurring per-step reward that
     # BOOTSTRAPS (V_inside -> ~goal/(1-gamma)), not an absorbing terminal. Only the
     # world boundary (/timeout) ends the episode, so the option learns to stay in.
@@ -226,6 +228,8 @@ class OptionsAgent:
         gamma, tau = cfg.gamma, cfg.tau
         alr, clr, B = cfg.actor_lr, cfg.critic_lr, cfg.batch_size
         goal, shaping, step_cost = cfg.option_goal_reward, cfg.option_shaping, cfg.option_step_cost
+        dist_reward = bool(getattr(cfg, "dist_reward", False))
+        cql_alpha, cql_n, act_dim = cfg.cql_alpha, cfg.cql_n_actions, cfg.act_dim
         nsteps = self.option_train_steps
         raw = self.raw_obs_dim  # membership/reward use the raw color (first raw dims of aug obs)
 
@@ -253,7 +257,7 @@ class OptionsAgent:
         # ---- membership-relabeled MC returns over the ordered buffer ----
         def _returns(nobs, bnd, cid, centroids):
             # nobs may be history-augmented; membership/reward use the raw color.
-            r, d = reward_done(nobs[:, :raw], cid, centroids, bnd, goal, shaping, step_cost)
+            r, d = reward_done(nobs[:, :raw], cid, centroids, bnd, goal, shaping, step_cost, dist_reward)
             return compute_mc_returns(r, d, gamma)
         self._returns = jax.jit(_returns)
 
@@ -270,7 +274,13 @@ class OptionsAgent:
 
             def step(carry, _):
                 ap, cp, at, ct, aos, cos_, key = carry
-                key, ik = jax.random.split(key)
+                # Extra subkey for CQL random action sampling only when enabled, so
+                # the RNG stream (and thus results) is byte-identical to pure DDPG
+                # when cql_alpha == 0.
+                if cql_alpha != 0.0:
+                    key, ik, qk = jax.random.split(key, 3)
+                else:
+                    key, ik = jax.random.split(key)
                 # One pooled batch over all terms (main + siblings) -> a single
                 # batch-(_TERMS*B) forward instead of _TERMS small ones.
                 idx = jax.random.randint(ik, (_TERMS * B,), 0, N)
@@ -281,7 +291,8 @@ class OptionsAgent:
                 ids = membership_dev(no_raw, centroids)
                 member = (ids == cid_rows).astype(jnp.float32)
                 dist = jnp.linalg.norm(no_raw - centroids[cid_rows], axis=1)
-                r = goal * member - shaping * dist - step_cost
+                # dist_reward: dense negative distance-to-centroid; else membership.
+                r = -dist if dist_reward else goal * member - shaping * dist - step_cost
                 # Continuous-control: membership reward bootstraps; only the world
                 # boundary terminates (see reward_done).
                 d = bd
@@ -293,7 +304,27 @@ class OptionsAgent:
                     q_next = _critic_rows(ct, no, a_next, mc_rows)
                     target = jax.lax.stop_gradient(r + gamma * (1.0 - d) * q_next)
                     q = _critic_rows(cp, o, a, mc_rows)
-                    return jnp.sum(w_rows * (q - target) ** 2) / B
+                    loss = jnp.sum(w_rows * (q - target) ** 2) / B
+                    if cql_alpha != 0.0:
+                        # Conservative penalty: push Q DOWN on OOD/random actions and
+                        # UP on the dataset action (q, reused from the TD term). Each
+                        # row keeps its own option critic mask (mc_rows), so the
+                        # conservatism is per-option. CQL(H) continuous approximation:
+                        # logsumexp over cql_n uniform actions on the tanh box plus the
+                        # current policy action ~ soft max_a Q(s,a). Actions are
+                        # stop-grad'd -- only the critic is regularized, not the policy.
+                        rows = o.shape[0]  # _TERMS * B
+                        a_rand = jax.random.uniform(qk, (cql_n, rows, act_dim),
+                                                    minval=-1.0, maxval=1.0)
+                        q_rand = jax.vmap(lambda ar: _critic_rows(cp, o, ar, mc_rows))(a_rand)
+                        a_pi = jax.lax.stop_gradient(_actor_rows(ap, o, ma_rows))
+                        q_pi = _critic_rows(cp, o, a_pi, mc_rows)[None]    # (1, rows)
+                        q_cat = jnp.concatenate([q_rand, q_pi], axis=0)    # (cql_n+1, rows)
+                        # -log(M) keeps the scale ~invariant to the sample count, so
+                        # cql_alpha's meaning is stable as cql_n_actions changes.
+                        lse = logsumexp(q_cat, axis=0) - jnp.log(cql_n + 1.0)
+                        loss = loss + cql_alpha * jnp.sum(w_rows * (lse - q)) / B
+                    return loss
                 cl, cg = jax.value_and_grad(critic_loss)(cp)
                 cp, cos_ = adam_update(cp, cg, cos_, clr)
 

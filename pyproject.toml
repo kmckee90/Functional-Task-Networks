@@ -2,7 +2,7 @@
 name = "functional_task_networks"
 version = "0.1.0"
 description = ""
-requires-python = "==3.11.*"
+requires-python = "==3.12.*"
 dependencies = [
     # torch+cuDNN are pinned to a cu124-matched set. The uv cache is SHARED across all
     # projects on this box (UV_CACHE_DIR=/data/.cache/uv), so a torch/cuda churn elsewhere

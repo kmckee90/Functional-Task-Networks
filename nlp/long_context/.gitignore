@@ -1,0 +1,8 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+data/processed/
+runs/
+*.pt
+!configs/
+!configs/*.yaml

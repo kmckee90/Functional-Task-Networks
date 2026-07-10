@@ -1,0 +1,6 @@
+transformers>=4.51,<6
+accelerate>=1.0
+datasets>=3.0,<6
+sentencepiece
+pyyaml>=6.0
+tqdm

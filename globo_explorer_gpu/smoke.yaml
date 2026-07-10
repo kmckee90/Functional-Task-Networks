@@ -1,0 +1,11 @@
+# Tiny end-to-end smoke: exercise collection + a couple train rounds fast.
+total_steps: 120
+warmup: 40
+batch: 16
+train_interval: 40
+train_iters: 6
+replay_capacity: 2000
+goal_memory_length: 1000
+recode_memory: 500
+offline_scan_max: 512
+render_interval: 0

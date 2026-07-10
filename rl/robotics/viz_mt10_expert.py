@@ -1,8 +1,10 @@
 """Visualize a trained MT10 expert-BC FTN model: arm rollout + live FTN mask.
 
-Loads a checkpoint saved by train_mt10_expert.py (`--name ...` -> `*.pt`), then
-for each task in the training order rolls out one or more greedy eval episodes
-and renders a side-by-side GIF:
+Loads a checkpoint saved by train_mt10_bc.py (`--name ...` -> `*.pt`, or the
+per-phase `knowledge_transfer/*_ntasksK.pt` snapshots), then for each task in
+the training order — or an explicit `--tasks` selection, which may include
+held-out tasks the checkpoint never trained on — rolls out one or more greedy
+eval episodes and renders a side-by-side GIF:
 
     +-----------------------------+-------------------------------+
     |   Meta-World render          |   FTN mask state (EMA)        |
@@ -20,11 +22,18 @@ previous task's mask fading while the new task's mask lights up.
 By default the per-task mask is the one stored at training time
 (`stored_m_a[ti]`); `--mask-source reconfig` instead recovers each task's mask
 at eval from its expert support (full-FTN protocol), applying the same lateral
-spatial smoothing the trainer used.
+spatial smoothing the trainer used. Held-out tasks (via --tasks) have no stored
+mask and require the default `--mask-source reconfig` — this is the FTN
+knowledge-transfer demo: a partially-trained model recovering a working mask
+for a task it never trained on.
 
-Example:
+Examples:
     uv run python viz_mt10_expert.py --ckpt results_expert_myrun_ftn_0.pt \
         --episodes 1 --out rollout.gif
+    # Knowledge transfer: model trained on 3 tasks, demoed on two hold-outs.
+    uv run python viz_mt10_expert.py \
+        --ckpt knowledge_transfer/results_expert_myrun_ftn_0_ntasks3.pt \
+        --tasks window-close-v3 drawer-close-v3 --out transfer.gif
 """
 
 from __future__ import annotations
@@ -42,7 +51,7 @@ import torch
 from ftn import mask_to_grid
 from metaworld.policies import ENV_POLICY_MAP  # noqa: F401  (kept for parity)
 from PIL import Image, ImageDraw
-from train_mt10_expert import (
+from train_mt10_bc import (
     BCAgent,
     ExpertBCConfig,
     generate_or_load_demos,
@@ -60,7 +69,7 @@ torch.set_default_device(DEVICE)
 
 class RenderTaskEnv:
     """One MT10 env class with offscreen rendering. Standard reset (random goal
-    variant), same obs/act handling as train_mt10_expert.StandardTaskEnv."""
+    variant), same obs/act handling as train_mt10_bc.StandardTaskEnv."""
 
     def __init__(self, name, env_cls, tasks, seed, camera, height, width):
         self.name = name
@@ -91,6 +100,12 @@ class RenderTaskEnv:
 
 def build_render_envs(task_names, seed, camera, height, width):
     mt10 = metaworld.MT10(seed=seed)
+    unknown = sorted(set(task_names) - set(mt10.train_classes))
+    if unknown:
+        raise SystemExit(
+            f"Unknown MT10 task(s): {unknown}. "
+            f"Available: {sorted(mt10.train_classes)}"
+        )
     out = []
     for i, name in enumerate(task_names):
         tasks = [t for t in mt10.train_tasks if t.env_name == name]
@@ -263,13 +278,24 @@ demos = None
 def run(args):
     global demos
     agent, cfg, ck = load_agent(args.ckpt)
-    tasks = ck["tasks"]
-    phases_done = ck.get("phases_done", len(tasks))
-    tasks = list(tasks[:phases_done])  # only visualize tasks the model trained on
+    trained_tasks = list(ck["tasks"])
+    phases_done = ck.get("phases_done", len(trained_tasks))
+    if args.tasks:
+        # Explicit selection — may include held-out tasks the model never
+        # trained on (the FTN knowledge-transfer demo).
+        tasks = list(args.tasks)
+    else:
+        tasks = trained_tasks[:phases_done]  # tasks the model trained on
+    if not tasks:
+        raise SystemExit(
+            "Checkpoint has trained on 0 tasks; pass --tasks to pick MT10 "
+            "tasks to demo (with --mask-source reconfig)."
+        )
     print(
-        f"Loaded {args.ckpt}: {len(tasks)} task(s) trained, "
+        f"Loaded {args.ckpt}: {phases_done} task(s) trained, "
         f"square_dim={cfg.ftn_square_dim}, k={cfg.ftn_k}, H={cfg.ftn_hidden_size}"
     )
+    print(f"Visualizing: {tasks}")
 
     seed = cfg.seed if args.seed is None else args.seed
     envs = build_render_envs(
@@ -286,6 +312,18 @@ def run(args):
     frames: list[Image.Image] = []
 
     for ti, env in enumerate(envs):
+        # Stored masks are keyed by *training-phase* index, which differs from
+        # ti when --tasks reorders or subsets; held-out tasks have none.
+        if args.mask_source == "stored":
+            train_idx = (
+                trained_tasks.index(env.name) if env.name in trained_tasks else -1
+            )
+            if not (0 <= train_idx < phases_done) or train_idx not in agent.stored_m_a:
+                raise SystemExit(
+                    f"No stored mask for '{env.name}' (trained tasks: "
+                    f"{trained_tasks[:phases_done]}). Held-out tasks need "
+                    f"--mask-source reconfig."
+                )
         for ep in range(args.episodes):
             # Determine the active mask. For reconfig, recover a fresh mask
             # per episode from the expert support (an independent mask search,
@@ -293,7 +331,7 @@ def run(args):
             if args.mask_source == "reconfig":
                 mask = reconfig_mask(agent, demos[env.name], cfg)
             else:
-                mask = agent.stored_m_a[ti]
+                mask = agent.stored_m_a[train_idx]
 
             # With --success-only, retry the episode until it succeeds (or we
             # run out of attempts), committing only the successful attempt's
@@ -338,7 +376,18 @@ def run(args):
 def main():
     p = argparse.ArgumentParser()
     p.add_argument(
-        "--ckpt", required=True, help="Checkpoint .pt from train_mt10_expert."
+        "--ckpt", required=True, help="Checkpoint .pt from train_mt10_bc."
+    )
+    p.add_argument(
+        "--tasks",
+        nargs="+",
+        default=None,
+        metavar="TASK",
+        help="One or more MT10 task names to demo (e.g. drawer-open-v3 "
+        "pick-place-v3), in the order given. May include held-out tasks the "
+        "checkpoint never trained on — those require --mask-source reconfig "
+        "(the default), which recovers the mask from the task's expert support "
+        "(FTN knowledge transfer). Default: all tasks the checkpoint trained on.",
     )
     p.add_argument("--out", default="rollout.gif", help="Output GIF path.")
     p.add_argument("--episodes", type=int, default=1, help="Eval episodes per task.")

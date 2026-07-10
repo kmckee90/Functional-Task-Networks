@@ -1,0 +1,8 @@
+# FTN-Agent sync excludes (design.md §7.4). This folder IS the synced workspace.
+# Keep _inbox/ SYNCED (it's the small laptop->pod activity bridge). Exclude any
+# large/runtime data in case it's ever configured under the workspace.
+__pycache__/
+*.pt
+ftn_agent_state/
+ftn_agent_work/
+data_cache/

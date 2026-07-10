@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+_inbox/
+ftn_agent_state/
+ftn_agent_work/
+data_cache/
+*.pt
+_smoke.py
+smoke.log

@@ -1,0 +1,83 @@
+# default.yaml — single source of truth for globo_explorer_gpu (JAX + warpcraft).
+# A custom --config is overlaid on top of this (specify only changed keys).
+# Mirrors ../globo_explorer/default.yaml, adapted to the warpcraft GPU engine.
+
+# --- lifetime ---
+total_steps: 0            # 0 = unlimited (single continuous lifetime)
+seed: 7                   # world seed (reproducible terrain) + model init seed
+
+# --- warpcraft globo env ---
+render_width: 64          # engine render (capture) resolution
+render_height: 64
+max_episode_steps: 5000   # episode length before timeout truncation (lifetime continues)
+active_channels: [0, 1]   # branching heads: 0=LOCOMOTION(10), 1=LOOK(5); add 2=INTERACT,3=CRAFT
+advance_weather: true     # step through globo's weather Markov chain
+
+# --- observation ---
+obs_width: 48             # agent input (downscaled from render)
+obs_height: 24
+
+# --- reservoir / decoder (frozen front-end + trained heads) ---
+reservoir_channels: 64
+reservoir_kernel: 7
+reservoir_stride: 4
+reservoir_recur_kernel: 3
+reservoir_input_scale: 23.75
+reservoir_recur_scale: 1.49
+reservoir_tc: 1.0
+reservoir_sparsity: 0.5
+decoder_layer_size: 256
+num_novelty_bins: 8
+
+# --- RECODE (intrinsic novelty over downscaled grayscale image) ---
+recode_down_h: 32
+recode_down_w: 48
+recode_rgb: false
+recode_memory: 5000
+recode_k: 10                       # EMA neighbors
+recode_knn_k: 10                   # reward k
+recode_kappa: 0.2                  # cluster spacing (relative_tolerance)
+recode_gamma: 0.9995               # count decay
+recode_insertion_probability: 0.5
+recode_decay: 0.9995               # d2_ema decay
+
+# --- reward shaping ---
+use_online_novelty: true
+use_offline_novelty: true
+online_coef: 1.0
+offline_coef: 1.0
+env_reward_coef: 10.0
+death_penalty: 1.0
+main_sparse_reward_scale: 5.0
+goal_sparse_reward_scale: 5.0
+
+# --- goal / prioritized replay ---
+goal_memory_length: 50000
+prioritized_replay: true
+offline_scan_max: 8192
+
+# --- DQN ---
+gamma: 0.90
+gamma_env: 0.9975
+lr: 0.0003
+grad_clip: 1.0
+batch: 256                # also the trajectory (block) length
+replay_capacity: 100000
+target_update_tau: 1.0    # intrinsic target: hard copy
+target_update_tau_env: 0.01
+epsilon_start: 1.0
+epsilon_end: 0.025
+epsilon_decay: 10000
+
+# --- cadence ---
+train_interval: 50        # collect J steps, then...
+train_iters: 50           # ...run K prioritized updates
+warmup: 500
+checkpoint_interval: 0
+
+# --- GIF peeks ---
+render_interval: 5000
+render_window: 1000
+render_max_frames: 1000
+
+name: run

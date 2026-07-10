@@ -34,10 +34,10 @@ from PIL import Image
 # Configuration
 # =============================================================================
 
+Config = config.Default()
 Model = models.NeuroModel
 DataGen = tasks.DataGenSine
-MaskConfigurer = masks.SmoothKWTA
-Config = config.Default()
+MaskConfigurer = Config.MASK_CONFIGURER
 
 
 # Generate the task images
@@ -54,13 +54,45 @@ subprocess.run([sys.executable, "tasks.py"], check=True)
 class ReplayBuffer:
     """Stores (data, mask) pairs for offline replay across all experiment phases."""
 
-    def __init__(self, maxlen):
+    def __init__(self, maxlen, batch_size=None, shuffle_on_replay=False):
         self.data = deque(maxlen=maxlen)
         self.masks = deque(maxlen=maxlen)
+        # Rows kept per replay minibatch; None keeps the full observed batch.
+        self.batch_size = batch_size
+        # If True, keep the full observed batch and draw a fresh random
+        # `batch_size` rows on each replay; if False, subsample once at store
+        # time and reuse that fixed subset.
+        self.shuffle_on_replay = shuffle_on_replay
 
     def add(self, dat, m):
+        x, y = dat
+        n = x.shape[0]
+        if (
+            not self.shuffle_on_replay
+            and self.batch_size is not None
+            and self.batch_size < n
+        ):
+            idx = torch.randperm(n, device=x.device)[: self.batch_size]
+            dat = (x[idx], y[idx])
         self.data.append(dat)
         self.masks.append(m.clone())
+
+    def get(self, i):
+        """Return stored (x, y) at index i.
+
+        When SHUFFLE_ON_REPLAY is set, draw a fresh random `batch_size` rows
+        from the full stored batch; otherwise return the stored batch as-is
+        (already subsampled at store time).
+        """
+        x, y = self.data[i]
+        if (
+            self.shuffle_on_replay
+            and self.batch_size is not None
+            and self.batch_size < x.shape[0]
+        ):
+            idx = torch.randperm(x.shape[0], device=x.device)[: self.batch_size]
+            return x[idx], y[idx]
+        return x, y
 
     def resize_masks(self, new_size):
         """Zero-pad stored masks after model expansion (neurogenesis)."""
@@ -409,7 +441,7 @@ def run_phase(
                                 0, len(overlap), (Config.N_REPLAY_SAMPLES,)
                             )
                             for idx in idxes:
-                                x_r, y_r = replay_buffer.data[idx.item()]
+                                x_r, y_r = replay_buffer.get(idx.item())
                                 m_r = replay_buffer.masks[idx.item()]
                                 r_pred = model(x_r.unsqueeze(0), m_r)
                                 if Config.CLASSIFICATION:
@@ -585,7 +617,11 @@ if __name__ == "__main__":
     optimizer = torch.optim.AdamW(
         model.parameters(), lr=Config.TRAIN_LR, weight_decay=Config.WEIGHT_DECAY
     )
-    replay = ReplayBuffer(maxlen=Config.REPLAY_MAXLEN)
+    replay = ReplayBuffer(
+        maxlen=Config.REPLAY_MAXLEN,
+        batch_size=getattr(Config, "REPLAY_BATCH_SIZE", None),
+        shuffle_on_replay=getattr(Config, "SHUFFLE_ON_REPLAY", False),
+    )
 
     ent = -Config.Y_DIM * np.log(1.0 / Config.Y_DIM) * (1.0 / Config.Y_DIM)
     print(

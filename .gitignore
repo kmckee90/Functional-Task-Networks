@@ -65,3 +65,8 @@ nohup.out
 .vscode/
 .idea/
 .claude/
+
+*.png
+*.gif
+*.csv
+*.pdf

@@ -1,0 +1,700 @@
+\documentclass[11pt]{article}
+
+% ---------------------------------------------------------------------------
+% Packages
+% ---------------------------------------------------------------------------
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{bm}
+\usepackage{booktabs}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{xcolor}
+\usepackage{graphicx}
+\usepackage{enumitem}
+\usepackage[hidelinks]{hyperref}
+
+% ---------------------------------------------------------------------------
+% Notation macros
+% ---------------------------------------------------------------------------
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\Ehat}{\hat{\mathbb{E}}}
+\newcommand{\obs}{s}
+\newcommand{\act}{a}
+\newcommand{\parMLP}{\Phi}                 % ParallelMLP feature bank
+\newcommand{\mask}{\bm{m}}                 % k-hot mask
+\newcommand{\masksoft}{\tilde{\bm{m}}}     % STE (soft) mask
+\newcommand{\Ho}{H}                        % number of parallel sub-networks
+\newcommand{\kk}{k}                        % active sub-networks
+\newcommand{\kwta}{\operatorname{KWTA}}
+\newcommand{\topk}{\operatorname{top\text{-}k}}
+\newcommand{\code}[1]{\texttt{\small #1}}
+
+\newtheorem{definition}{Definition}
+
+\title{\bfseries Adapting Functional Task Networks to\\ Offline Reinforcement Learning}
+\author{Kevin L.\ McKee\\ \normalsize Astera Institute}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Functional Task Networks (FTN) are a continual-learning architecture in which a
+single shared bank of small parallel sub-networks is specialized to a task not by
+retraining its weights but by selecting a sparse, per-task binary \emph{mask} over
+the sub-networks that feed a linear readout. Tasks that share structure share
+active sub-networks; tasks that do not are routed through disjoint sub-networks,
+which is what makes the architecture resistant to catastrophic forgetting. This
+document is the technical reference for three concrete adaptations of FTN to
+value-based and policy-based learning from stored (off-policy / offline)
+experience: (i) \textbf{FTN--DQN}, a discrete-action deep $Q$-network; (ii)
+\textbf{FTN--DDPG}, a continuous-control deterministic actor--critic; and (iii)
+\textbf{FTN--BC}, offline behavior cloning of expert demonstrations. All three
+share the same FTN backbone, the same annealed straight-through mask search, and
+the same mask-overlap-filtered cross-task replay. We describe exactly how each
+piece is implemented---the network modules, the mask-reconfiguration objectives,
+the replay/consolidation machinery, and the per-phase training loops---so that
+the three implementations can be read, reproduced, and extended. Results and
+benchmark tasks are deliberately out of scope; this is documentation of
+\emph{method}, not of performance.
+\end{abstract}
+
+\tableofcontents
+
+% ===========================================================================
+\section{Overview}
+% ===========================================================================
+
+The three techniques documented here all instantiate the same idea in three
+different learning regimes. A shared, fixed-weight backbone---a bank of $\Ho$
+small independent multilayer perceptrons whose scalar outputs are gated by a
+$\kk$-hot binary mask before a linear readout---is specialized to each new task by
+\emph{searching for a mask}, not by fine-tuning weights. Learning a sequence of
+tasks $1,2,\dots,N$ therefore decomposes, per task, into two operations:
+
+\begin{enumerate}[leftmargin=2em,itemsep=2pt]
+  \item \textbf{Mask reconfiguration.} Given a small support set of experience for
+  the current task, find a $\kk$-hot mask $\mask \in \{0,1\}^{\Ho}$,
+  $\bm{1}^\top\mask = \kk$, that minimizes a task-appropriate loss. The mask is
+  found by a stochastic, annealed straight-through estimator (STE) search
+  (\S\ref{sec:ste}), which optimizes continuous logits while committing to a hard
+  top-$k$ selection at every step.
+  \item \textbf{Backbone update under the committed mask.} With the mask fixed,
+  take gradient steps on the backbone weights using the learning rule of the
+  regime---TD for DQN, deterministic policy gradient for DDPG, or supervised MSE
+  for BC. Crucially, gradients flow only through the active sub-networks, so a
+  task can only disturb the sub-networks its mask selects.
+\end{enumerate}
+
+Cross-task retention is handled by a single shared mechanism
+(\S\ref{sec:consolidation}): archived experience from past phases is stored
+\emph{tagged with the mask it was collected under}, and during the current phase
+we additionally replay past chunks whose mask \emph{partially overlaps} the
+current one. Because those chunks are forwarded under their own masks, the
+resulting gradients land on exactly the sub-networks shared between old and new
+tasks, consolidating them, while leaving disjoint sub-networks untouched.
+
+Table~\ref{tab:map} maps each technique to its source file and summarizes what
+changes across the three. The remainder of the document is organized as:
+\S\ref{sec:backbone} the shared backbone; \S\ref{sec:ste} the mask search;
+\S\ref{sec:consolidation} the shared consolidation mechanism and the ablation
+baselines; \S\ref{sec:dqn} FTN--DQN; \S\ref{sec:ddpg} FTN--DDPG; \S\ref{sec:bc}
+FTN--BC.
+
+\begin{table}[t]
+\centering
+\small
+\begin{tabular}{@{}llll@{}}
+\toprule
+ & \textbf{FTN--DQN} & \textbf{FTN--DDPG} & \textbf{FTN--BC}\\
+\midrule
+Source file & \code{train\_grid\_dqn.py} & \code{train\_mt10.py} & \code{train\_mt10\_expert.py}\\
+            &                            & \code{train\_cw.py}    & \\
+Networks    & 1 $Q$-net                  & actor + critic (+targets) & actor only\\
+Masks / task& 1 ($\mask$)                & 2 ($\mask_a,\mask_c$)     & 1 ($\mask_a$)\\
+Learning rule& TD($Q$)                   & deterministic PG          & supervised MSE\\
+Data source & online replay ring          & online replay ring        & offline expert demos\\
+Reconfig obj.& $Q$ vs.\ target/returns    & critic vs.\ returns, then $-Q$ & BC MSE\\
+Consolidation& per-phase replay, one mask & per-chunk replay, mask pair & per-task support, one mask\\
+\bottomrule
+\end{tabular}
+\caption{The three FTN adaptations and where they differ. All share the backbone
+of \S\ref{sec:backbone}, the mask search of \S\ref{sec:ste}, and the
+overlap-filtered consolidation of \S\ref{sec:consolidation}.}
+\label{tab:map}
+\end{table}
+
+% ===========================================================================
+\section{The shared FTN backbone}
+\label{sec:backbone}
+% ===========================================================================
+
+All three techniques are built on the modules in \code{ftn.py}. The backbone has
+two components: a bank of parallel sub-networks that maps an input to $\Ho$ scalar
+features, and a masked linear readout.
+
+\subsection{ParallelMLP: a bank of $\Ho$ independent sub-networks}
+
+The class \code{ParallelMLP} evaluates $\Ho$ small MLPs in parallel, each mapping
+the same input vector $x \in \R^{d_{\mathrm{in}}}$ to a scalar. Every sub-network
+has \code{layers} hidden layers of width \code{inner\_size} and a scalar output,
+so the internal size schedule is
+\[
+\texttt{sizes} = [\,d_{\mathrm{in}},\ \underbrace{d_h,\dots,d_h}_{\text{layers}},\ 1\,],
+\qquad d_h = \texttt{inner\_size}.
+\]
+The weights are stored as a stack of 3-D parameter tensors, one per layer
+transition $\ell$, of shape $(\Ho,\ \texttt{sizes}[\ell],\ \texttt{sizes}[\ell{+}1])$,
+with a matching $(\Ho,\ \texttt{sizes}[\ell{+}1])$ bias. The forward pass batches
+over both the data dimension and the $\Ho$ sub-networks with a single einsum per
+layer:
+\[
+h^{(\ell+1)}_{b,\,i,\,j} \;=\; \sum_{p} h^{(\ell)}_{b,\,i,\,p}\, W^{(\ell)}_{i,\,p,\,j} \;+\; b^{(\ell)}_{i,\,j},
+\]
+i.e.\ \code{einsum("bki,kij->bkj", h, W)}, where $b$ indexes the batch and
+$i \in \{1,\dots,\Ho\}$ indexes the sub-network. ReLU is applied after every layer
+except the last, and the trailing singleton output dimension is squeezed, giving a
+feature bank
+\[
+\parMLP(x) \;=\; z \;\in\; \R^{B \times \Ho}.
+\]
+Weights use a custom uniform initialization scaled by fan-in: for hidden layers
+the bound is $\sqrt{6/\text{fan\_in}}$ and for the output layer
+$\sqrt{6/(\text{fan\_in}+\text{fan\_out})}$; biases are drawn from
+$\mathcal{U}(\pm 0.1/\sqrt{\text{fan\_in}})$. Because the $\Ho$ sub-networks never
+mix, a mask that zeroes a sub-network's feature removes that sub-network's
+influence on the readout completely; only the readout weights and the masked
+sub-networks receive gradient.
+
+\subsection{Masked linear readout}
+\label{sec:readout}
+
+Given the feature bank $z \in \R^{B\times\Ho}$ and a mask $\mask\in\{0,1\}^{\Ho}$,
+the readout applies dropout, gates the features element-wise by the (broadcast)
+mask, and applies a bias-free linear map:
+\[
+y \;=\; W_{\mathrm{out}}\,\bigl(\operatorname{dropout}(z)\,\otimes\, \mask\bigr)^{\!\top}.
+\]
+Dropout is a train-time regularizer only; at rollout/eval the network is put in
+eval mode so action selection is deterministic. The three techniques differ only
+in the shape of $W_{\mathrm{out}}$ and the nonlinearity that follows:
+\begin{itemize}[leftmargin=1.5em,itemsep=1pt]
+  \item \textbf{\code{FTNActor}} ($W_{\mathrm{out}}\!:\Ho\to d_a$): output is
+  $\tanh(y)$, a bounded continuous action; input is the observation $\obs$.
+  \item \textbf{\code{FTNCritic}} ($W_{\mathrm{out}}\!:\Ho\to 1$): input is the
+  concatenation $[\obs,\act]$; output is a scalar $Q$-value.
+  \item \textbf{\code{FTNQNetwork}} ($W_{\mathrm{out}}\!:\Ho\to |\mathcal{A}|$):
+  input is $\obs$; output is a vector of $Q$-values, one per discrete action.
+\end{itemize}
+Because the mask multiplies the features (not the weights), the same set of
+backbone weights realizes different functions for different masks: the mask
+\emph{routes} the computation. The soft mask used during search
+(\S\ref{sec:ste}) enters at exactly the same place, so the search objective is
+differentiable with respect to it.
+
+The $Q$-network additionally provides a batched forward, \code{forward\_batched},
+that evaluates $E$ masks at once against a shared support batch: the expensive
+$\parMLP$ forward and dropout run \emph{once}, and only the per-mask gate and
+final linear are duplicated, producing an $(E, B, |\mathcal{A}|)$ tensor. This is
+what makes the batched mask search of \S\ref{sec:ste} cheap.
+
+% ===========================================================================
+\section{Annealed straight-through mask search}
+\label{sec:ste}
+% ===========================================================================
+
+Mask reconfiguration is the operation that specializes the shared backbone to a
+task. It is implemented once, in \code{anneal\_ste\_mask}, and reused by all three
+techniques with only the loss functional changing.
+
+\subsection{Problem and estimator}
+
+We seek a $\kk$-hot mask minimizing a task loss $\mathcal{L}$ that is only defined
+through a forward pass of a masked network:
+\[
+\mask^\star \;=\; \arg\min_{\mask\in\{0,1\}^{\Ho},\ \bm 1^\top\mask=\kk}\ \mathcal{L}(\mask).
+\]
+This is a combinatorial selection over $\binom{\Ho}{\kk}$ subsets. We relax it with
+a \emph{straight-through} estimator over a vector of continuous logits
+$\bm\theta\in\R^{\Ho}$. At each step we form a hard top-$k$ selection and pass
+gradients through as if it were the identity:
+\begin{align}
+\mask_{\mathrm{hard}} &= \kwta\!\bigl(\bm\theta + \bm\epsilon,\ \kk\bigr), \qquad \bm\epsilon\sim\mathcal N(\bm 0,\ \tau^2 \bm I),\\
+\masksoft &= \mask_{\mathrm{hard}} + \bm\theta - \operatorname{sg}(\bm\theta),
+\label{eq:ste}
+\end{align}
+where $\kwta(\cdot,\kk)$ returns the binary indicator of the top-$\kk$ entries and
+$\operatorname{sg}$ is stop-gradient. In the forward pass $\masksoft =
+\mask_{\mathrm{hard}}$ (a hard mask); in the backward pass
+$\partial\masksoft/\partial\bm\theta = \bm I$, so $\nabla_{\bm\theta}\mathcal{L}$
+is the gradient of the loss with respect to the (gated) features. The network is
+therefore always evaluated under a genuine $\kk$-hot mask, but the logits still
+receive a smooth learning signal.
+
+\subsection{Annealing schedule}
+
+The noise $\bm\epsilon$ added \emph{before} the top-$k$ is what lets the search
+explore alternative subsets early and settle late. Its scale is annealed
+geometrically. With \code{n\_steps} total steps and $\text{denom}=\max(1,
+\texttt{n\_steps}/4)$, at step $t$
+\[
+\tau_t \;=\; \sigma_t \cdot \exp\!\left(-\,t/\text{denom}\right),\qquad
+\sigma_t = \max\bigl(\operatorname{std}(\bm\theta),\ 0.1\bigr),
+\]
+so the perturbation is scaled to the current spread of the logits and decays to a
+near-deterministic top-$k$ by the end of the search. The logits are optimized by
+plain SGD (\code{reconfig\_lr}). Throughout, the routine tracks the
+\emph{lowest-loss hard mask seen} and returns it, together with the final logits
+(for warm-starting), the initial loss, and the final loss. Warm-starting
+initializes $\bm\theta$ from a previous mask's logits scaled by a small noise
+factor; cold-starting initializes from $\texttt{noise\_scale}\cdot\mathcal
+N(\bm 0,\bm I)$. Algorithm~\ref{alg:ste} gives the exact procedure.
+
+\begin{algorithm}[t]
+\caption{\code{anneal\_ste\_mask}: annealed STE search for one $\kk$-hot mask}
+\label{alg:ste}
+\begin{algorithmic}[1]
+\Require sizes $\Ho,\kk$; loss $\mathcal L(\cdot)$; steps $T$; lr $\eta$; init logits $\bm\theta_0$ or \textsc{None}; noise scale $c$
+\If{$\bm\theta_0$ is \textsc{None}} $\bm\theta \gets c\cdot\mathcal N(\bm 0,\bm I_{\Ho})$ \Comment{cold start}
+\Else\ $\bm\theta \gets c\cdot\bm\theta_0$ \Comment{warm start} \EndIf
+\State $\text{best}\gets\varnothing,\ \text{lowest}\gets+\infty,\ \text{denom}\gets\max(1, T/4)$
+\For{$t = 0,\dots,T-1$}
+  \State $\sigma \gets \max(\operatorname{std}(\bm\theta),\ 0.1)$;\quad $\tau \gets \sigma\,e^{-t/\text{denom}}$
+  \State $\mask_{\mathrm{hard}} \gets \kwta(\bm\theta + \tau\cdot\mathcal N(\bm 0,\bm I),\ \kk)$
+  \State $\masksoft \gets \mask_{\mathrm{hard}} + \bm\theta - \operatorname{sg}(\bm\theta)$ \Comment{Eq.~\eqref{eq:ste}}
+  \State $L \gets \mathcal L(\masksoft)$
+  \If{$L < \text{lowest}$} $\text{lowest}\gets L$; $\text{best}\gets \mask_{\mathrm{hard}}$ \EndIf
+  \State SGD step on $\bm\theta$ with $\nabla_{\bm\theta} L$
+\EndFor
+\State \Return best hard mask, final logits $\bm\theta$, initial loss, lowest loss
+\end{algorithmic}
+\end{algorithm}
+
+\subsection{Batched search}
+\label{sec:ste-batched}
+
+For eval-time recovery we often want several \emph{independent} cold-started
+searches on the same support (to average over the stochasticity of the search).
+\code{anneal\_ste\_mask\_batched} runs $E$ searches at once: the logits are an
+$(E,\Ho)$ matrix, the loss functional returns a per-row $(E,)$ vector, and the sum
+of the per-row losses is back-propagated in a single graph while each row tracks
+its own best hard mask. Combined with \code{forward\_batched}
+(\S\ref{sec:readout}), the shared support is forwarded through $\parMLP$ once for
+all $E$ rows. FTN--DQN uses this at eval; FTN--DDPG and FTN--BC call the scalar
+search per eval episode instead.
+
+\subsection{Lateral spatial smoothing (optional)}
+\label{sec:smooth}
+
+FTN--BC additionally post-processes each searched mask with the
+\code{LateralSmoother} (a port of \emph{SmoothKWTA}). The flat $\kk$-hot mask is
+laid onto a square grid of $\texttt{square\_dim}\times\texttt{square\_dim}$ blocks
+(requiring $\Ho$ to be a multiple of $\texttt{square\_dim}^2$), smoothed by
+\code{lateral\_steps} passes of a uniform-kernel 2-D convolution mixed back into
+the mask by a Polyak coefficient, and re-sparsified with top-$\kk$:
+\[
+\mask \gets \kwta\!\Bigl(\underbrace{\lambda\,\mask + (1-\lambda)\,\operatorname{conv}(\mask)}_{\text{repeated \texttt{lateral\_steps} times}},\ \kk\Bigr).
+\]
+This clusters a task's active sub-networks into a contiguous spatial blob rather
+than a random scatter, which encourages neighboring tasks to reuse neighboring
+sub-networks. Smoothing is a no-op (identity) when
+$\texttt{lateral\_steps}\le 0$ or $\texttt{lateral\_polyak}\ge 1$; it is only
+wired into FTN--BC.
+
+% ===========================================================================
+\section{Cross-task consolidation and baselines}
+\label{sec:consolidation}
+% ===========================================================================
+
+The mechanism that lets a task be learned without destroying earlier tasks is
+shared across all three techniques, differing only in bookkeeping granularity.
+
+\subsection{Mask-overlap-filtered replay}
+
+Every completed phase archives its experience tagged with the mask(s) it was
+collected under. When learning the current task with mask $\mask_{\mathrm{cur}}$,
+we compute the overlap of each archived mask $\mask_{\mathrm{old}}$,
+\begin{equation}
+\rho(\mask_{\mathrm{cur}},\mask_{\mathrm{old}}) \;=\; \frac{\mask_{\mathrm{cur}}^\top \mask_{\mathrm{old}}}{\max(\bm 1^\top\mask_{\mathrm{cur}},\,1)}
+\;=\; \frac{|\,\text{active}_{\mathrm{cur}}\cap\text{active}_{\mathrm{old}}\,|}{\kk},
+\label{eq:rho}
+\end{equation}
+(the last equality holds for fixed-$\kk$ masks), and \emph{replay only those
+archived chunks whose overlap lies in the band $(\rho_{\mathrm{low}},
+\rho_{\mathrm{high}}]$}. The rationale is a three-way split:
+\begin{itemize}[leftmargin=1.5em,itemsep=1pt]
+  \item $\rho \le \rho_{\mathrm{low}}$: the old task uses essentially disjoint
+  sub-networks; the current update cannot disturb it, so no replay is needed.
+  \item $\rho > \rho_{\mathrm{high}}$ (in particular $\rho=1$, the same mask):
+  the data is effectively current-task data and already covered by the ordinary
+  replay ring; replaying it adds nothing.
+  \item $\rho \in (\rho_{\mathrm{low}}, \rho_{\mathrm{high}}]$: the tasks
+  \emph{partially} share sub-networks. Here a current-task gradient step could
+  degrade the old task through the shared sub-networks, so we replay the old
+  chunk. Because we forward it \emph{under its own mask}, its gradient lands on
+  exactly the shared sub-networks and pins their behavior to what the old task
+  needs, consolidating the overlap.
+\end{itemize}
+The crucial implementation detail is that archived data is always forwarded under
+the mask it belongs to, never under the current mask---so the data-to-mask
+correspondence is exact and the gradient is a legitimate old-task gradient.
+
+\subsection{Ablation baselines}
+\label{sec:baselines}
+
+FTN--DDPG and FTN--BC implement three reference conditions that share the entire
+pipeline except for how masks are chosen, so result cells are directly
+comparable:
+\begin{description}[leftmargin=1.5em,itemsep=1pt]
+  \item[\code{no\_mask}] An all-ones mask ($\kk=\Ho$), frozen. The readout sees
+  every sub-network; this is plain dense learning over the backbone and is the
+  catastrophic-forgetting reference. Reconfig and consolidation are disabled
+  (identical masks give $\rho=1$, outside the band).
+  \item[\code{fixed\_mask}] An oracle disjoint allocation: task $i$ owns
+  sub-networks $[\,i\kk,(i{+}1)\kk)$, requiring $N\kk\le\Ho$, recalled exactly at
+  eval by (oracle) task identity. Disjoint masks give $\rho=0$, so there is no
+  consolidation and forward-transfer eval cells are undefined.
+  \item[\code{stored\_mask}] Full FTN training, but at eval the mask is recalled
+  from what the task used during its own training phase rather than re-derived
+  from support. This isolates mask \emph{recovery} from mask \emph{storage}.
+\end{description}
+The default (full FTN) condition instead \emph{recovers} each task's mask at eval
+by a fresh cold-started search on freshly gathered support, so it needs no oracle
+task identity.
+
+% ===========================================================================
+\section{FTN--DQN: discrete-action value learning}
+\label{sec:dqn}
+% ===========================================================================
+
+FTN--DQN (\code{train\_grid\_dqn.py}) applies FTN to a discrete-action deep
+$Q$-network. There is a single network, \code{FTNQNetwork}, and a single mask
+$\mask$ per task; the target network is a Polyak-averaged copy.
+
+\subsection{TD update under a fixed mask}
+
+With mask $\mask$ committed, one gradient step is the standard DQN TD update, but
+every forward pass is masked. For a minibatch of transitions $(\obs,\act,r,\obs')$
+with terminal flag $d$,
+\begin{align}
+y &= r + \gamma\,(1-d)\,\max_{\act'} Q_{\bar\phi}(\obs',\act';\,\mask),\\
+\mathcal L_{\mathrm{TD}} &= \Ehat\Bigl[\bigl(Q_\phi(\obs,\act;\,\mask) - y\bigr)^2\Bigr],
+\end{align}
+where $Q_{\bar\phi}$ is the target network (same mask). We take an Adam step on
+$\phi$, then Polyak-update the target: $\bar\phi \gets (1-\tau)\bar\phi +
+\tau\phi$. The masked $\max$ and $\operatorname{gather}$ operate on the
+$|\mathcal A|$-vector output of the readout. (The loss scalar is not synced back
+to the host, since this update runs on the order of $10^5$ times per sweep.)
+
+\subsection{Mask reconfiguration objectives}
+\label{sec:dqn-recon}
+
+The reconfig loss $\mathcal L(\masksoft)$ passed to Algorithm~\ref{alg:ste} scores
+a candidate mask by how well the masked $Q$-net explains a rewarded support set.
+The support provides $(\obs,\act,r,\obs',d)$ and Monte-Carlo returns $G_t$
+(computed on the concatenated support, respecting episode boundaries via $d$).
+Let $q_{\obs} = \max_{\act'} Q_\phi(\obs,\act';\masksoft)$ be the masked greedy
+value. \code{reconfig\_objective} selects one of:
+\[
+\begin{array}{ll}
+\text{\code{td}} & \Ehat\bigl[(q_\obs - (r+\gamma(1-d)\max_{\act'}Q_{\bar\phi}(\obs',\act';\masksoft)))^2\bigr]\\[2pt]
+\text{\code{mse\_returns}} & \Ehat\bigl[(q_\obs - G)^2\bigr]\\[2pt]
+\text{\code{cos\_returns}} & -\cos\bigl(q_\obs,\ G\bigr)\quad\text{(scale-invariant)}\\[2pt]
+\text{\code{r\_returns}} & -\operatorname{Pearson}\bigl(q_\obs,\ G\bigr)\quad\text{(scale- \& offset-invariant; default)}
+\end{array}
+\]
+The default \code{r\_returns} is the negative Pearson correlation---i.e.\ a
+mean-centered cosine similarity---so the search need only find a mask under which
+the $Q$-values \emph{rank states the way the returns do}, without matching their
+magnitude or offset. This is robust to the arbitrary scale of a freshly-masked,
+untrained readout. The bootstrap (\code{td}) target is computed under the same
+soft mask inside \code{no\_grad}, so gradients flow only through the prediction.
+
+\subsection{Per-phase training loop}
+\label{sec:dqn-loop}
+
+For each task in sequence (\code{train\_grid\_dqn}):
+\begin{enumerate}[leftmargin=2em,itemsep=1pt]
+  \item \textbf{Exploration.} Roll out up to \code{explore\_episodes} episodes,
+  stopping after \code{n\_successful\_explore} rewarded ones. The exploration
+  policy is uniform random at task 0, or (\code{warmup\_policy}) either random or
+  the previous task's greedy mask thereafter.
+  \item \textbf{Boundary reconfig.} If any reward was found, run
+  Algorithm~\ref{alg:ste} on the rewarded support with the chosen objective and
+  \emph{commit} the mask; otherwise keep the prior mask. Push the exploration
+  episodes into the replay ring.
+  \item \textbf{Exploitation.} For \code{n\_trials\_per\_task} episodes: collect
+  one $\varepsilon$-greedy episode under the current mask, push it, and (once the
+  ring has $\ge$ \code{batch\_size} transitions) run \code{updates\_per\_step} TD
+  updates per env step. After each ordinary update, run up to
+  \code{mask\_replay\_n\_per\_step} \emph{cross-task} updates: draw a filtered
+  past phase (\S\ref{sec:dqn-replay}) and take a TD step \emph{under that phase's
+  mask}.
+  \item \textbf{Mid-phase reconfig.} Every \code{reconfig\_every\_trials} trials,
+  re-search and commit the mask on either the most recent episodes
+  (\code{reconfig\_support="recent"}) or a fresh random-exploration support.
+  \item \textbf{Archive \& eval.} Store the phase's mask, archive its ring
+  contents tagged with that mask, then eval every task (\S\ref{sec:dqn-eval}).
+\end{enumerate}
+
+\subsection{Single-mask overlap-filtered replay}
+\label{sec:dqn-replay}
+
+\code{MaskedReplayBufferDQN} is a GPU-resident ring for the current phase plus a
+per-phase archive. Discrete actions are stored as \code{int64}; each archived
+phase keeps its transitions and the single mask $\mask$ it was collected under, and
+a stacked $(P,\Ho)$ matrix of past masks is cached for vectorized overlap.
+\code{sample\_filtered} computes Eq.~\eqref{eq:rho} against all past masks in one
+op, keeps the phases whose $\rho\in(\rho_{\mathrm{low}},\rho_{\mathrm{high}}]$,
+picks \emph{one} qualifying phase uniformly (so the $(\text{batch},
+\mask_{\mathrm{old}})$ pair is unambiguous), and samples a batch from it. The
+returned mask is fed directly to the TD update (\S\ref{sec:dqn-loop}), so the
+old-task gradient only touches sub-networks active under $\mask_{\mathrm{old}}$.
+
+\subsection{Eval: recovering a mask from scratch}
+\label{sec:dqn-eval}
+
+Eval never reuses a stored mask (in the default condition). For each task it
+gathers a rewarded support---either by random/warmup rollouts, or by the
+\code{bootstrap} method, in which each exploration episode after the first reward
+acts under a fresh cold-start reconfig on the cumulative rewarded support (so a
+bad early mask cannot trap exploration). It then runs \code{eval\_episodes}
+independent cold-started searches \emph{batched} into one STE pass
+(\S\ref{sec:ste-batched}), rolls one greedy episode under each recovered mask, and
+reports the mean success rate. Warm-start logits are cleared for the whole eval so
+no recovery is contaminated by the last-trained task, and restored afterward.
+
+% ===========================================================================
+\section{FTN--DDPG: continuous-control actor--critic}
+\label{sec:ddpg}
+% ===========================================================================
+
+FTN--DDPG applies FTN to deterministic-policy-gradient continuous control. It is
+implemented twice with an identical agent: \code{train\_mt10.py} (Meta-World MT10,
+cheat-initialized resets, random exploration) and \code{train\_cw.py} (the
+Continual World CW10/CW20 protocol, scripted-expert support and demonstration
+seeding). The differences between the two files are in \emph{environment setup and
+support collection}, not in the FTN mechanics; we document the shared agent and
+note the CW-specific additions at the end.
+
+\subsection{Two networks, two masks}
+
+The agent (\code{FTNDDPG}) holds an \code{FTNActor} $\mu_\phi$, an \code{FTNCritic}
+$Q_\psi$, and Polyak target copies $\mu_{\bar\phi}, Q_{\bar\psi}$. Each task has
+\emph{two} masks: an actor mask $\mask_a$ (gating the policy's sub-networks) and a
+critic mask $\mask_c$ (gating the value network's). The greedy action is
+$\mu_\phi(\obs;\mask_a)$ with the actor in eval mode; exploration adds a noise
+sample (\S\ref{sec:ddpg-noise}) before clipping to $[-1,1]$.
+
+\subsection{Two-stage mask reconfiguration}
+\label{sec:ddpg-recon}
+
+Reconfiguration searches the two masks in sequence
+(\code{reconfig\_masks}):
+\begin{enumerate}[leftmargin=2em,itemsep=1pt]
+  \item \textbf{Critic mask} $\mask_c$ via the same
+  \code{reconfig\_objective} family as FTN--DQN (\S\ref{sec:dqn-recon}), now with
+  $q_{\obs} = Q_\psi(\obs,\act;\masksoft)$ scored against MC returns $G_t$
+  (default \code{r\_returns}, i.e.\ $-\operatorname{Pearson}(Q,G)$), or a
+  DDPG TD target $r+\gamma(1-d)Q_{\bar\psi}(\obs',\mu_{\bar\phi}(\obs'))$ under
+  \code{td}.
+  \item \textbf{Actor mask} $\mask_a$, holding the freshly-chosen critic mask
+  fixed, by maximizing the critic's estimate of the masked policy:
+  \[
+  \mathcal L_{\mathrm{actor}}(\masksoft) = -\,\Ehat\bigl[\,Q_\psi\bigl(\obs,\ \mu_\phi(\obs;\masksoft);\ \mask_c\bigr)\bigr].
+  \]
+\end{enumerate}
+Both are Algorithm~\ref{alg:ste} searches; both may warm-start from the running
+logits. Committing sets $\mask_a,\mask_c$ and stores their logits.
+
+\subsection{Joint update with summed cross-task loss}
+\label{sec:ddpg-update}
+
+The core learning step is \code{update\_joint}, which takes the current batch
+(forwarded under $\mask_a,\mask_c$) plus a list of \emph{recalled} chunks (each a
+$(\text{batch},\mask_a^{(j)},\mask_c^{(j)})$ triple) and optimizes the
+\emph{summed} loss over all terms. For the critic, each term contributes its own
+TD loss under its own mask:
+\[
+\mathcal L_{\mathrm{critic}} = \sum_{j}\ \Ehat_j\!\Bigl[\bigl(Q_\psi(\obs,\act;\mask_c^{(j)}) - (r + \gamma(1-d)\,Q_{\bar\psi}(\obs',\mu_{\bar\phi}(\obs';\mask_a^{(j)});\mask_c^{(j)}))\bigr)^2\Bigr],
+\]
+and for the actor, each term contributes its own $-Q$:
+\[
+\mathcal L_{\mathrm{actor}} = \sum_{j}\ -\,\Ehat_j\!\bigl[Q_\psi(\obs,\ \mu_\phi(\obs;\mask_a^{(j)});\ \mask_c^{(j)})\bigr].
+\]
+Every term gets its own forward pass so the mask-to-data match is exact;
+gradients accumulate on sub-networks shared across the masks. One critic step, one
+actor step, and one Polyak target soft-update per call. (The summation points are
+also the natural hook for per-chunk weighting, left as an unweighted sum.)
+
+\subsection{Decoupled collect/train loop}
+\label{sec:ddpg-loop}
+
+Exploitation uses an actor--learner-style decoupled loop rather than per-step
+interleaving. For \code{n\_iters\_per\_task} iterations:
+\begin{enumerate}[leftmargin=2em,itemsep=1pt]
+  \item \textbf{Collect.} Step \code{n\_parallel\_train} continuing
+  (auto-resetting) envs for \code{collect\_steps} each under the noisy actor, and
+  push the burst into the replay ring. Auto-reset fires on
+  success/termination/truncation/timeout. A subtle but important distinction is
+  made between two flags: the \emph{bootstrap-cutting} $d$ (true MDP terminal or
+  absorbing goal only---\emph{not} horizon timeouts, so bootstrapping continues
+  through time-limit truncations and values are not biased down near the horizon)
+  and an episode-\emph{boundary} flag (every auto-reset) used only to segment MC
+  returns so credit never leaks across a reset or across parallel envs.
+  \item \textbf{Train.} Run \code{train\_steps} \code{update\_joint} calls. Each
+  draws a current batch and, unless in a no-reconfig baseline, up to
+  \code{replay\_max\_chunks} recalled chunks via \code{sample\_filtered\_multi}
+  (\S\ref{sec:ddpg-replay}); demonstration chunks (\S\ref{sec:ddpg-demo}) are
+  summed in on top.
+  \item \textbf{Mid-phase reconfig.} Every \code{reconfig\_every\_iters}
+  iterations, build support from the latest collect burst (MC returns per env),
+  \emph{archive the current segment as a chunk under the outgoing masks}, clear
+  the ring, and commit freshly searched masks. This per-interval chunking is what
+  guarantees each archived chunk's transitions correspond to exactly one mask
+  pair.
+\end{enumerate}
+Adam state is reset at every task boundary (\code{reset\_optimizer\_state}): stale
+momentum must not keep stepping the previous task's sub-networks after they leave
+the active mask and their gradients become zero.
+
+\subsection{Per-chunk overlap-filtered replay}
+\label{sec:ddpg-replay}
+
+\code{MaskedReplayBufferDDPG} archives \emph{sub-phase chunks}, each tagged with
+the $(\mask_a,\mask_c)$ pair it was collected under (the caller archives and clears
+at every reconfig commit, so this correspondence is exact).
+\code{sample\_filtered\_multi} vectorizes Eq.~\eqref{eq:rho} over all chunks for
+both the actor and critic masks and keeps a chunk if \emph{either} its actor
+\emph{or} its critic overlap lies in the band; if more than
+\code{replay\_max\_chunks} qualify it takes a uniform random subset (a weighting
+would bias selection). It returns one $(\text{batch},\mask_a,\mask_c)$ triple per
+kept chunk---exactly the input \code{update\_joint} sums over.
+
+\subsection{Demonstration seeding (DDPGfD-style)}
+\label{sec:ddpg-demo}
+
+Separately from the $\rho$-filtered archive, the buffer keeps a \emph{protected
+demo store}. When \code{demo\_seed} is on, the exploration episodes (which were
+collected before the phase's mask existed and so are never pushed to the per-mask
+ring) are archived as a demo chunk tagged with the just-committed mask, and
+\emph{summed into every joint update} for the phase. Demos are \emph{not}
+$\rho$-gated: same-mask data has $\rho=1$ and would be filtered out, but here we
+want the agent to learn directly from the seed data under its own mask (e.g.\ from
+scripted-expert trajectories). Optionally demos persist across phases
+(\code{demo\_seed\_persist}), each replayed under its own task's mask as a
+cross-task retention aid.
+
+\subsection{Exploration noise and support collection}
+\label{sec:ddpg-noise}
+
+Exploration uses either temporally-correlated Ornstein--Uhlenbeck (OU) noise
+(default) or i.i.d.\ Gaussian noise. OU noise,
+$dx = \theta(\mu-x)\,dt + \sigma\sqrt{dt}\,\mathcal N(0,I)$, integrates into
+sustained directed motion, so as both an additive term on the policy and a
+no-policy cold-start driver it actually translates the arm across the workspace
+rather than jittering in place; each env owns its own process, reset at episode
+boundaries. \code{train\_cw.py} additionally supports \code{scripted} warmup:
+per-task MetaWorld expert policies (plus noise) gather rewarded support on hard
+manipulation tasks that random exploration never solves---seeding \emph{support
+only}; the agent still learns and is evaluated under its own masked policy.
+
+\subsection{Eval}
+FTN--DDPG eval mirrors FTN--DQN's: gather rewarded support (random, scripted, or
+bootstrap), then for each of \code{eval\_episodes} run a fresh cold-started
+reconfig (\code{commit=False}) on that support and one greedy rollout, reporting
+mean success. Recall baselines (\code{fixed\_mask}/\code{stored\_mask}) skip
+exploration and roll out under the recalled mask; \code{no\_mask} rolls out under
+the frozen all-ones mask.
+
+% ===========================================================================
+\section{FTN--BC: offline behavior cloning}
+\label{sec:bc}
+% ===========================================================================
+
+FTN--BC (\code{train\_mt10\_expert.py}) is the purely offline, purely supervised
+adaptation. There is no critic, no target network, and no environment interaction
+during learning: each task is learned by behavior-cloning a scripted expert from a
+fixed dataset of demonstrations. Only the \code{FTNActor} backbone and a single
+actor mask $\mask_a$ are used.
+
+\subsection{Data and normalization}
+Per task, the MetaWorld scripted expert (from \code{ENV\_POLICY\_MAP}) is rolled
+out for \code{n\_demos} episodes; each demo is truncated to
+$\texttt{first\_success}+\texttt{demo\_tail}$ frames (full horizon if it never
+succeeds), and the $(\obs,\act)$ pairs are concatenated and cached to disk keyed
+by the generation parameters so all four conditions reuse identical data. A single
+global observation standardizer (mean/std over \emph{all} tasks' data, frozen and
+shared) is fit once; actions are already in $[-1,1]$ and left unscaled. The expert
+dataset for a task \emph{is} its support set for mask search.
+
+\subsection{BC loss, reconfig, and consolidation}
+The reconfig objective is the behavior-cloning loss itself, evaluated on the
+(normalized) expert support:
+\[
+\mathcal L_{\mathrm{BC}}(\masksoft) = \Ehat\Bigl[\,\bigl\|\mu_\phi(\obs;\masksoft) - \act_{\mathrm{expert}}\bigr\|_2^2\,\Bigr],
+\]
+searched by Algorithm~\ref{alg:ste} and then passed through the lateral smoother
+(\S\ref{sec:smooth}). Training is minibatch MSE regression under the committed
+mask. The consolidation term (\code{bc\_update}) sums, on top of the current-batch
+BC loss, a BC loss over each recalled past chunk \emph{under the mask that chunk
+was trained under}:
+\[
+\mathcal L = \Ehat_{\mathrm{cur}}\bigl[\|\mu_\phi(\obs;\mask_a)-\act\|_2^2\bigr] + \sum_{j}\ \Ehat_{j}\bigl[\|\mu_\phi(\obs;\mask_a^{(j)})-\act^{(j)}\|_2^2\bigr].
+\]
+Shared sub-networks accumulate gradients from both the new task and the recalled
+old tasks---the same consolidation as \S\ref{sec:consolidation}, specialized to
+supervised regression. Recalled chunks come from a \code{SupportArchive} that
+stores each completed task's (normalized) support and mask and filters by overlap
+(Eq.~\eqref{eq:rho}); \code{no\_mask} (overlap $1$) and \code{fixed\_mask}
+(overlap $0$) never qualify, so consolidation is automatically a no-op for those
+baselines.
+
+\subsection{Per-phase loop and reconfig cadence}
+For each task: reset Adam; (\code{fixed\_mask}) assign the disjoint slot; run a
+\emph{phase-start} mask reconfig on the expert support and commit; then BC for
+\code{bc\_epochs} epochs over shuffled minibatches. Two cadence knobs control
+re-search:
+\begin{itemize}[leftmargin=1.5em,itemsep=1pt]
+  \item \code{reconfig\_train} ($n$ minibatches): in addition to the phase-start
+  search, re-search and commit the mask every $n$-th minibatch (warm-started from
+  the running logits, on that minibatch); $0$ freezes the mask after phase start.
+  \item \code{reconfig\_eval} ($n$ episodes): at eval, the full-FTN condition
+  recovers task $t_j$'s mask from its expert support by a cold-started reconfig
+  before episode $0$ and again every $n$-th episode ($0$ = once per eval cell,
+  reused).
+\end{itemize}
+After training, the phase archives its support (tagged with the final mask) for
+future consolidation, evals every task, and optionally checkpoints the actor
+weights, normalizer, and all per-task masks to a single file. Eval under the
+default condition recovers each task's mask from its own expert data;
+recall/no-mask baselines roll out under the stored/all-ones mask.
+
+% ===========================================================================
+\section{Summary}
+% ===========================================================================
+
+The three adaptations are one method in three regimes. A fixed-weight bank of
+$\Ho$ parallel sub-networks (\S\ref{sec:backbone}) is specialized per task by an
+annealed straight-through search for a $\kk$-hot routing mask (\S\ref{sec:ste}),
+and past tasks are protected by replaying partially-overlapping archived
+experience under its original mask (\S\ref{sec:consolidation}). What varies is the
+head and the learning rule attached to the backbone:
+\begin{itemize}[leftmargin=1.5em,itemsep=1pt]
+  \item \textbf{FTN--DQN} attaches a multi-action $Q$-head, learns by masked TD,
+  reconfigures a single mask against returns (default: negative Pearson
+  correlation), and replays one overlapping past phase per step under its mask.
+  \item \textbf{FTN--DDPG} attaches an actor and a critic, searches a critic mask
+  then an actor mask, learns by a summed deterministic-policy-gradient loss over
+  the current batch and per-chunk recalled experience (each under its own mask
+  pair), and optionally seeds learning with protected expert demonstrations.
+  \item \textbf{FTN--BC} attaches only the actor, uses the behavior-cloning MSE as
+  both the reconfig objective and the training loss over a fixed offline expert
+  dataset, adds lateral spatial smoothing to the searched mask, and consolidates
+  via a summed BC loss over overlapping past supports.
+\end{itemize}
+In every case the mask, not the weights, carries task identity, and the
+overlap-filtered replay, not a regularizer, carries cross-task retention.
+
+\end{document}

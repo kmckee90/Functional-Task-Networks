@@ -1,0 +1,64 @@
+run:
+  name: full_smoke
+  seed: 11
+  output_dir: runs
+
+model:
+  name_or_path: hf-internal-testing/tiny-random-LlamaForCausalLM
+  dtype: float32
+  device: cuda
+  attn_implementation: eager
+  trust_remote_code: false
+  gradient_checkpointing: false
+
+data:
+  processed_dir: data/processed/full_smoke
+  datasets:
+    - type: niah
+      name: niah_full_smoke
+      enabled: true
+      train_size: 12
+      eval_size: 4
+      context_lengths: [64, 96]
+      needle_depths: [0.2, 0.8]
+      num_needles: 1
+
+train:
+  epochs: 1
+  batch_size: 2
+  grad_accum: 1
+  lr: 0.001
+  max_length: 256
+  overflow: truncate_left
+  num_workers: 0
+  log_every: 2
+  save_every: 0
+
+eval:
+  batch_size: 2
+  max_length: 256
+  overflow: truncate_left
+  compute_accuracy: true
+
+gru:
+  embedding_dim: 64
+  hidden_dim: 128
+  num_layers: 1
+  dropout: 0.0
+  tie_weights: false
+
+ftn_lora:
+  H: 16
+  k: 4
+  rank: 2
+  alpha: 8.0
+  dropout: 0.0
+  init_b_zero: false
+  target_modules: [q_proj, o_proj, up_proj, gate_proj, down_proj]
+  reconfig_steps: 1
+  train_reconfig_steps: 1
+  reconfig_lr: 0.5
+  lateral_steps: 0
+  lateral_kernel: 3
+  lateral_polyak: 0.0
+  grid_dim: 4

@@ -56,8 +56,8 @@ torch.set_default_device("cuda" if torch.cuda.is_available() else "cpu")
 # The same 5-task subset train_mt10.py currently runs. Every task here has a
 # scripted expert in ENV_POLICY_MAP that solves it at ~100% from standard resets.
 DEFAULT_TASKS = (
-    # "reach-v3",
-    # "push-v3",
+    "reach-v3",
+    "push-v3",
     "door-open-v3",
     "drawer-open-v3",
     "drawer-close-v3",
@@ -114,8 +114,8 @@ class ExpertBCConfig:
     # convolutions before a final top-k. This spatially clusters each task's mask.
     # Disable with lateral_steps=0 OR lateral_polyak=1.0 (default: disabled).
     ftn_square_dim: int = 48
-    lateral_steps: int = 3
-    lateral_polyak: float = 0.800  # 1.0 -> no smoothing; <1 mixes smoothed grid in
+    lateral_steps: int = 0
+    lateral_polyak: float = 1.000  # 1.0 -> no smoothing; <1 mixes smoothed grid in
     lateral_kernel: int = 5
     lateral_noise_sd: float = 0.0
     lateral_torus: bool = False
@@ -124,6 +124,12 @@ class ExpertBCConfig:
     # If set, the FTN model (actor weights, normalizer, per-task masks) is saved
     # to this single file after each task finishes, overwriting the previous one.
     ckpt_path: str = ""
+    # If set, a separate checkpoint is saved into this directory *before*
+    # training on each task, named by the number of tasks trained so far
+    # (ntasks0 = untrained, ..., plus a final ntasksN after the last phase).
+    # These are the partially-trained models used for knowledge-transfer demos
+    # on held-out tasks. Empty string disables.
+    kt_dir: str = "knowledge_transfer"
 
     # --- AnnealedSTE mask reconfig (objective = BC loss on expert support) ---
     reconfig_steps: int = 60
@@ -553,7 +559,7 @@ def save_checkpoint(
         },
         path,
     )
-    print(f"  [ckpt] saved model through phase {phases_done - 1} -> {path}")
+    print(f"  [ckpt] saved model with {phases_done} task(s) trained -> {path}")
 
 
 def train(cfg: ExpertBCConfig):
@@ -588,8 +594,21 @@ def train(cfg: ExpertBCConfig):
     matrix = np.full((N, N), np.nan, dtype=np.float32)
     t_start = time.time()
 
+    kt_base = os.path.splitext(os.path.basename(cfg.output_path))[0]
+    if cfg.kt_dir:
+        os.makedirs(cfg.kt_dir, exist_ok=True)
+
+    def save_kt_checkpoint(n_trained: int):
+        kt_path = os.path.join(cfg.kt_dir, f"{kt_base}_ntasks{n_trained}.pt")
+        save_checkpoint(kt_path, agent, cfg, obs_dim, act_dim, n_trained)
+
     for ti, env in enumerate(envs):
         print(f"\n=== Phase {ti}/{N - 1}: {env.name} ===")
+        # Pre-training snapshot: the model having trained on exactly ti tasks
+        # (ntasks0 = untrained). These are the partially-trained checkpoints
+        # used for knowledge-transfer demos on held-out tasks.
+        if cfg.kt_dir:
+            save_kt_checkpoint(ti)
         agent.reset_optimizer_state()
 
         if cfg.fixed_mask:
@@ -686,6 +705,10 @@ def train(cfg: ExpertBCConfig):
         # 5) Checkpoint the model (single file, overwritten each phase) ---------
         if cfg.ckpt_path:
             save_checkpoint(cfg.ckpt_path, agent, cfg, obs_dim, act_dim, ti + 1)
+
+    # Final knowledge-transfer snapshot (all N tasks trained).
+    if cfg.kt_dir:
+        save_kt_checkpoint(N)
 
     print("\n=== Eval matrix (rows: training phase, cols: eval task) ===")
     for ti in range(N):

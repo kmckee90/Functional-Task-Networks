@@ -1,0 +1,62 @@
+run:
+  name: qwen25_7b_locomo_memory
+  seed: 23
+  artifact_root: /home/dev/artifacts/long_context
+  output_dir: runs
+
+model:
+  name_or_path: Qwen/Qwen2.5-7B
+  dtype: bfloat16
+  device: cuda
+  device_map: null
+  attn_implementation: sdpa
+  trust_remote_code: false
+  gradient_checkpointing: true
+
+memory:
+  processed_dir: data/processed/qwen25_7b_locomo_memory
+  datasets:
+    - type: locomo
+      name: locomo
+      enabled: false
+      # Set one before enabling:
+      # path: /path/to/locomo.jsonl
+      # dataset_name: your-hf-org/your-locomo-dataset
+      # subset: null
+      block_mode: conversation
+      train_split: train
+      eval_split: validation
+      train_episodes: 64
+      eval_episodes: 64
+      questions_per_episode: 8
+  write:
+    split: eval
+    max_length: 4096
+    stride: 4096
+    steps_per_block: 25
+    batch_size: 1
+    lr: 0.0002
+    reconfig_steps: 1
+    log_every: 5
+  eval:
+    split: eval
+    modes: [zero, oracle, query, wrong, full_context]
+    max_length: 8192
+    overflow: skip
+    query_reconfig_steps: 1
+
+ftn_lora:
+  H: 256
+  k: 32
+  rank: 2
+  alpha: 16.0
+  dropout: 0.05
+  init_b_zero: false
+  target_modules: [q_proj, o_proj, up_proj, gate_proj, down_proj]
+  reconfig_steps: 1
+  train_reconfig_steps: 1
+  reconfig_lr: 1.0
+  lateral_steps: 1
+  lateral_kernel: 7
+  lateral_polyak: 0.0
+  grid_dim: 16

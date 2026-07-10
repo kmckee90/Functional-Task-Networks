@@ -1,0 +1,225 @@
+========================================================================
+ USING VS CODE WITH actl  —  EDIT LOCALLY, RUN ON N GPUs REMOTELY
+========================================================================
+
+THE MENTAL MODEL (read this first)
+------------------------------------------------------------------------
+  * Your LAPTOP        = where you edit code (the canonical copy + git).
+  * The PVC (remote)   = persistent cluster disk holding your pod's home
+                         dir, installed packages, datasets, checkpoints.
+  * The POD (remote)   = disposable compute (CPU or 1..8 GPUs) that runs
+                         between them.
+
+  `actl pod up` brings the pod + PVC + file-sync up together as ONE unit,
+  and continuously syncs your local folder -> the pod's workspace dir.
+
+  GOLDEN RULE: edit files LOCALLY in VS Code. Never edit code by SSHing
+  into the pod. Sync pushes your local edits to the pod automatically;
+  you run/train/test on the pod. Big data & outputs stay on the PVC.
+
+  Number of GPUs = the pod's PROFILE, chosen when the pod is created.
+  It is NOT a live dial. To change GPU count you recreate the pod
+  (your PVC data survives). The profile is remembered per project folder,
+  so you set it once per project.
+
+  Your namespace: obelisk        (used in the commands below via -n obelisk)
+
+  GPU profiles available in obelisk:
+     single = 1 GPU      2x = 2 GPUs      4x = 4 GPUs      8x = 8 GPUs
+     small/medium = a fraction of a GPU (vGPU slice, good for debugging)
+     cpu-small = CPU only (installs, tests, non-GPU scripts)
+
+
+========================================================================
+ ONE-TIME SETUP (per machine)
+========================================================================
+1. Make sure actl is installed and initialized:
+       actl start
+   (checks kubectl, kubelogin, devspace, kubeconfig, namespaces)
+
+2. In VS Code, install these extensions from the Marketplace:
+       - Python              (ms-python.python)
+       - Python Debugger     (ms-python.debugpy)
+   (Optional, only for the "Alternative" section at the bottom:
+       - Remote - SSH        (ms-vscode-remote.remote-ssh) )
+
+
+========================================================================
+ THE EVERYDAY WORKFLOW (recommended: local editing + remote run)
+========================================================================
+
+STEP 1 — Open your project locally in VS Code
+------------------------------------------------------------------------
+   File > Open Folder... > pick your project folder on this laptop.
+   You are editing the LOCAL copy. This is correct.
+
+
+STEP 2 — Pick the GPU profile for THIS project and bring the pod up
+------------------------------------------------------------------------
+   Open a VS Code integrated terminal:  Terminal > New Terminal
+   Run ONE of these from inside the project folder:
+
+       # Debug / iterate (fraction of a GPU) — cheap, always available:
+       actl pod up --profile small  --image pytorch -n obelisk
+
+       # A real single-GPU run:
+       actl pod up --profile single --image pytorch -n obelisk
+
+       # Multi-GPU training:
+       actl pod up --profile 4x --image pytorch -n obelisk
+       actl pod up --profile 8x --image pytorch -n obelisk
+
+   Notes:
+     - Pick --image to match your project (pytorch / tensorflow / jax /
+       python for CPU-only). Run `actl pod images` to see the list.
+     - The profile + image are REMEMBERED for this folder. Next time you
+       can just run:   actl pod up --yes -n obelisk
+     - Check availability before asking for 8 GPUs:
+           actl pod profiles -n obelisk
+       Look at the FIT column. (8x = a whole H100 node; often only one
+       node can host it, so it may have to queue if that node is busy.)
+     - LEAVE THIS TERMINAL OPEN. It is now a live remote shell sitting in
+       your pod's workspace, AND it keeps file-sync + SSH + port-forwards
+       alive. Closing it stops sync (the pod itself keeps running).
+
+
+STEP 3 — Edit code in VS Code (locally)
+------------------------------------------------------------------------
+   Just edit and save files normally in the editor. Each save syncs up to
+   the pod within ~1-2 seconds. Do NOT copy files to the pod by hand.
+
+   To confirm an edit reached the pod, in a SECOND terminal:
+       actl pod exec -n obelisk -- stat -c "%y %n" /home/dev/workspace/<file>
+
+
+STEP 4 — Run / train on the pod
+------------------------------------------------------------------------
+   Two ways, pick by purpose:
+
+   (a) Something you want to WATCH (training, a long run you may Ctrl-C):
+       paste the command directly into the STEP-2 terminal (it's already
+       a remote shell in /home/dev/workspace). Example:
+           python -m my_pkg.train --epochs 10
+
+   (b) A quick one-shot you just need the OUTPUT of — use a 2nd terminal:
+           actl pod exec -n obelisk -- nvidia-smi
+           actl pod exec -n obelisk -- python -c "import torch; print(torch.cuda.device_count())"
+           actl pod exec -n obelisk -- bash -c 'cd /home/dev/workspace && pytest -x'
+
+   Verify the GPUs you asked for are actually visible:
+           actl pod exec -n obelisk -- nvidia-smi
+   (should list 1 / 2 / 4 / 8 GPUs matching your profile)
+
+
+STEP 5 — When done for the session
+------------------------------------------------------------------------
+       actl pod down -n obelisk
+   Deletes the pod and FREES THE GPUs, but KEEPS your PVC (code sync tree,
+   installed packages, checkpoints). Next `actl pod up` resumes where you
+   left off.
+
+
+========================================================================
+ CHANGING THE NUMBER OF GPUs FOR A PROJECT
+========================================================================
+   GPU count changes = recreate the pod with a different profile. Your
+   PVC data is preserved across the recreate.
+
+   Typical pattern: develop small, then scale up for the real run.
+
+       # 1. was debugging on a small profile...
+       actl pod down -n obelisk
+
+       # 2. bring it back up bigger for the training run:
+       actl pod up --profile 8x -n obelisk --yes
+
+   OR, without a manual down first — just pass the new profile; actl sees
+   the mismatch and offers to recreate (keeping the PVC):
+       actl pod up --profile 8x -n obelisk
+
+   OR force a clean recreate that re-prompts everything:
+       actl pod up --fresh -n obelisk
+
+
+========================================================================
+ DEBUGGING PYTHON ON THE POD FROM VS CODE (breakpoints)
+========================================================================
+1. Bring the pod up WITH the debug port forwarded:
+       actl pod up --profile single --image pytorch --port 5678 -n obelisk
+   (If the pod is already up without it: Ctrl-C the sync terminal, then
+    `actl pod sync --port 5678 -n obelisk` — pod & data are untouched.)
+
+2. In the STEP-2 remote shell, launch your program under debugpy:
+       python -m debugpy --listen 0.0.0.0:5678 --wait-for-client -m my_pkg.train
+
+3. In VS Code, add this to .vscode/launch.json (create if missing):
+       {
+         "version": "0.2.0",
+         "configurations": [
+           {
+             "name": "Attach to pod (debugpy)",
+             "type": "debugpy",
+             "request": "attach",
+             "connect": { "host": "localhost", "port": 5678 },
+             "pathMappings": [
+               { "localRoot": "${workspaceFolder}",
+                 "remoteRoot": "/home/dev/workspace" }
+             ]
+           }
+         ]
+       }
+
+4. Set breakpoints in your LOCAL files, then Run > Start Debugging
+   (F5) and pick "Attach to pod (debugpy)". Breakpoints hit on the pod.
+
+
+========================================================================
+ JUPYTER NOTEBOOKS IN VS CODE
+========================================================================
+1. Use a Jupyter image (it auto-starts a notebook server on :8888):
+       actl pod up --profile small --image jupyter-pytorch --port 8888 -n obelisk
+   NOTE: on jupyter images the synced code lives at /home/jovyan/workspace
+   (not /home/dev/workspace).
+
+2. Open a .ipynb in VS Code, click the kernel picker (top-right) >
+   "Select Another Kernel" > "Existing Jupyter Server" > enter:
+       http://localhost:8888
+   (use the token printed in the pod-up terminal if prompted).
+
+3. The notebook now executes on the pod's GPUs.
+
+
+========================================================================
+ QUICK COMMAND REFERENCE
+========================================================================
+   actl pod up --profile <p> --image <i> -n obelisk   create/resume pod+sync
+   actl pod up --yes -n obelisk                        resume w/ saved defaults
+   actl pod profiles -n obelisk                        list profiles + GPU fit
+   actl pod images                                     list images
+   actl pod status -n obelisk                          state / node / ssh host
+   actl pod exec -n obelisk -- <cmd>                   one-shot remote command
+   actl pod exec -n obelisk -- nvidia-smi              confirm visible GPUs
+   actl pod sync --port <p> -n obelisk                 re-sync / add a forward
+   actl pod down -n obelisk                            delete pod, KEEP data
+   actl pod resize-pvc --size 200Gi -n obelisk         grow the PVC
+
+
+========================================================================
+ ALTERNATIVE: VS CODE "REMOTE - SSH" (edits run ON the pod)
+========================================================================
+   You CAN point VS Code Remote-SSH at the pod for a full remote-dev
+   experience (IntelliSense/linting against the pod's actual installed
+   packages, integrated remote terminal). While a pod-up / pod-sync /
+   pod-attach session is live, actl writes an SSH host entry; find it on
+   the `ssh:` line of:
+       actl pod status -n obelisk
+   Then in VS Code: Remote-SSH: Connect to Host... > pick that host.
+
+   TRADE-OFF / CAUTION: this makes you EDIT FILES ON THE POD, which is the
+   opposite of actl's "edit locally" rule. Your .git lives locally and is
+   NOT synced into the pod, so do all git operations on your laptop, and
+   be aware edits made this way can get out of step with your local tree.
+   For most workflows the recommended local-editing path above is safer;
+   use Remote-SSH only if you specifically need editor features resolved
+   against the remote environment.
+========================================================================

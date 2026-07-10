@@ -1,0 +1,57 @@
+run:
+  name: locomo_memory_smoke
+  seed: 17
+  output_dir: runs
+
+model:
+  name_or_path: hf-internal-testing/tiny-random-LlamaForCausalLM
+  dtype: float32
+  device: cuda
+  attn_implementation: eager
+  trust_remote_code: false
+  gradient_checkpointing: false
+
+memory:
+  processed_dir: data/processed/locomo_memory_smoke
+  datasets:
+    - type: locomo
+      name: tiny_locomo
+      enabled: true
+      path: fixtures/tiny_locomo.jsonl
+      block_mode: conversation
+      train_split: train
+      eval_split: train
+      train_episodes: 2
+      eval_episodes: 2
+  write:
+    split: eval
+    max_length: 192
+    stride: 192
+    steps_per_block: 4
+    batch_size: 1
+    lr: 0.001
+    reconfig_steps: 1
+    log_every: 1
+  eval:
+    split: eval
+    modes: [zero, oracle, query, wrong, full_context]
+    max_length: 256
+    overflow: truncate_left
+    query_reconfig_steps: 1
+
+ftn_lora:
+  H: 16
+  k: 4
+  rank: 2
+  alpha: 8.0
+  dropout: 0.0
+  init_b_zero: false
+  target_modules: [q_proj, o_proj, up_proj, gate_proj, down_proj]
+  reconfig_steps: 1
+  train_reconfig_steps: 1
+  reconfig_lr: 0.5
+  lateral_steps: 0
+  lateral_kernel: 3
+  lateral_polyak: 0.0
+  grid_dim: 4
+

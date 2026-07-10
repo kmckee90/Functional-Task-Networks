@@ -1,0 +1,9 @@
+# FTN-Agent deps. torch is already in the pod's base image (2.6.0+cu126).
+# Install into the base venv on the pod:  uv pip install -r requirements.txt
+transformers>=4.51
+accelerate>=1.0
+gradio>=6.0
+datasets>=3.0
+sentencepiece
+# optional scale-up lever (8-bit Adam; design.md §4.4):
+# bitsandbytes

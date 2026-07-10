@@ -1,0 +1,11 @@
+# Benchmark steady-state collection speed (few train rounds, past JIT warmup).
+total_steps: 800
+warmup: 60
+batch: 64
+train_interval: 200
+train_iters: 4
+replay_capacity: 4000
+goal_memory_length: 2000
+recode_memory: 1000
+offline_scan_max: 1024
+render_interval: 0

@@ -1,0 +1,7 @@
+# Keep heavy/regenerable artifacts off the sync channel.
+artifacts/
+runs/
+warp_cache/
+*.gif
+*.pt
+*.msgpack

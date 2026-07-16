@@ -159,7 +159,49 @@ any training — full OOD on both axes at once.
   0.98). The frozen bank is so close to containing the composite that the
   configurer's job is nearly retrieval — the paper's "head start" made extreme.
 
-### 5.4 Two routes to the same held-out algorithm
+### 5.4 Algorithm vs. generic function approximation: the off-group probe
+
+Held-out-cell accuracy alone cannot distinguish "the bank learned the operator
+family" from "the bank learned a generic one-hot-routing basis that lets the
+configurer fit any structured relabeling" (compositional function approximation,
+as in the original FTN's transfer results). The discriminating test is
+**reachability of off-group tasks at matched complexity**: bijections on the same
+input space, same support (128) and search budget (S=60), graded by algebraic
+distance from the trained family (`scripts/offgroup_probe.py`,
+`results/main2/offgroup_probe.json`):
+
+| tier | probe class | trained bank | random bank |
+|---|---|---|---|
+| 0 | held-out cells of the trained group Z₁₀×Z₄ | **0.982** (0.96–1.00) | 0.11 |
+| 1 | product maps S₄×S₁₀ outside the abelian subgroup | **0.733** (0.51–0.93) | 0.11 |
+| 2 | non-product bit-permutations (position-dependent value maps) | **0.497** (0.46–0.55) | 0.12 |
+
+Reachability falls in a clean staircase tracking the group → product-schema →
+unstructured hierarchy. This rules out both extremes: a generic routing basis
+would make all bit-permutations comparably reachable (they are not), and a
+lookup library of the 40 trained cells would put tier 1 at the random-bank floor
+(it is not — never-trained operator *types* such as value negation, 0.93, and
+position reversal, 0.85, are highly reachable, including reversal composed with
+a trained-type shift, 0.87). The supported reading: the bank learned the task
+family's **operator schema** — one uniform value bijection applied at every
+position, composed with one position bijection — with fidelity highest on the
+trained subgroup, partial competence across the schema's wider orbit, and
+breakdown precisely where the schema is violated (tier 2 requires
+position-dependent value maps; accuracy halves).
+
+Caveats, stated plainly: (i) tier 1's internal spread suggests proximity effects
+alongside schema abstraction — its easiest probes are near-identity (val-swap
+fixes 8/10 values: 0.89) or reflection-like, while full-support random product
+maps sit at 0.51–0.60, so part of tier-1 competence is likely partial overlap
+with trained routing sub-circuits (disentangleable by regressing probe accuracy
+on agreement with the nearest trained cell); (ii) tier 2 at 0.50 still far
+exceeds the random bank's 0.11, so training also built broadly reusable routing
+competence — the schema-specific and generic components coexist, and this probe
+quantifies the mix; (iii) none of this implies a symbolic representation of the
+algorithm (§5.6) — the claim "learned the algorithm" holds extensionally and
+structurally, not intensionally.
+
+### 5.5 Two routes to the same held-out algorithm
 
 Because the group is cyclic, iterating cell (a, r) k times must equal the one-shot
 cell (ka mod 10, kr mod 4) — which we arranged to be held out:
@@ -173,7 +215,7 @@ generator. This is fully **zero-shot**: no data from the composite cell, no supp
 set, no search. Composites in the cyclic subgroup of any trained cell come for free,
 with mild error compounding as the only cost.
 
-### 5.5 The honest negative: data-free mask *algebra* fails, and why
+### 5.6 The honest negative: data-free mask *algebra* fails, and why
 
 The strongest version of the claim — synthesize a held-out cell's mask from grid
 structure alone (additive factor completion μ + α(a) + β(r), majority-vote unions,
@@ -200,12 +242,12 @@ disappointing:
   part grid-averaging destroys.
 
 So: **the compositional basis demonstrably exists in the frozen weights** (§5.2's
-0.98 with 16–128 examples; §5.4's zero-shot iteration), but it is stored as a
+0.98 with 16–128 examples; §5.5's zero-shot iteration), but it is stored as a
 distributed, non-unique population — addressable by support-conditioned search,
 not by closed-form mask arithmetic. This cleanly separates two hypotheses that
 held-out accuracy alone would have conflated.
 
-### 5.6 Seed replication
+### 5.7 Seed replication
 
 Headline numbers across 3 seeds (mean ± sd; each seed redraws the grid split, input
 split, task order, and init):
@@ -233,7 +275,12 @@ trained task-conditioned MLP is at chance on the same cells (composition here is
 *not* what standard representation learning gives you for free — the objection that
 this testbed is already solved is empirically false in its strongest available
 form). Cyclic-subgroup composites are additionally reachable **zero-shot** by
-temporal iteration of a trained mask.
+temporal iteration of a trained mask. And what the bank holds is not an
+undifferentiated function-approximation basis: the off-group probe (§5.4) shows
+reachability ordered by algebraic distance from the trained family — near-perfect
+on the group orbit, partial across the family's product schema (including
+never-trained operator types like negation and reversal), collapsing when the
+schema is violated.
 
 **Not established.** Masks did not become factored symbols: data-free mask algebra
 fails because per-cell solutions are non-unique populations and no bank-to-factor
@@ -258,6 +305,7 @@ selection in FTN.
 # on the actl pod `nar`, from /home/dev/workspace
 uv run python run_experiment.py --config full --run main2 --seed 0   # ~20 min on 1xH100
 PYTHONPATH=. uv run python scripts/controls.py --run main2           # random-net + sweeps
+PYTHONPATH=. uv run python scripts/offgroup_probe.py --run main2     # algorithm-vs-approximation probe
 PYTHONPATH=. uv run python scripts/make_fig7.py main2
 PYTHONPATH=. uv run python scripts/refigure.py main2                 # regenerate figs 1-6
 ```

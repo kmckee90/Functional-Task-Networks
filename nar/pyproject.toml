@@ -1,0 +1,13 @@
+[project]
+name = "ftn-nar"
+version = "0.1.0"
+description = "FTN compositional program induction on an abelian task grid (neural algorithmic reasoning testbed)"
+requires-python = ">=3.11"
+dependencies = [
+    "torch>=2.6",
+    "numpy>=1.26",
+    "matplotlib>=3.8",
+]
+
+[tool.setuptools]
+packages = ["ftn_nar"]

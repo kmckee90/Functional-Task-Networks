@@ -1,0 +1,9 @@
+
+This experiment will test a kind of program induction method using Functional Task Networks, or FTN (/base/).
+The idea is to replace the synthetic tasks in the original experiment with sequence learning tasks in which 
+the input/output pairs are generated according to some algorithmic rules. If the neural network learns the 
+underlying rule, it can generate to arbitrary inputs. For example, arithmetic and syllogistic logic.
+
+Once we have established a base model and training protocol that successfully learns each of a set of 
+algorithms or operators, we can specify FTN to be a pool of N such networks, trained sequentially.
+

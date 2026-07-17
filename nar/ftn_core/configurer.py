@@ -11,7 +11,7 @@ mask seen during the search.
 import torch
 import torch.nn as nn
 
-from .model import FTN2, sequence_ce
+from ftn_core.model import FTN2, sequence_ce
 
 
 def kwta(x: torch.Tensor, k: int) -> torch.Tensor:

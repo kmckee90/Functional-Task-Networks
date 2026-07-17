@@ -55,6 +55,28 @@ class NeuronBank(nn.Module):
         return h.squeeze(-1)  # (B, H)
 
 
+class MaskedStage(nn.Module):
+    """One canonical FTN stage: bank of deep scalar-output neurons + linear
+    readout of Dropout(z) * m. The building block of both the FTN^2 stack
+    (abelian experiment) and the recurrent FTN (temporal experiment)."""
+
+    def __init__(self, in_dim: int, out_dim: int, H: int,
+                 neuron_depth: int, neuron_width: int, dropout: float):
+        super().__init__()
+        self.H = H
+        self.bank = NeuronBank(in_dim, H, neuron_depth, neuron_width)
+        self.out = nn.Linear(H, out_dim, bias=False)
+        self.drop = nn.Dropout(dropout)
+
+    def forward(self, x: torch.Tensor, m: torch.Tensor) -> torch.Tensor:
+        return self.out(self.drop(self.bank(x)) * m)
+
+    def forward_from_z(self, z: torch.Tensor, m: torch.Tensor) -> torch.Tensor:
+        """Readout from precomputed (mask-independent) bank activations —
+        the configurer's fast path with theta frozen."""
+        return self.out(z * m)
+
+
 class FTN2(nn.Module):
     def __init__(self, in_dim: int, out_dim: int, H1: int, H2: int,
                  d_mid: int, neuron_depth: int, neuron_width: int,

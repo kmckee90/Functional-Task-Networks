@@ -1,0 +1,29 @@
+[project]
+name = "ftn-nar"
+version = "0.1.0"
+description = "FTN support-conditioned neural algorithmic reasoning on layered graph dynamic programs"
+requires-python = ">=3.11"
+dependencies = [
+    # torch 2.13 dispatches some eager backward ops to Triton kernels that require a
+    # C compiler at runtime; the pod image ships none. 2.8 is mature and H100-ready.
+    "torch==2.8.*",
+    "numpy>=1.26",
+    "matplotlib>=3.8",
+    "pandas>=2.0",
+    "pyyaml>=6.0",
+    "tqdm>=4.66",
+]
+
+[dependency-groups]
+dev = ["pytest>=8.0"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["ftn_nar"]
+package-dir = { "" = "src" }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

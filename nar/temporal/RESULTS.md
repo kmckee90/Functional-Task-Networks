@@ -220,6 +220,24 @@ greedy middle.
    the atoms, compose by execution — the same lesson the abelian experiment's
    mask-algebra failure taught, now in positive form.
 
+**The deflationary reading, stated plainly.** The headline decomposes into:
+operators trained directly as supervised single-step tasks, consolidated into
+canonical masks, sequenced by classical breadth-first enumeration with external
+verification, on a task family (bijections applied elementwise over the full
+input space) chosen so that intermediate states never leave the training
+distribution. Given ~99%-faithful atoms and hard re-encoding, "run them in
+sequence and get the composite" is close to arithmetic, and halting-by-search
+is bookkeeping, not a learned faculty. What resists full deflation is the
+boundary structure around the positive edge: the same bank, atoms, and stream
+fail under gradient sequencing (0.34), greedy growth (0.16), fully-canonical
+per-batch training at scale (collapse, twice), and even BFS with one wrong
+vocabulary entry (0.56 exact until the id-atom diagnosis). If the recipe were
+robustly trivial, those five would not fail. The positive result is a floor;
+the discovery content is which configurations of identical machinery compose
+(hard states, committed traces, canonical atoms, structured search) and which
+do not — plus the demonstration that a readable trace interface turns failures
+into one-line diagnoses. The non-trivial versions remain open, below.
+
 **Open.**
 
 - Gradient-only trace search degrades with program length (joint coupling across

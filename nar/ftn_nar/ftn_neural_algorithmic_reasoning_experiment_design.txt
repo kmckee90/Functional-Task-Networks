@@ -1,0 +1,2451 @@
+FTN-BASED SUPPORT-CONDITIONED NEURAL ALGORITHMIC REASONING
+IMPLEMENTATION-READY EXPERIMENT AND MODEL DESIGN
+Version 1.0
+
+PURPOSE
+
+This document specifies a complete first experiment for testing whether Functional Task Network
+(FTN) principles can support both continual neural algorithmic learning and support-conditioned
+induction of a held-out algorithm that is an out-of-distribution composition of previously learned
+algorithmic primitives.
+
+The experiment is intentionally narrower than unrestricted program induction. It tests whether a
+model can:
+
+1. Learn a sequence of distinct graph dynamic programs in contiguous task blocks without
+   catastrophic forgetting.
+2. Reconfigure a sparse population of learned operator atoms from a small support set of labeled
+   input-output examples.
+3. Configure a held-out program that is a novel combination of a previously seen extension
+   operator and a previously seen reduction operator.
+4. Execute the configured program on graphs substantially larger and deeper than those in the
+   support set and training distribution.
+5. Separate representational failure from configuration-search failure.
+6. Directly test whether a population of overlapping approximate solutions increases the
+   probability that an exact solution exists and can be found.
+
+The experiment is designed as a decisive falsification test. It should be run before attempting a
+heterogeneous CLRS-scale system. If the model cannot beat retrieval and ordinary modular baselines
+on this controlled family, there is no strong reason to scale the idea to broader program induction.
+
+The design adopts the following principles from the attached FTN manuscript:
+
+- A large bank of individually weak operator atoms.
+- A sparse support-conditioned top-k mask.
+- A mask configured with model weights frozen.
+- Per-minibatch reconfiguration during training.
+- Block-sequential task presentation.
+- Replay targeted to parameters shared by overlapping masks.
+- Nonzero atom outputs so the mask optimizer receives a gradient signal for all atoms.
+- Evaluation without an explicit task identifier.
+
+The design also follows the encode-process-decode pattern used in neural algorithmic reasoning,
+but deliberately restricts the algorithm family to graph dynamic programs with a known factorial
+decomposition.
+
+
+1. CLAIMS THAT THIS EXPERIMENT CAN AND CANNOT SUPPORT
+
+1.1 Claims supported by a positive result
+
+A positive result would support the following claim:
+
+A support-conditioned sparse operator population can retain sequentially learned graph dynamic
+programs and configure a held-out composition of learned operator primitives from a small set of
+input-output demonstrations, with generalization to larger and deeper graphs.
+
+A stronger positive result, in which an exact mask is found and executes perfectly on large graphs,
+would support the narrower claim that FTN-style population training can create a searchable
+compositional program basis.
+
+1.2 Claims not supported by this experiment
+
+This experiment does not test unrestricted program synthesis, arbitrary control flow, recursion,
+unknown data structures, language-model program generation, discovery of an unconstrained
+programming language, or induction of a program outside the predefined dynamic-programming
+grammar.
+
+The system is given a strongly aligned execution architecture. The held-out novelty is the
+combination of primitives, not the invention of new primitives or a new control-flow regime.
+
+1.3 Required interpretation of failure
+
+A failed run must not be summarized merely as "FTN does not work." The implementation must
+distinguish:
+
+- Executor failure: even an oracle program code cannot execute the task.
+- Representation failure: the trained bank contains no sufficiently accurate held-out mask.
+- Configuration failure: a sufficiently accurate mask exists, but the gradient configurer does not
+  find it.
+- Continual-learning failure: sequential training damages previously learned operators.
+- Identification failure: the support set does not uniquely distinguish the target algorithm from
+  another member of the hypothesis class.
+- OOD execution failure: the program is identified and works in-distribution, but recurrence does
+  not extrapolate in graph size or depth.
+
+
+2. PRIMARY HYPOTHESES
+
+H1. Continual retention
+
+After seven algorithms are learned in contiguous blocks, support-conditioned reconfiguration will
+recover each seen algorithm with less than five percentage points of mean forgetting in exact graph
+accuracy.
+
+H2. Held-out compositional induction
+
+For a held-out reducer-extension combination, the FTN configurer will outperform stored-mask
+retrieval and a dense shared processor on exact graph accuracy without any weight update on the
+held-out algorithm.
+
+H3. OOD execution
+
+A single mask inferred from support graphs of 8 to 16 nodes will continue to execute the held-out
+algorithm on graphs with up to 128 nodes and substantially greater depth.
+
+H4. Primitive-sensitive mask geometry
+
+Masks for algorithms sharing an extender will overlap more in the extender bank than algorithms
+with different extenders. Masks sharing a reducer will overlap more in the reducer bank than
+algorithms with different reducers.
+
+H5. Approximate-solution scaffolding
+
+Compared with per-task fixed masks and random masks, per-minibatch FTN reconfiguration will
+increase at least one of:
+
+- The probability that an exact or near-exact held-out mask exists.
+- The rank of the best exact mask under support loss.
+- The probability that the gradient configurer reaches the exact mask.
+- The correlation between support loss and OOD exact accuracy.
+
+H5 is not assumed to be true. The tiny-bank exhaustive experiment described later is the direct
+test.
+
+
+3. ALGORITHM FAMILY
+
+3.1 Graph domain
+
+Each instance is a directed layered acyclic graph G = (V, E) with one distinguished source node s.
+Nodes are partitioned into ordered layers L_0, L_1, ..., L_D.
+
+- L_0 contains exactly the source.
+- Every edge goes from L_i to L_(i+1).
+- Every node outside L_0 has at least one incoming edge.
+- Every node is reachable from the source.
+- All algorithms use the same graph, source, edge-weight, input, state, and output schema.
+- The required number of recurrent processing steps is exactly D.
+
+The restriction to adjacent-layer edges makes the exact synchronous execution trace unambiguous:
+one additional layer becomes computable at each processor step.
+
+3.2 Edge weights
+
+Each edge weight is an integer sampled uniformly from:
+
+{-8, -7, -6, -5, -4, -3, -2, -1, 1, 2, 3, 4, 5, 6, 7, 8}
+
+Zero is excluded.
+
+Weights are represented to the model by:
+
+- A normalized scalar w / 8.
+- A learned categorical embedding with 16 categories and embedding dimension 16.
+
+3.3 State recurrence
+
+Every node has a scalar value d_v. The source value is fixed:
+
+d_s = 0
+
+For every non-source node v, processed in topological order:
+
+candidate(u, v) = EXTEND(d_u, w_uv)
+d_v = REDUCE over all incoming candidates
+
+The value is clipped after every extension:
+
+CLIP(x) = max(-1024, min(1024, x))
+
+The clipping bound will not normally be reached in the primary training distribution. It exists to
+guarantee numerical stability in deep OOD tests.
+
+3.4 Extension operators
+
+The four extension operators are:
+
+ADD:
+EXTEND_ADD(a, w) = CLIP(a + w)
+
+SUB:
+EXTEND_SUB(a, w) = CLIP(a - w)
+
+MAX_EDGE:
+EXTEND_MAX_EDGE(a, w) = max(a, w)
+
+MIN_EDGE:
+EXTEND_MIN_EDGE(a, w) = min(a, w)
+
+3.5 Reduction operators
+
+The two reducers are:
+
+MIN:
+REDUCE_MIN(C) = minimum value in candidate set C
+
+MAX:
+REDUCE_MAX(C) = maximum value in candidate set C
+
+3.6 Eight algorithms
+
+The complete family is the Cartesian product:
+
+1. MIN + ADD
+2. MAX + ADD
+3. MIN + SUB
+4. MAX + SUB
+5. MIN + MAX_EDGE
+6. MAX + MAX_EDGE
+7. MIN + MIN_EDGE
+8. MAX + MIN_EDGE
+
+Several combinations correspond to familiar path objectives. The family is used because it has a
+known 2-by-4 factorial structure, a shared execution schedule, a shared interface, and nontrivial
+held-out cross-combinations.
+
+3.7 Output
+
+The required output is the final scalar value d_v for every node.
+
+An auxiliary predecessor output is also trained. For every non-source node, define the valid
+predecessor set:
+
+P_v = {u in pred(v) : EXTEND(d_u, w_uv) = d_v}
+
+Because ties may occur, multiple predecessors can be correct. The model predicts one predecessor.
+The pointer is counted as correct when it belongs to P_v.
+
+The primary program-induction success metric is exact graph value accuracy. Exact graph
+value-and-pointer accuracy is reported as a stricter secondary metric.
+
+3.8 Exact reference implementation
+
+The repository must include a pure Python or NumPy reference implementation using signed
+64-bit integer arithmetic. It must compute:
+
+- Final node values.
+- Valid predecessor sets.
+- Per-step node values.
+- Per-step valid predecessor sets.
+- Per-step reached masks.
+
+Every generated instance must be checked against a second independently written reference
+implementation in the test suite for at least 10,000 random small graphs.
+
+
+4. GRAPH GENERATION
+
+4.1 Training graph distribution
+
+For each training graph:
+
+- Sample node count N uniformly from 8 through 16.
+- Sample depth D uniformly from 3 through 6, constrained by N >= D + 1.
+- Put one node in layer 0.
+- Allocate the remaining N - 1 nodes across layers 1 through D.
+- Each non-source layer must contain at least one node.
+- Prefer layer widths between 2 and 4. If N and D make that impossible, distribute the residual
+  uniformly while preserving at least one node per layer.
+- For each node v in layer i > 0:
+  - Sample in-degree q uniformly from 1 through min(6, |L_(i-1)|).
+  - Select q distinct predecessors uniformly from L_(i-1).
+  - Assign each selected edge an independently sampled weight.
+- After initial edge creation, ensure every node in layers 0 through D-1 has at least one outgoing
+  edge. For any node lacking an outgoing edge, connect it to a uniformly chosen node in the next
+  layer.
+- Randomly permute node ordering after graph construction, while retaining layer membership,
+  source identity, and edges. The model must not rely on topological ordering in tensor layout.
+
+The model is allowed to receive the source indicator and graph structure. It is not given the
+algorithm identity.
+
+4.2 Validation and in-distribution test distribution
+
+Use the same distribution as training, with disjoint random seeds.
+
+4.3 OOD-width distributions
+
+Generate graphs with target node counts N in {32, 64, 128} and depth sampled uniformly from 3
+through 6. Allocate the additional nodes across layers, producing much wider layers than training.
+
+4.4 OOD-depth distributions
+
+Generate graphs with target depths D in {8, 16, 32}. Layer widths are sampled uniformly from 2
+through 4. Total node count is therefore larger than training because of depth.
+
+4.5 OOD-both distributions
+
+Use target node counts N in {32, 64, 128}. Set target depth approximately N / 4:
+
+- N = 32: D sampled from 7 through 9.
+- N = 64: D sampled from 14 through 18.
+- N = 128: D sampled from 28 through 32.
+
+Allocate nodes while preserving at least two nodes in most non-source layers where possible.
+
+4.6 Dataset generation strategy
+
+Training data is generated online. Validation, test, support-set candidate pools, and all OOD query
+sets are deterministically generated from recorded seeds.
+
+Do not store millions of graph tensors. Store:
+
+- Generator configuration.
+- Global seed.
+- Per-instance seed.
+- Algorithm identifier.
+- Expected checksum of generated labels.
+
+This makes the test suite reproducible while keeping disk use small.
+
+4.7 Dataset sizes
+
+For every algorithm and every seed, create fixed evaluation sets:
+
+- ID validation: 512 graphs.
+- ID test: 1,024 graphs.
+- OOD width: 512 graphs for each N in {32, 64, 128}.
+- OOD depth: 512 graphs for each D in {8, 16, 32}.
+- OOD both: 512 graphs for each N in {32, 64, 128}.
+
+These sets are reused across methods within the same seed.
+
+4.8 Training trace
+
+At processor step t:
+
+- Nodes in layers 0 through t are reached.
+- Nodes in later layers are unreached.
+- Reached nodes have their exact dynamic-program value.
+- Unreached nodes retain value zero in the tensor, but a separate reached flag marks them invalid.
+- Source remains reached with value zero at all steps.
+
+Trace supervision is used for model-weight training in the primary experiment. The support-set
+configurer receives only final outputs, not traces.
+
+
+5. LEAVE-ONE-COMBINATION-OUT PROTOCOL
+
+For each of the eight algorithms:
+
+- Designate that algorithm as HELD_OUT.
+- The other seven algorithms are SEEN.
+- Initialize a new model from scratch.
+- Randomly permute the seven seen algorithms using the run seed.
+- Train the seven algorithms in contiguous blocks.
+- Never update model weights using HELD_OUT examples.
+- After all seven blocks, freeze every model parameter.
+- Infer only the sparse program masks from a labeled HELD_OUT support set.
+- Evaluate the inferred masks on disjoint ID and OOD query sets.
+
+The complete main experiment consists of eight held-out folds.
+
+The same model architecture, total training steps, graph distributions, and random seeds must be
+used across primary baselines.
+
+
+6. SUPPORT SET CONSTRUCTION
+
+6.1 Support set contents
+
+A support example contains:
+
+- Input graph.
+- Source indicator.
+- Edge weights.
+- Final node values.
+- Final valid predecessor sets.
+
+It does not contain:
+
+- Algorithm name.
+- Reducer identity.
+- Extender identity.
+- Intermediate execution trace.
+- Task index.
+- A stored mask.
+- Any query example.
+
+6.2 Default support size
+
+Default support size is 16 graphs.
+
+Ablations use support sizes in {1, 2, 4, 8, 16, 32}.
+
+6.3 Identifiability requirement
+
+A support set is identifiable when no other member of the eight-algorithm family produces the same
+complete final value outputs on every support graph.
+
+Support sets for the primary induction result must be identifiable.
+
+The evaluation code must also report results on randomly sampled, potentially ambiguous support
+sets. Ambiguous and identifiable results must never be pooled.
+
+6.4 Greedy identifiable support selection
+
+For a target algorithm A:
+
+1. Generate a candidate pool of 256 graphs from the training-size distribution.
+2. Compute outputs under all eight algorithms.
+3. Initialize remaining alternatives R to the other seven algorithms.
+4. For each candidate graph, compute which alternatives disagree with A on at least one node.
+5. Select the graph that eliminates the largest number of currently remaining alternatives.
+6. Break ties by the total number of nodewise output disagreements across remaining alternatives.
+7. Remove eliminated alternatives from R.
+8. Repeat until R is empty or 16 graphs have been selected.
+9. If R is nonempty after 16 graphs, reject the pool and generate a new pool.
+10. Fill unused support slots with candidates having the largest average nodewise disagreement
+    from the seven alternatives.
+
+Generate ten independently selected identifiable support sets per held-out task and seed.
+
+6.5 Support-query separation
+
+No graph seed may occur in both support and query sets. The code must assert this.
+
+6.6 Seen-task support sets
+
+Retention evaluation also uses support-conditioned reconfiguration. For each seen task, generate
+an identifiable support set among the seven seen algorithms using the same procedure.
+
+
+7. MODEL OVERVIEW
+
+The model has:
+
+- Shared graph encoders.
+- A recurrent scalar register per node.
+- A recurrent latent vector per node.
+- A typed sparse extender atom bank.
+- A typed sparse reducer atom bank.
+- A hard predecessor-selection operation.
+- A shared latent-state update.
+- Shared value, reached, and pointer decoders.
+- One fixed extender mask and one fixed reducer mask per support-conditioned execution.
+
+The masks are fixed for every graph and every recurrent step in an episode. There is no
+time-varying program routing in the primary model.
+
+7.1 Default dimensions
+
+- Latent node dimension d_h: 128.
+- Edge embedding dimension d_e: 16.
+- Extender atom count H_ext: 64.
+- Reducer atom count H_red: 64.
+- Active extender atoms k_ext: 8.
+- Active reducer atoms k_red: 8.
+- Extender atom hidden width: 32.
+- Reducer atom hidden width: 32.
+- Shared node encoder hidden width: 128.
+- Dropout: 0.0 in the primary exact-execution experiment.
+- Normalization: LayerNorm on latent node states after each recurrent update.
+- Numeric dtype: bfloat16 for neural activations, float32 for masks, losses, scalar registers, and
+  reference labels.
+
+Dropout is disabled because the target is exact recurrent execution. A dropout ablation may be run
+later but is not part of the primary result.
+
+7.2 Node inputs
+
+Initial node features are:
+
+- Source indicator, one scalar.
+- Normalized in-degree, one scalar.
+- Normalized out-degree, one scalar.
+
+Do not provide the layer index or topological position. The graph structure and recurrent schedule
+are sufficient.
+
+The node encoder is:
+
+Linear(3, 128)
+SiLU
+Linear(128, 128)
+LayerNorm(128)
+
+Initial latent state h_v^0 is the encoder output.
+
+Initial scalar register r_v^0 is:
+
+- 0 for source.
+- 0 for all other nodes, with reached flag false.
+
+Initial reached flag is true only for the source.
+
+7.3 Edge inputs
+
+For edge (u, v):
+
+- Normalized scalar weight w / 8.
+- Learned categorical weight embedding of dimension 16.
+
+The edge category maps the ordered weight set directly to indices 0 through 15.
+
+7.4 Extender bank
+
+Every extender atom receives:
+
+- Source scalar register r_u / 1024.
+- Edge scalar w / 8.
+- Source reached flag.
+- Source latent state h_u.
+- Destination latent state h_v.
+- Edge embedding e_uv.
+
+Input dimension is 1 + 1 + 1 + 128 + 128 + 16 = 275.
+
+Each extender atom j is an independent MLP:
+
+Linear(275, 32)
+SiLU
+Linear(32, 129)
+
+The first output is a scalar candidate contribution q_j.
+The remaining 128 outputs are a vector message contribution m_j.
+
+All extender atoms are initialized independently.
+
+The selected extender outputs are combined as:
+
+q_uv = (1 / k_ext) * sum_j gate_ext[j] * q_j
+m_uv = (1 / k_ext) * sum_j gate_ext[j] * m_j
+
+The unnormalized candidate scalar is:
+
+c_uv = 1024 * q_uv
+
+Apply a straight-through clamp:
+
+c_hard = clamp(c_uv, -1024, 1024)
+c_uv_used = stop_gradient(c_hard - c_uv) + c_uv
+
+At inference, use the hard clamped value.
+
+There is no unmasked learned extender path in the primary model. The selected atoms must carry
+the candidate computation.
+
+7.5 Reducer bank
+
+Every reducer atom receives:
+
+- Candidate scalar c_uv / 1024.
+- Current destination scalar r_v / 1024.
+- Candidate vector message m_uv.
+- Destination latent state h_v.
+- Edge embedding e_uv.
+
+Input dimension is 1 + 1 + 128 + 128 + 16 = 274.
+
+Each reducer atom j is:
+
+Linear(274, 32)
+SiLU
+Linear(32, 1)
+
+The reducer score is:
+
+score_uv = (1 / k_red) * sum_j gate_red[j] * reducer_atom_j(input_uv)
+
+There is no unmasked learned reducer path in the primary model.
+
+7.6 Hard predecessor selection
+
+For every destination node v at recurrent step t:
+
+- Consider incoming edges from currently reached predecessors.
+- If there are no reached predecessors, v remains unreached and its state is unchanged.
+- Otherwise compute score_uv for every valid incoming edge.
+- Compute a hard one-hot predecessor choice with straight-through softmax.
+
+Training warmup:
+
+- During the first 250 optimizer steps of the first task only, use ordinary softmax attention with
+  temperature 1.0.
+- From step 251 onward, use hard argmax in the forward pass and softmax in the backward pass.
+
+The straight-through attention is:
+
+p_soft = softmax(scores / tau_edge)
+p_hard = one_hot(argmax(scores))
+p = stop_gradient(p_hard - p_soft) + p_soft
+
+Default tau_edge is 0.1 after warmup.
+
+New scalar register:
+
+r_v^(t+1) = sum_u p_uv * c_uv
+
+New aggregated vector:
+
+a_v^(t+1) = sum_u p_uv * m_uv
+
+At inference, use p_hard exactly.
+
+7.7 Shared latent update
+
+For every newly reached or already reached non-source node:
+
+z_v = concatenate(a_v, r_v^(t+1) / 1024)
+
+Project:
+
+x_v = Linear(129, 128)(z_v)
+
+Update:
+
+h_v^(t+1) = LayerNorm(GRUCell(input=x_v, hidden=h_v^t))
+
+For nodes with no reached incoming predecessor, retain the previous h_v and r_v.
+
+Clamp the source state:
+
+- r_s^t = 0 for all t.
+- Source reached flag remains true.
+- Source latent state is retained unless an explicit source-update ablation is run.
+
+7.8 Output heads
+
+Value head:
+
+Linear(128, 64)
+SiLU
+Linear(64, 1)
+
+The predicted final value is:
+
+value_pred = 1024 * tanh(raw_value)
+
+During trace training, decode every step.
+
+Reached head:
+
+Linear(128, 1)
+
+Pointer output:
+
+Use the reducer scores already computed on incoming edges. The predicted predecessor is argmax of
+the reducer score among reached predecessors.
+
+The pointer loss supports multiple correct predecessors.
+
+7.9 Parameter initialization
+
+Use PyTorch default Kaiming-uniform initialization for linear weights, except:
+
+- Final scalar output layers in extender atoms: normal distribution with standard deviation 0.02.
+- Final reducer score layers: normal distribution with standard deviation 0.02.
+- Biases: zero.
+- GRU recurrent weights: orthogonal initialization.
+- LayerNorm scale: one.
+- LayerNorm bias: zero.
+
+Do not initialize atom outputs to exactly zero. Exact zero outputs would remove the configurer's
+gradient signal for currently unselected or untrained atoms.
+
+7.10 Expected model size
+
+The default model is expected to contain approximately 2 to 5 million trainable parameters,
+depending on implementation details. The model is intentionally small. GPU count is driven by the
+number of independent runs, not by model memory.
+
+
+8. PROGRAM MASKS
+
+8.1 Mask definition
+
+The extender mask is a binary vector:
+
+m_ext in {0, 1}^64
+sum(m_ext) = 8
+
+The reducer mask is:
+
+m_red in {0, 1}^64
+sum(m_red) = 8
+
+The same pair of masks is used for:
+
+- Every graph in the support episode.
+- Every graph in the corresponding query batch.
+- Every recurrent step.
+- Every graph size at evaluation.
+
+8.2 Stored mask prototype
+
+At the end of each seen-task block, store ten prototype masks inferred from ten independent
+support sets. Also store the medoid mask under Hamming distance. The medoid is the default stored
+mask for retrieval baselines.
+
+8.3 Mask overlap
+
+For masks m_a and m_b in the same bank:
+
+overlap(m_a, m_b) = dot(m_a, m_b) / k
+
+The combined overlap used for replay is:
+
+overlap_combined = 0.5 * overlap_ext + 0.5 * overlap_red
+
+
+9. SUPPORT-CONDITIONED CONFIGURER
+
+9.1 Configurer inputs and outputs
+
+Input:
+
+- Frozen model parameters.
+- A support batch.
+- Optional initialization seed.
+
+Output:
+
+- Hard extender top-k mask.
+- Hard reducer top-k mask.
+- Support loss before and after configuration.
+- Logit trajectories for diagnostics.
+
+9.2 Mask logits
+
+Maintain float32 logits:
+
+a_ext in R^64
+a_red in R^64
+
+Initialization:
+
+a = Normal(0, 0.01)
+
+The random initialization seed is derived deterministically from:
+
+- Run seed.
+- Task or held-out fold.
+- Support-set identifier.
+- Restart identifier.
+
+9.3 Straight-through top-k relaxation
+
+At inner step s, with temperature tau_s:
+
+soft_ext = k_ext * softmax(a_ext / tau_s)
+hard_ext = binary_top_k(a_ext, k_ext)
+gate_ext = stop_gradient(hard_ext - soft_ext) + soft_ext
+
+Apply the same calculation to reducer logits.
+
+Because both soft and hard masks sum to k, the atom mixture scaling remains consistent.
+
+9.4 Temperature schedule
+
+Use 12 inner steps by default.
+
+Geometric schedule:
+
+tau_0 = 2.0
+tau_11 = 0.2
+
+tau_s = tau_0 * (tau_11 / tau_0)^(s / 11)
+
+9.5 Inner optimizer
+
+Use SGD without momentum:
+
+- Learning rate: 1.0.
+- Weight decay: 0.
+- Gradient clipping on the concatenated logit gradient: norm 5.0.
+- Model weights require_grad = false.
+- Only mask logits require gradients.
+
+9.6 Support loss
+
+Support loss uses final outputs only:
+
+L_support =
+    1.0 * L_value_final
+  + 0.25 * L_pointer_final
+  + 0.01 * L_logit_l2
+
+Value loss:
+
+SmoothL1(value_pred / 1024, value_target / 1024, beta=1/1024)
+
+Average over reached non-source nodes and support graphs.
+
+Pointer loss for node v with valid predecessor set P_v:
+
+-log(sum_{u in P_v} softmax(score_incoming(v))[u] + 1e-12)
+
+Average over non-source nodes.
+
+Logit L2:
+
+mean(a_ext^2) + mean(a_red^2)
+
+No trace supervision is used in configuration.
+
+9.7 Training-time configuration
+
+Use one initialization and 12 inner steps.
+
+After the final inner step:
+
+- Project logits to hard top-k masks.
+- Detach masks.
+- Do not backpropagate through the inner optimization into model weights in version 1.
+- Use the detached hard masks for the query update.
+
+9.8 Evaluation-time configuration
+
+Use four independent restarts.
+
+For each restart:
+
+- Run 12 inner steps.
+- Project to hard masks.
+- Recompute support loss under strictly hard masks.
+
+Select the hard mask pair with lowest hard-mask support loss.
+
+Do not select using query performance.
+
+9.9 Optional local-swap diagnostic
+
+This is not part of the primary method. It is a diagnostic:
+
+- Starting from the selected hard mask, identify the four active atoms with lowest logits and the
+  eight inactive atoms with highest logits.
+- Evaluate all one-for-one swaps in one bank while holding the other bank fixed.
+- Accept the best support-loss-improving swap.
+- Alternate banks for up to four accepted swaps.
+- Report results separately as FTN + LOCAL_SWAP.
+
+9.10 Configurer assertions
+
+The code must assert:
+
+- Exactly k atoms are active in each hard mask.
+- Model parameters do not change during configuration.
+- Support and query graph seeds are disjoint.
+- The same final mask is used at every recurrent step.
+- Evaluation restarts are reproducible.
+
+
+10. TRAINING PROCEDURE
+
+10.1 General schedule
+
+For each held-out fold and run seed:
+
+- Initialize model.
+- Select a random order of the seven seen algorithms.
+- Train each algorithm for 2,000 optimizer steps.
+- Reset AdamW optimizer state at every task boundary.
+- Preserve model weights and replay buffer across task boundaries.
+- Total main-model steps per fold: 14,000.
+
+10.2 Per-step batches
+
+At each optimizer step of the current task:
+
+- Support batch: 16 newly generated graphs.
+- Query batch: 32 newly generated, disjoint graphs.
+- Replay batch: up to 16 stored graphs.
+
+The support and query graphs use the training distribution.
+
+10.3 Per-step algorithm
+
+1. Generate support and query batches for the current algorithm.
+2. Freeze model weights.
+3. Configure extender and reducer masks from support.
+4. Unfreeze model weights.
+5. Run query graphs under the detached hard masks.
+6. Compute query loss using final and trace targets.
+7. Sample replay examples whose stored masks have moderate overlap with current masks.
+8. Run replay examples under their stored masks.
+9. Add replay loss.
+10. Backpropagate once.
+11. Clip model gradient norm.
+12. Take one AdamW step.
+13. Optionally insert query examples and current masks into replay.
+14. Update mask-usage and loss diagnostics.
+
+10.4 Model training loss
+
+For a query graph, decode at every recurrent step.
+
+Final value loss:
+
+L_final_value = SmoothL1 normalized by 1024.
+
+Trace value loss:
+
+Average SmoothL1 over all reached nodes at all steps, excluding future unreached nodes.
+
+Reached loss:
+
+Binary cross entropy over the reached flag at every node and step.
+
+Pointer loss:
+
+Multi-positive negative log likelihood over valid predecessors at every reached non-source node.
+
+Total query loss:
+
+L_query =
+    1.0 * L_final_value
+  + 0.5 * L_trace_value
+  + 0.1 * L_reached
+  + 0.5 * L_final_pointer
+  + 0.25 * L_trace_pointer
+
+The source node is excluded from value and pointer losses except for the reached loss.
+
+10.5 Replay loss
+
+Use the same loss components and weights as L_query.
+
+Total training loss:
+
+L_total = L_query + lambda_replay * L_replay
+
+Default lambda_replay = 1.0.
+
+If no eligible replay example exists, set L_replay = 0 for that step.
+
+10.6 Optimizer
+
+AdamW:
+
+- Learning rate: 3e-4.
+- Betas: (0.9, 0.999).
+- Epsilon: 1e-8.
+- Weight decay: 1e-5.
+
+Gradient clipping:
+
+- Global model gradient norm: 1.0.
+
+Learning-rate schedule:
+
+- 100-step linear warmup at the start of every task block.
+- Cosine decay from 3e-4 to 3e-5 over the remaining task steps.
+- Reset schedule and optimizer state at task boundaries.
+
+10.7 Precision
+
+Use:
+
+- bfloat16 autocast for neural forward operations.
+- float32 scalar register.
+- float32 mask logits and mask optimization.
+- float32 losses and reductions.
+- int64 graph indices and reference labels.
+
+Do not use float16 because recurrent score and scalar stability are more important than the small
+memory saving.
+
+10.8 Replay buffer
+
+Capacity: 2,048 graph episodes.
+
+Each stored item contains:
+
+- Graph structure.
+- Edge weights.
+- Source index.
+- Final and trace labels.
+- Extender hard mask.
+- Reducer hard mask.
+- Algorithm identifier for diagnostics only.
+- Graph seed.
+- Insertion step.
+
+The algorithm identifier must never be passed to the model or configurer.
+
+Insertion:
+
+- Every 10 optimizer steps, insert four randomly chosen query examples.
+- Use reservoir sampling after the buffer is full.
+
+Eligibility:
+
+A replay item is eligible when:
+
+0.20 < overlap_combined(current_mask, stored_mask) <= 0.80
+
+Rationale:
+
+- Very low overlap exposes few shared atoms and is unlikely to protect the parameters currently
+  being changed.
+- Very high overlap is already similar to the current computation and is overrepresented in the
+  current query gradient.
+
+Sampling:
+
+- Uniformly sample eligible items.
+- If fewer than 16 eligible items exist, use all eligible items.
+- If none exist, skip replay.
+- Do not fall back to arbitrary replay in the primary method.
+
+10.9 Shared-parameter protection
+
+Shared encoders, GRU, and decoders are updated on every task. Replay is therefore required to
+protect both shared and overlapping atom parameters.
+
+A secondary ablation freezes all shared parameters after the first task. This ablation is diagnostic
+only.
+
+10.10 Checkpointing
+
+Save checkpoints:
+
+- Before training.
+- At the end of every task block.
+- Every 500 steps within a task block.
+- After final training.
+- After every major evaluation stage.
+
+Each checkpoint contains:
+
+- Model state.
+- Current optimizer state.
+- Scheduler state.
+- Replay buffer or a reproducible replay-buffer manifest.
+- RNG states for Python, NumPy, CPU PyTorch, and every CUDA device.
+- Current fold, seed, task order, task index, and step.
+- Configuration hash.
+- Git commit hash.
+- Environment manifest.
+
+Keep all end-of-task and final checkpoints. Intermediate 500-step checkpoints may be pruned after
+a run passes integrity checks.
+
+
+11. PRIMARY BASELINES
+
+All baselines use the same graph generator, train/test splits, number of training steps, losses,
+evaluation protocol, seeds, and active compute as closely as possible.
+
+11.1 ORACLE_COMPOSITION
+
+Purpose:
+
+Determine whether the aligned recurrent architecture can execute the held-out composition at all.
+
+Architecture:
+
+- Four explicitly labeled extender modules.
+- Two explicitly labeled reducer modules.
+- Same per-module architecture and active parameter count as the FTN active path.
+- During training, use the known extender and reducer labels.
+- Train on the seven seen combinations.
+- At held-out evaluation, use the true extender and reducer modules.
+- No support-set inference is needed.
+
+Interpretation:
+
+If this baseline fails OOD, stop. The FTN search mechanism is not the primary problem.
+
+11.2 FTN_FULL
+
+The primary method specified in this document.
+
+11.3 FTN_RETRIEVAL
+
+Train exactly as FTN_FULL.
+
+At evaluation:
+
+- Do not optimize mask logits.
+- Evaluate the seven seen-task medoid masks on the support set.
+- Select the mask with lowest support loss.
+- Evaluate that stored mask on query sets.
+
+Interpretation:
+
+This separates novel reconfiguration from retrieval of an existing algorithm.
+
+11.4 FTN_RANDOM_MASK_TRAIN
+
+Use the same model, replay, and optimizer.
+
+During training, replace support-conditioned masks with a fresh uniformly random top-k mask for
+each minibatch.
+
+At evaluation, use the normal support-conditioned configurer.
+
+Interpretation:
+
+This isolates the role of support-conditioned per-batch routing during bank formation.
+
+11.5 FTN_NO_REPLAY
+
+Use normal support-conditioned configuration but no replay buffer.
+
+Interpretation:
+
+This isolates replay's contribution to retention and preservation of shared atoms.
+
+11.6 DENSE_ACTIVE_MATCHED
+
+Replace each atom bank with one dense MLP having approximately the same parameters and FLOPs
+as the active eight-atom path.
+
+Train one shared processor on the seven algorithms in task blocks with uniform replay.
+
+At held-out evaluation:
+
+- Freeze shared weights.
+- Adapt only a small 128-dimensional continuous task vector from support for 12 steps.
+- Feed that vector into the dense extender and reducer MLPs by FiLM modulation.
+- Do not update model weights.
+
+Interpretation:
+
+This tests whether sparse combinatorial masks are better than an ordinary continuous latent task
+code.
+
+11.7 SOFT_MIXTURE
+
+Use the FTN atom bank but optimize dense softmax gates over all atoms.
+
+- No hard top-k projection.
+- Gates remain soft at query time.
+- Match total atom-bank parameters to FTN.
+- Add an entropy penalty adjusted so effective support is approximately eight atoms.
+
+Interpretation:
+
+This tests whether discreteness and sparse composition are necessary.
+
+11.8 DISJOINT_TASK_MODULES
+
+Allocate one active-size extender/reducer pair per seen algorithm.
+
+- Train only the current task's modules.
+- Freeze completed task modules.
+- At evaluation, retrieve the task module with lowest support loss.
+- There is no compositional held-out module.
+
+Interpretation:
+
+This is an isolation and retrieval baseline.
+
+11.9 JOINT_MULTITASK_FTN
+
+Train the seven seen algorithms with i.i.d. task sampling instead of blocks.
+
+Interpretation:
+
+This estimates the cost specifically attributable to continual block-sequential training.
+
+
+12. SECONDARY ABLATIONS
+
+Run these after the primary method is functional.
+
+12.1 Mask size
+
+k in {1, 2, 4, 8, 16} with H fixed at 64.
+
+12.2 Bank size
+
+H in {16, 32, 64, 128} with active fraction adjusted to approximately 1/8.
+
+12.3 Inner-loop steps
+
+S in {1, 3, 6, 12, 24}.
+
+12.4 Configuration restarts
+
+R in {1, 2, 4, 8}.
+
+12.5 Support size
+
+B_support in {1, 2, 4, 8, 16, 32}.
+
+12.6 Per-task versus per-minibatch masks
+
+Configure once at task-block start and reuse that mask for all 2,000 steps.
+
+12.7 Trace supervision
+
+- Full trace supervision: primary.
+- Final-output-only model training.
+- Trace supervision for the first 500 steps of each task only.
+
+12.8 Hard versus soft predecessor selection
+
+- Hard straight-through argmax: primary.
+- Softmax throughout.
+- Gumbel-softmax.
+
+12.9 Shared-parameter freezing
+
+Freeze encoders, GRU, and decoders after task 1.
+
+12.10 Local swap search
+
+Run the optional local-swap diagnostic after gradient configuration.
+
+12.11 Amortized initializer
+
+Only after the non-amortized configurer is established:
+
+- Train a permutation-invariant support encoder to predict initial mask logits.
+- Refine those logits with the same 12-step optimizer.
+- Report separately from the primary method.
+
+
+13. TINY-BANK EXHAUSTIVE DIAGNOSTIC
+
+13.1 Purpose
+
+This experiment directly tests the hypothesis that overlapping approximate solutions create a
+pathway to an exact solution.
+
+13.2 Tiny model
+
+Use the same architecture with:
+
+- H_ext = 12.
+- H_red = 12.
+- k_ext = 2.
+- k_red = 2.
+- Latent dimension 64.
+- Atom width 16.
+
+There are:
+
+C(12, 2) * C(12, 2) = 4,356
+
+joint hard mask pairs.
+
+This is small enough to enumerate exactly.
+
+13.3 Enumeration
+
+For each held-out fold, seed, and final checkpoint:
+
+1. Enumerate all 66 extender masks.
+2. Enumerate all 66 reducer masks.
+3. Evaluate all 4,356 pairs on the held-out support set.
+4. Retain support loss for every pair.
+5. Evaluate the top 100 support-ranked pairs on:
+   - ID held-out validation.
+   - OOD width N=32.
+   - OOD depth D=8.
+6. Also evaluate every mask pair on a smaller fixed query set of 64 graphs if compute permits.
+7. Record the best query-performing mask and its support-loss rank.
+8. Run the gradient configurer and record the rank of its selected mask.
+
+13.4 Exact-mask existence criterion
+
+A mask "exists" at a given size condition when it attains:
+
+- 100% exact graph value accuracy on 512 validation graphs, or
+- At least 99% if no mask attains 100%, with the exact value clearly reported.
+
+Do not call a mask exact based only on low regression loss.
+
+13.5 Approximation-scaffolding comparison
+
+Repeat tiny-bank training under:
+
+- Per-minibatch FTN configuration.
+- Per-task fixed masks.
+- Random per-minibatch masks.
+- Disjoint task modules.
+- FTN without replay.
+
+Compare:
+
+- Best support loss.
+- Best ID exact accuracy.
+- Best OOD exact accuracy.
+- Rank of best OOD mask under support loss.
+- Gradient configurer success probability.
+- Number of near-exact masks above 95% exact graph accuracy.
+- Distribution of single-swap improvements around the best mask.
+- Whether exact masks have useful partially correct submasks.
+
+13.6 Epistasis measurement
+
+For an exact or best-performing joint mask M:
+
+- Remove one active atom at a time and replace it with each inactive atom.
+- Measure change in support loss and OOD exact accuracy.
+- Evaluate all one-atom and two-atom partial subsets where defined.
+- Report whether components have positive marginal value individually.
+- If no component has positive marginal value until a coordinated group is present, the landscape
+  is epistatic and the approximate-solution pathway is not first-order navigable.
+
+
+14. EVALUATION METRICS
+
+14.1 Node value metrics
+
+- Mean absolute error.
+- Rounded node accuracy: round predicted value to nearest integer and compare exactly.
+- Reached-node accuracy.
+- Maximum absolute error per graph.
+
+14.2 Exact graph value accuracy
+
+A graph is correct only when every node's rounded value equals the reference value.
+
+This is the primary algorithmic metric.
+
+14.3 Pointer metrics
+
+- Node pointer accuracy, accepting any valid predecessor.
+- Exact graph pointer accuracy.
+- Exact graph value-and-pointer accuracy.
+
+14.4 Continual-learning metrics
+
+Let R[i, j] be exact graph value accuracy on task j after training task i.
+
+Report:
+
+- Final average seen-task accuracy.
+- Forgetting per task:
+  max_{i before final} R[i, j] - R[final, j]
+- Mean forgetting.
+- Backward transfer:
+  R[final, j] - R[j, j]
+- Accuracy matrix heatmap.
+- Loss matrix heatmap.
+
+Every task evaluation uses a newly inferred support-conditioned mask unless explicitly labeled as a
+stored-mask diagnostic.
+
+14.5 Induction metrics
+
+For the held-out task:
+
+- Support hard-mask loss.
+- ID exact graph value accuracy.
+- OOD-width exact accuracy at 32, 64, and 128 nodes.
+- OOD-depth exact accuracy at depth 8, 16, and 32.
+- OOD-both exact accuracy.
+- Difference from FTN_RETRIEVAL.
+- Difference from DENSE_ACTIVE_MATCHED.
+- Difference from SOFT_MIXTURE.
+- Fraction of support sets leading to the same mask.
+- Pairwise Hamming distance between masks inferred from different support sets.
+
+14.6 Primitive mask geometry
+
+For algorithms a and b:
+
+- Extender overlap.
+- Reducer overlap.
+
+Compute:
+
+- Mean extender overlap when extenders match.
+- Mean extender overlap when extenders differ.
+- Mean reducer overlap when reducers match.
+- Mean reducer overlap when reducers differ.
+- Difference and bootstrap confidence interval.
+- Correlation between mask-overlap matrices and known primitive-sharing matrices.
+- Mutual information between active atom identity and extender label.
+- Mutual information between active atom identity and reducer label.
+
+14.7 Support identifiability metrics
+
+For every support set:
+
+- Number of algorithms consistent with all final value labels.
+- Pairwise output disagreement matrix.
+- Whether the support is identifiable.
+- Configurer performance stratified by consistency-set size.
+
+14.8 Configuration diagnostics
+
+At every inner step:
+
+- Support loss.
+- Hard-mask support loss.
+- Gradient norm.
+- Temperature.
+- Mask changes.
+- Extender and reducer entropy.
+- Selected atom IDs.
+- Support-to-query generalization gap.
+
+14.9 Runtime metrics
+
+- Training wall-clock time per step.
+- Configuration wall-clock time.
+- Query-update wall-clock time.
+- Replay overhead.
+- GPU peak allocated memory.
+- GPU utilization.
+- Graphs processed per second.
+
+
+15. STATISTICAL DESIGN
+
+15.1 Seeds
+
+Use five final seeds per held-out fold.
+
+Each seed controls:
+
+- Model initialization.
+- Seen-task order.
+- Training graph generation.
+- Support candidate pools.
+- Evaluation graph generation.
+- Configurer initialization.
+- Replay sampling.
+
+Use seed values:
+
+0, 1, 2, 3, 4
+
+A discovery stage may use seeds 0, 1, 2. Final tables must use all five.
+
+15.2 Primary experimental cells
+
+Eight held-out folds times five seeds equals 40 cells per method.
+
+15.3 Reporting
+
+Report:
+
+- Mean and standard deviation across the 40 fold-seed cells.
+- Per-fold mean across five seeds.
+- Per-seed mean across eight folds.
+- Paired differences between FTN_FULL and every baseline.
+- 95% paired bootstrap confidence intervals over fold-seed cells.
+- Exact number of successful folds.
+
+15.4 No silent seed removal
+
+A run may be excluded only for:
+
+- Hardware failure.
+- Corrupt checkpoint.
+- Confirmed software bug affecting that run.
+
+Divergent optimization is a result and must not be silently removed.
+
+15.5 Hyperparameter selection
+
+Tune hyperparameters only on:
+
+- Seen-task validation.
+- One designated development held-out fold, MIN + ADD, using seeds 0 and 1.
+
+After freezing hyperparameters, rerun that fold from scratch and evaluate all folds.
+
+Do not select hyperparameters using aggregate held-out test performance.
+
+
+16. SUCCESS, PARTIAL SUCCESS, AND STOP CRITERIA
+
+16.1 Executor gate
+
+Proceed with FTN conclusions only if ORACLE_COMPOSITION reaches:
+
+- At least 95% ID exact graph value accuracy.
+- At least 90% exact accuracy at OOD width N=64.
+- At least 75% exact accuracy at OOD width N=128.
+- At least 75% exact accuracy at OOD depth D=16.
+
+If it fails, improve the executor architecture before evaluating FTN routing.
+
+16.2 Continual-learning success
+
+FTN_FULL should satisfy:
+
+- Final mean seen-task exact accuracy at least 90%.
+- Mean forgetting no greater than five percentage points.
+- Better retention than FTN_NO_REPLAY.
+
+16.3 Compositional induction success
+
+A meaningful primary success requires all of:
+
+- FTN_FULL exceeds FTN_RETRIEVAL by at least 15 absolute percentage points in mean held-out
+  exact accuracy at N=64.
+- The paired 95% bootstrap confidence interval excludes zero.
+- FTN_FULL exceeds DENSE_ACTIVE_MATCHED at N=64.
+- At least four of eight held-out folds show a positive retrieval gap.
+- The same configured mask is used without modification across all graph sizes.
+- No held-out weight updates occur.
+
+16.4 Strong success
+
+Strong success is:
+
+- At least 75% held-out exact accuracy at N=64.
+- At least 50% at N=128.
+- At least 50% at depth D=16.
+- Stable masks across support sets.
+- Primitive-sensitive mask geometry.
+- Tiny-bank evidence that exact masks exist and are found more often under per-minibatch FTN
+  training.
+
+16.5 Negative result worth publishing
+
+A clean negative result is still informative when:
+
+- ORACLE_COMPOSITION succeeds.
+- Exhaustive search finds an accurate held-out mask.
+- Gradient configuration fails consistently.
+
+That result isolates discrete program search as the obstacle.
+
+Another informative negative result is:
+
+- ORACLE_COMPOSITION succeeds.
+- No accurate held-out mask exists after FTN training.
+- Retrieval and dense baselines perform similarly.
+
+That result rejects the hypothesis that the FTN population spontaneously forms a compositional
+operator basis under this training regime.
+
+16.6 Immediate stop conditions
+
+Stop and debug before scaling when:
+
+- Reference implementations disagree.
+- Support and query seeds overlap.
+- Model parameters change during configuration.
+- Hard mask cardinality is wrong.
+- Training task identity reaches the model.
+- ORACLE_COMPOSITION cannot fit one algorithm in-distribution.
+- A single-task specialist cannot reach 99% node accuracy.
+- Recurrent outputs contain NaNs.
+- Evaluation changes masks as graph size changes.
+
+
+17. DEVELOPMENT STAGES
+
+17.1 Stage A: generator and reference
+
+Deliver:
+
+- Graph generator.
+- Eight exact algorithms.
+- Trace generator.
+- Identifiability checker.
+- Unit tests.
+
+Acceptance:
+
+- 10,000 random-instance cross-checks pass.
+- Every primary support pool can generate identifiable sets.
+- Deterministic regeneration from seeds works.
+
+17.2 Stage B: single-task executor
+
+Train one aligned processor using oracle module selection on each algorithm independently.
+
+Acceptance:
+
+- At least 99% rounded node accuracy.
+- At least 95% exact graph accuracy in-distribution.
+- No numerical instability at OOD width 32.
+
+17.3 Stage C: oracle compositional executor
+
+Train the explicit four-extender/two-reducer model on seven combinations and evaluate the eighth.
+
+Acceptance:
+
+Meet the executor gate in Section 16.1 on most folds before proceeding.
+
+17.4 Stage D: FTN without continual sequence
+
+Train seven algorithms jointly with FTN masks.
+
+Acceptance:
+
+- Seen tasks fit.
+- Held-out configuration beats retrieval on at least one development fold.
+- Masks vary with algorithm.
+
+17.5 Stage E: block-sequential FTN
+
+Add task blocks and overlap-filtered replay.
+
+Acceptance:
+
+- Mean forgetting below 10 percentage points in development.
+- No task identity at evaluation.
+
+17.6 Stage F: full primary matrix
+
+Run all eight folds and five seeds for primary methods.
+
+17.7 Stage G: tiny-bank exhaustive diagnostic
+
+Run exhaustive mask enumeration and scaffolding tests.
+
+17.8 Stage H: trace-free training
+
+Only after the primary trace-supervised result is understood.
+
+
+18. SOFTWARE ARCHITECTURE
+
+18.1 Recommended stack
+
+- Python 3.11.
+- PyTorch 2.4 or later compatible release.
+- CUDA 12.x.
+- torch.compile optional and disabled by default until correctness is established.
+- PyTorch Geometric or a minimal internal graph-batching layer.
+- Hydra or OmegaConf for configuration.
+- Weights and Biases, MLflow, or a local JSONL plus TensorBoard logger.
+- pytest for unit and integration tests.
+- NumPy for reference generation.
+- pandas and matplotlib for analysis.
+- No dependence on CLRS code is required for version 1.
+
+18.2 Repository layout
+
+repository/
+  README.txt
+  pyproject.toml
+  requirements-lock.txt
+  configs/
+    model/
+      ftn_default.yaml
+      tiny_ftn.yaml
+      oracle.yaml
+      dense.yaml
+    experiment/
+      smoke.yaml
+      development.yaml
+      primary.yaml
+      exhaustive.yaml
+    hardware/
+      single_h100.yaml
+      multi_h100.yaml
+  src/
+    data/
+      graph_generator.py
+      graph_batch.py
+      seeds.py
+      support_selection.py
+      manifests.py
+    algorithms/
+      common.py
+      add.py
+      sub.py
+      max_edge.py
+      min_edge.py
+      reduce_min.py
+      reduce_max.py
+      reference_a.py
+      reference_b.py
+      traces.py
+    model/
+      encoders.py
+      atom_bank.py
+      extender_bank.py
+      reducer_bank.py
+      recurrent_processor.py
+      decoders.py
+      masks.py
+      ftn_model.py
+      oracle_model.py
+      dense_model.py
+    configurer/
+      annealed_topk.py
+      local_swap.py
+      restarts.py
+    training/
+      losses.py
+      replay.py
+      train_step.py
+      task_stream.py
+      checkpoint.py
+      trainer.py
+    evaluation/
+      evaluator.py
+      continual_metrics.py
+      induction_metrics.py
+      mask_geometry.py
+      exhaustive_search.py
+      identifiability.py
+    analysis/
+      tables.py
+      plots.py
+      bootstrap.py
+      report.py
+    cli/
+      generate_manifests.py
+      train.py
+      evaluate.py
+      exhaustive.py
+      aggregate.py
+  tests/
+    test_algorithms.py
+    test_graph_generator.py
+    test_trace_consistency.py
+    test_support_identifiability.py
+    test_mask_cardinality.py
+    test_configurer_freezes_weights.py
+    test_replay_overlap.py
+    test_checkpoint_resume.py
+    test_determinism.py
+    test_single_batch_overfit.py
+  scripts/
+    smoke.sh
+    launch_primary.sh
+    launch_exhaustive.sh
+    aggregate.sh
+  outputs/
+    manifests/
+    runs/
+    reports/
+
+18.3 Required configuration keys
+
+experiment:
+  held_out_algorithm
+  seed
+  task_order
+  steps_per_task
+  support_size
+  query_batch_size
+  replay_batch_size
+  trace_supervision
+  evaluation_sizes
+  number_of_restarts
+
+model:
+  latent_dim
+  edge_embed_dim
+  extender_atoms
+  reducer_atoms
+  active_extender_atoms
+  active_reducer_atoms
+  atom_width
+  edge_temperature
+  hard_attention_warmup_steps
+
+configurer:
+  inner_steps
+  learning_rate
+  tau_start
+  tau_end
+  gradient_clip
+  restarts
+  logit_init_std
+
+replay:
+  capacity
+  insertion_period
+  insertion_count
+  overlap_low
+  overlap_high
+  replay_weight
+
+optimizer:
+  learning_rate
+  minimum_learning_rate
+  warmup_steps
+  weight_decay
+  betas
+  gradient_clip
+
+data:
+  train_n_min
+  train_n_max
+  train_depth_min
+  train_depth_max
+  edge_weight_values
+  maximum_in_degree
+  support_candidate_pool
+  evaluation_count
+  value_clip
+
+logging:
+  output_directory
+  checkpoint_interval
+  retain_intermediate_checkpoints
+  save_predictions
+  save_inner_trajectories
+
+18.4 Core interfaces
+
+GraphBatch must expose:
+
+- node_features
+- edge_index
+- edge_weight_scalar
+- edge_weight_category
+- source_mask
+- graph_index_per_node
+- graph_index_per_edge
+- depth_per_graph
+- final_values
+- trace_values
+- trace_reached
+- valid_predecessor_edge_masks
+- graph_seeds
+- algorithm_id for diagnostics only
+
+FTNModel.forward must accept:
+
+- GraphBatch
+- hard_or_ste_extender_gate
+- hard_or_ste_reducer_gate
+- return_trace
+- edge_attention_mode
+
+It must return:
+
+- final_values
+- final_reached_logits
+- final_edge_scores
+- trace_values
+- trace_reached_logits
+- trace_edge_scores
+- diagnostics
+
+Configurer.configure must accept:
+
+- frozen model
+- support batch
+- restart seed
+- inner steps
+
+It must return:
+
+- hard extender mask
+- hard reducer mask
+- final support loss
+- trajectory diagnostics
+
+18.5 Determinism
+
+Use deterministic algorithms where practical.
+
+Record:
+
+- torch version
+- CUDA version
+- cuDNN version
+- GPU model
+- driver version
+- all RNG states
+- environment variables
+
+Exact bitwise equality across GPU models is not required. Repeated runs on the same hardware and
+software stack must reproduce metrics within numerical tolerance.
+
+
+19. PSEUDOCODE
+
+19.1 Reference algorithm
+
+function EXECUTE(graph, reducer, extender):
+    d[source] = 0
+    for every other node:
+        d[node] = undefined
+
+    for layer = 1 to graph.depth:
+        for v in graph.nodes_in_layer[layer]:
+            candidates = []
+            for edge (u, v):
+                candidates.append(CLIP(extender(d[u], weight(u, v))))
+            d[v] = reducer(candidates)
+
+    return d
+
+19.2 Configuration
+
+function CONFIGURE(model, support, seed):
+    freeze(model)
+    initialize extender_logits and reducer_logits from Normal(0, 0.01)
+
+    for s in 0 through 11:
+        tau = geometric_temperature(s)
+        extender_gate = STE_TOPK(extender_logits, k_ext, tau)
+        reducer_gate = STE_TOPK(reducer_logits, k_red, tau)
+
+        predictions = model(
+            support,
+            extender_gate,
+            reducer_gate,
+            return_trace=false
+        )
+
+        loss = support_loss(predictions, support.labels)
+        gradients = gradient(loss, [extender_logits, reducer_logits])
+        clip gradients to norm 5.0
+        SGD update logits with learning rate 1.0
+
+    hard_extender = TOPK(extender_logits, k_ext)
+    hard_reducer = TOPK(reducer_logits, k_red)
+    final_loss = hard_mask_support_loss(model, support, hard_extender, hard_reducer)
+    unfreeze(model)
+
+    return hard_extender, hard_reducer, final_loss
+
+19.3 Training step
+
+function TRAIN_STEP(current_algorithm):
+    support = generate_batch(current_algorithm, size=16)
+    query = generate_disjoint_batch(current_algorithm, size=32)
+
+    current_masks = CONFIGURE(model, support, step_seed)
+
+    query_prediction = model(query, current_masks, return_trace=true)
+    query_loss = model_training_loss(query_prediction, query.labels)
+
+    replay_items = buffer.sample_by_overlap(
+        current_masks,
+        low=0.20,
+        high=0.80,
+        maximum=16
+    )
+
+    if replay_items is not empty:
+        replay_prediction = model(
+            replay_items.graphs,
+            replay_items.stored_masks,
+            return_trace=true
+        )
+        replay_loss = model_training_loss(replay_prediction, replay_items.labels)
+    else:
+        replay_loss = 0
+
+    total_loss = query_loss + replay_loss
+    backpropagate(total_loss)
+    clip model gradient norm to 1.0
+    optimizer.step()
+
+    every 10 steps:
+        insert 4 query items and current_masks into reservoir buffer
+
+19.4 Held-out evaluation
+
+function EVALUATE_HELD_OUT(held_out_algorithm):
+    freeze(model)
+
+    for each of 10 identifiable support sets:
+        candidates = []
+        for restart in 0 through 3:
+            candidates.append(CONFIGURE(model, support_set, restart_seed))
+        selected_masks = candidate with minimum hard support loss
+
+        for each evaluation condition:
+            evaluate the same selected_masks
+            record node, graph, pointer, loss, and runtime metrics
+
+    aggregate over support sets
+
+
+20. HARDWARE REQUIREMENTS
+
+20.1 Important clarification
+
+The model does not require multiple H100 GPUs for memory. One run fits comfortably on one modern
+GPU with 24 GB or more memory. H100s are useful because the final study contains many
+independent folds, seeds, baselines, and ablations that can run in parallel.
+
+Do not implement distributed data-parallel training for a single run in version 1. It adds complexity
+without a useful memory or scaling benefit. Use one GPU per run.
+
+20.2 Minimum hardware
+
+Minimum for implementation and a complete but slow study:
+
+- 1 NVIDIA H100 80 GB.
+- 24 CPU cores.
+- 128 GB system RAM.
+- 1 TB local NVMe SSD.
+- Approximately 1,500 to 2,500 H100 GPU-hours for the complete publication-grade matrix,
+  depending on kernel efficiency and the number of retained ablations.
+
+One H100 can perform all work, but wall-clock time may be several weeks.
+
+20.3 Recommended development hardware
+
+Recommended for development and the three-seed discovery matrix:
+
+- 4 NVIDIA H100 80 GB GPUs.
+- 48 to 64 CPU cores.
+- 256 to 512 GB system RAM.
+- 2 TB local NVMe SSD.
+- At least 100 GB/s aggregate host memory bandwidth is desirable.
+- GPUs do not require NVLink because runs are independent.
+
+Use one run per GPU. If profiling shows less than 40% GPU utilization and enough CPU/RAM is
+available, run two independent processes per H100, each capped to an appropriate memory fraction.
+
+20.4 Recommended publication-grade hardware
+
+Reserve:
+
+- 8 NVIDIA H100 80 GB GPUs.
+- 96 or more CPU cores.
+- 512 GB to 1 TB system RAM.
+- 4 TB local NVMe working storage.
+- Optional 4 to 8 TB object storage for long-term checkpoint and prediction retention.
+
+This is the recommended allocation for:
+
+- Eight held-out folds.
+- Five seeds.
+- Six to eight primary methods.
+- Key ablations.
+- Tiny-bank exhaustive search.
+- Repeated evaluation over ten support sets and all OOD conditions.
+
+Expected wall-clock after the code is stable:
+
+- Smoke and single-task executor: less than one day.
+- Oracle and joint-training development: one to three days.
+- Three-seed primary discovery matrix: approximately four to eight days on four H100s.
+- Five-seed publication matrix plus core ablations: approximately seven to twenty-one days on
+  eight H100s.
+
+These are planning estimates, not guarantees. The first profiling milestone must measure the true
+time for one complete seven-task FTN fold and revise the launch plan.
+
+20.5 Expected memory
+
+Expected peak GPU memory for the default model is below 20 GB with the stated batch sizes, even
+during mask configuration. A correct vectorized implementation should fit easily on an H100 80 GB.
+
+Memory can rise if:
+
+- All atom outputs for all recurrent steps are retained unnecessarily.
+- Support graphs are processed as one giant uncheckpointed batch.
+- Inner-loop graphs retain model-weight gradients.
+- Prediction traces for 128-node graphs are kept on GPU.
+- Multiple evaluation conditions are concatenated.
+
+During configuration, disable gradients for model weights and retain only what is required for mask
+logit gradients.
+
+20.6 CPU and data-loader requirements
+
+Online graph generation and exact labeling are CPU work.
+
+Use:
+
+- 8 to 16 data-loader workers per active GPU.
+- Persistent workers.
+- Pinned host memory.
+- Prefetch factor 2 to 4.
+- A small in-memory queue of pre-generated graph batches.
+
+If graph generation becomes the bottleneck, cache only training batch seeds and generated graph
+objects in RAM. Do not write every training graph to disk.
+
+20.7 Disk-space budget
+
+Recommended working allocation: 2 TB for development, 4 TB for the full study.
+
+Approximate budget:
+
+- Source, environments, and containers: 20 to 50 GB.
+- Fixed evaluation manifests and optional cached tensors: 20 to 100 GB.
+- Checkpoints: 200 to 800 GB, depending on retention policy.
+- Logs, mask trajectories, and metrics: 50 to 300 GB.
+- Stored predictions for all nodes and all conditions: 200 GB to 1 TB.
+- Temporary exhaustive-search outputs: 100 to 500 GB.
+- Safety margin: at least 30%.
+
+If only final and end-of-task checkpoints are retained and predictions are summarized rather than
+stored, the complete study should fit within 1 TB. Use 4 TB when preserving full diagnostics.
+
+20.8 Storage policy
+
+Keep permanently:
+
+- Final checkpoint.
+- End-of-task checkpoints.
+- Configuration files.
+- RNG and environment manifests.
+- Aggregated metrics.
+- Support masks.
+- Exact evaluation manifests.
+- Primary prediction outputs.
+- Exhaustive-search ranking tables.
+
+Prune after validation:
+
+- Most 500-step checkpoints.
+- Redundant tensorboard event files.
+- Full inner-loop activation dumps.
+- Duplicate cached training graphs.
+
+20.9 Container
+
+Provide a CUDA-compatible container with:
+
+- Pinned Python and PyTorch versions.
+- All source code.
+- Exact dependency lock.
+- No dataset download requirement.
+- A startup self-test that runs generator, model forward, one configurer step, one training step,
+  and checkpoint round-trip.
+
+
+21. COMPUTE ACCOUNTING
+
+21.1 Required profiling run
+
+Before launching the matrix, run one complete FTN_FULL fold with:
+
+- One seed.
+- Seven tasks.
+- 2,000 steps per task.
+- Full evaluation.
+
+Record:
+
+- Total GPU-hours.
+- Mean seconds per training step.
+- Fraction of time in configuration.
+- Fraction in graph generation.
+- Fraction in query update.
+- Evaluation time.
+- Peak memory.
+
+21.2 Launch estimate formula
+
+For a method M:
+
+GPU_hours(M) =
+    folds
+  * seeds
+  * measured_hours_per_fold(M)
+
+Total wall-clock on G GPUs:
+
+wall_clock_hours approximately total_GPU_hours / (G * utilization_factor)
+
+Use utilization_factor = 0.75 for planning.
+
+21.3 Budget controls
+
+If the measured run is too expensive, reduce in this order:
+
+1. Evaluation graph count from 512/1,024 to 256/512 during development.
+2. Evaluation restarts from four to two during development.
+3. Seeds from five to three during discovery.
+4. Inner steps from 12 to 6 only if development results show little degradation.
+5. Steps per task from 2,000 to 1,000 only for smoke tests.
+
+Do not reduce held-out folds in the final result.
+
+
+22. REQUIRED TESTS
+
+22.1 Unit tests
+
+- Every extender function.
+- Every reducer.
+- Clipping.
+- Trace states.
+- Reached masks.
+- Graph permutation invariance.
+- Support identifiability.
+- Multi-positive pointer loss.
+- Top-k cardinality.
+- STE forward equality to hard masks.
+- Replay overlap calculation.
+- Reservoir sampling.
+- Checkpoint RNG restoration.
+
+22.2 Integration tests
+
+Single-batch overfit:
+
+- One algorithm.
+- Four graphs.
+- Fixed oracle mask.
+- Must reach near-zero loss.
+
+Single-task fit:
+
+- One algorithm.
+- Training distribution.
+- Must reach at least 99% node accuracy.
+
+Mask differentiation:
+
+- Confirm nonzero mask-logit gradients for every atom at initialization.
+
+Configuration freeze:
+
+- Hash model parameters before and after configuration.
+- Hashes must match exactly.
+
+Resume test:
+
+- Train 20 steps.
+- Checkpoint.
+- Continue 20 steps.
+- Separately restore at step 20 and continue.
+- Losses and masks must match within tolerance.
+
+Evaluation leakage test:
+
+- Assert held-out algorithm never appears in optimizer batches.
+- Assert algorithm ID is not passed through model call signatures.
+
+22.3 Regression tests
+
+Maintain a small fixed run with expected metric ranges. Run it in continuous integration on CPU or
+a small GPU with reduced dimensions.
+
+
+23. LOGGING AND REPORTS
+
+23.1 Per-step logging
+
+Log every 10 steps:
+
+- Total loss and components.
+- Current task.
+- Query and replay loss.
+- Mask atom IDs.
+- Mask overlap with task prototypes.
+- Eligible replay count.
+- Gradient norms.
+- Learning rate.
+- Configurer initial and final support loss.
+- Configuration mask changes.
+- Runtime.
+
+23.2 Per-task logging
+
+At each task boundary:
+
+- Seen-task accuracy matrix row.
+- Forgetting.
+- Prototype masks.
+- Mask-usage histogram.
+- Replay task distribution.
+- Primitive-sharing overlap diagnostics.
+
+23.3 Final report tables
+
+Required tables:
+
+- Primary held-out induction results by method and OOD condition.
+- Per-fold induction results.
+- Continual retention and forgetting.
+- Oracle composition results.
+- Retrieval gap.
+- Support-size ablation.
+- Mask-size and bank-size ablations.
+- Tiny-bank exact-mask existence and findability.
+- Hardware and runtime.
+
+Required figures:
+
+- Accuracy matrix across task sequence.
+- Held-out exact accuracy versus graph size.
+- Held-out exact accuracy versus depth.
+- Extender mask-overlap matrix.
+- Reducer mask-overlap matrix.
+- Configurer support-loss trajectories.
+- Support loss versus OOD exact accuracy for enumerated masks.
+- Distribution of exact and near-exact masks.
+- GPU-time breakdown.
+
+23.4 Naming
+
+Every run directory name must encode:
+
+method__heldout-<algorithm>__seed-<seed>__confighash-<hash>
+
+No run may be overwritten.
+
+
+24. PRIMARY CONFIGURATION
+
+Use the following values for the first frozen main run:
+
+Data:
+- Train nodes: 8 to 16.
+- Train depth: 3 to 6.
+- Edge weights: nonzero integers -8 through 8.
+- Maximum in-degree: 6.
+- Support size: 16.
+- Query batch: 32.
+- Replay batch: 16.
+- Support candidate pool: 256.
+- ID test graphs: 1,024.
+- Each OOD condition: 512 graphs.
+
+Model:
+- Latent dimension: 128.
+- Edge embedding: 16.
+- Extender atoms: 64.
+- Reducer atoms: 64.
+- Active extender atoms: 8.
+- Active reducer atoms: 8.
+- Atom width: 32.
+- Edge hard-attention temperature: 0.1.
+- Hard-attention warmup: 250 first-task steps.
+- Dropout: 0.
+
+Configurer:
+- Inner steps: 12.
+- Training restarts: 1.
+- Evaluation restarts: 4.
+- SGD learning rate: 1.0.
+- Logit gradient clip: 5.0.
+- Temperature: 2.0 to 0.2 geometric.
+- Logit initialization standard deviation: 0.01.
+
+Training:
+- Steps per seen task: 2,000.
+- AdamW learning rate: 3e-4.
+- Minimum learning rate: 3e-5.
+- Warmup: 100 steps per task.
+- Weight decay: 1e-5.
+- Model gradient clip: 1.0.
+- Replay capacity: 2,048.
+- Replay overlap interval: (0.20, 0.80].
+- Replay weight: 1.0.
+- Insert four graphs every 10 steps.
+- Precision: bfloat16 neural operations, float32 masks/registers/losses.
+- Trace supervision: enabled.
+
+Evaluation:
+- Ten identifiable support sets.
+- Four configurer restarts per support.
+- One fixed selected mask across every query size and depth.
+- No held-out weight updates.
+
+
+25. DECISION TREE AFTER THE FIRST COMPLETE RUN
+
+Case A:
+ORACLE_COMPOSITION fails single-task or ID execution.
+
+Action:
+Do not analyze FTN. Fix executor, numeric representation, hard reduction, or training.
+
+Case B:
+Oracle succeeds ID but fails OOD.
+
+Action:
+Investigate recurrent stability and algorithmic alignment. Compare hard versus soft attention and
+scalar-register supervision. Do not increase FTN bank size.
+
+Case C:
+Oracle succeeds OOD; FTN cannot retain seen tasks.
+
+Action:
+Inspect replay eligibility, shared-parameter drift, and overlap. Run frozen-shared and uniform-replay
+controls.
+
+Case D:
+FTN retains seen tasks; held-out retrieval and reconfiguration are equally poor.
+
+Action:
+Run tiny-bank exhaustive search. If no good mask exists, the population is not compositional.
+
+Case E:
+A good held-out mask exists, but gradient configuration fails.
+
+Action:
+The search landscape is the bottleneck. Try local swaps, amortized initialization, more restarts,
+or a structured two-stage primitive configurer.
+
+Case F:
+FTN beats retrieval ID but fails OOD.
+
+Action:
+The configured computation is a shortcut, not a stable algorithm. Tighten hard execution, reduce
+latent capacity, increase depth curriculum, and inspect stepwise invariants.
+
+Case G:
+FTN beats retrieval and generalizes OOD.
+
+Action:
+Run full seeds, ablations, trace-free training, and then extend to a family with learned scheduling or
+priority-based control flow.
+
+
+26. NEXT EXPERIMENT ONLY AFTER SUCCESS
+
+The next family should introduce control-flow variation while preserving some shared operators:
+
+- BFS-like parallel expansion.
+- Bellman-Ford relaxation.
+- Widest path.
+- Minimax path.
+- Dijkstra-like priority selection.
+- Prim-like priority selection.
+
+That stage requires a third typed bank for scheduling or priority-queue control and possibly a
+learned halting mechanism. It should not be attempted before the present factorial dynamic-program
+experiment demonstrates that support-conditioned operator recombination is real.
+
+
+27. REFERENCES AND INTELLECTUAL ANCHORS
+
+- McKee, "Fully Autonomous Continual Learning and Knowledge Transfer via Cortex-Inspired
+  Neural Assemblies," attached FTN manuscript.
+- Ibarz et al., "A Generalist Neural Algorithmic Learner," arXiv:2209.11142.
+- Dudzik and Velickovic, "Graph Neural Networks are Dynamic Programmers," arXiv:2203.15544.
+- Velickovic and Blundell, "Neural Algorithmic Reasoning," arXiv:2105.02761.
+
+These references motivate the support-conditioned sparse bank, the shared recurrent graph
+processor, and the dynamic-programming-aligned task family. The exact architecture, factorial
+benchmark, exhaustive-search diagnostic, and hardware plan in this document are proposed
+experimental design choices rather than claims from those papers.
+
+
+28. FINAL IMPLEMENTATION CHECKLIST
+
+The experiment is ready to launch only when every item below is true:
+
+[ ] Two independent reference implementations agree.
+[ ] Graph generator is deterministic from seeds.
+[ ] All support-query splits are disjoint.
+[ ] Primary support sets are identifiable.
+[ ] Single-batch overfit passes.
+[ ] Single-task specialist passes.
+[ ] Oracle composition passes the executor gate.
+[ ] Mask logits receive nonzero gradients at initialization.
+[ ] Hard masks have exact cardinality.
+[ ] Masks remain fixed across recurrent steps.
+[ ] Model weights remain frozen during configuration.
+[ ] Held-out algorithm never reaches the optimizer.
+[ ] Replay overlap filtering is tested.
+[ ] Checkpoint resume is deterministic.
+[ ] One full fold has been profiled.
+[ ] GPU-hour estimate has been revised from measurement.
+[ ] Disk retention policy is enabled.
+[ ] Primary hyperparameters are frozen before final folds.
+[ ] All five seeds and eight folds are scheduled.
+[ ] Exact graph accuracy is the primary metric.
+[ ] Retrieval, oracle, dense, random-mask, and no-replay baselines are included.
+[ ] Tiny-bank exhaustive search is scheduled.
+[ ] Ambiguous support results are reported separately.
+[ ] Full environment and configuration manifests are saved.
+
+END OF DOCUMENT

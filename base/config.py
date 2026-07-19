@@ -119,7 +119,7 @@ class Default:
 
     # Experiment pars
     SEED = 123  # random.randint(0, 9999)
-    N_TASK = 6
+    N_TASK = 10
     PHASES = [1]
 
     # Data generator
@@ -130,32 +130,32 @@ class Default:
     FREQUENCY = 8
     T = 256
     DATA_TEMP = 1e-8
-    CORRELATED_TASKS = True
+    CORRELATED_TASKS = False
     CONCEPT_SHIFT = True
     DOMAIN_SHIFT_FACTOR = 0
 
     # Model hyperpars
-    K = 256
-    SQUARE_DIM = 48 #int((K * (4)) ** 0.5)
+    K = 128
+    SQUARE_DIM = 32 #int((K * (4)) ** 0.5)
     LAYERS = 8
     DROPOUT = 0.2
     INNER_DIM = 8
 
-    MASK_CONFIGURER = masks.KWTA
+    MASK_CONFIGURER = masks.SmoothKWTASlow
     LATERAL_B = 0.0
     LATERAL_STEPS = 0
     KERNEL_SIZE = 5
     TORUS = False
 
-    CONFIGURE_PER_BATCH = True
+    CONFIGURE_PER_BATCH = False
 
     # Data sizes
-    TRAIN_DURATION = 100
+    TRAIN_DURATION = 1000
     N_EPOCHS = 1
-    N_SAMPLE_PER_TASK = 10
+    N_SAMPLE_PER_TASK = 8
     N_EVAL_EPOCHS = 1
     N_REPLAY_SAMPLES = 1
-    REPLAY_BATCH_SIZE = 32
+    REPLAY_BATCH_SIZE = 8
     SHUFFLE_ON_REPLAY = False
 
     # Backwards eval (forgetting monitor)
@@ -224,7 +224,7 @@ class Regression:
     FREQUENCY = 12
     T = 256
     DATA_TEMP = 1e-8
-    CORRELATED_TASKS = False
+    CORRELATED_TASKS = True
     CONCEPT_SHIFT = True
     DOMAIN_SHIFT_FACTOR = 0
 

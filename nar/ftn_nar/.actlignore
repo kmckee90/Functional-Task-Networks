@@ -1,0 +1,6 @@
+# Large artifacts stay on the pod; only reports/ sync back.
+outputs/runs/
+outputs/manifests/
+.venv/
+*.pt
+*.ckpt

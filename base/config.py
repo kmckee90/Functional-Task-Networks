@@ -1,126 +1,145 @@
 """
-config.py - Experiment configurations for masked network (FTN) experiments.
+config.py - Experiment configurations for FTN experiments.
 
-Each class below is a self-contained experiment config consumed by
+Each class is a self-contained experiment config consumed by
 run_experiments.py. Attributes are read as `Config.<NAME>`; the `@property`
-fields at the bottom derive values from them.
+fields at the bottom derive values from them. FTN_PARS collects everything
+the FTN class needs (backbone + mask/reconfiguration hyperparameters).
 
-MASK_CONFIGURER      The mask-configurer class (from masks.py) used to select
-                     active units per task (e.g. masks.KWTA).
+Compared to base/config.py this drops:
+  - MASK_CONFIGURER      (FTN's annealed-STE KWTA is the only algorithm;
+                          MASK_LATERAL_STEPS=0 gives plain KWTA, >0 gives
+                          SmoothKWTA behavior, and MASK_LATERAL_POLYAK /
+                          MASK_LATERAL_NOISE_SD cover the Polyak/noisy
+                          variants — all inside the FTN class)
+  - CONFIGURE_PER_BATCH  (replaced by RECONFIG_EVERY: per-batch, every-N, or
+                          once per task block; RECONFIG_REACTIVE replaces the
+                          schedule with loss-triggered reconfiguration)
+  - SHUFFLE_ON_REPLAY    (replay always subsamples REPLAY_BATCH_SIZE rows once
+                          at store time)
+  - PHASES               (the experiment is exactly the old phase 1:
+                          multi-task learning over the task stream)
+
+v2 = base_rf + domain-shift options, reconfiguration scheduling (periodic /
+per-block / reactive), and the SmoothKWTA mask parameters. Replay stays
+available (N_REPLAY_SAMPLES=0 disables it). No weight freezing.
 
 Parameter glossary
 ==================
 
 Experiment
 ----------
-SEED                 Base RNG seed. Local torch.Generators are seeded off this
-                     (e.g. SEED + offset) for reproducibility.
-N_TASK               Number of distinct tasks in the continual-learning stream.
-PHASES               Which experiment phases to run; subset of [0,1,2,3,4]
-                     (see run_experiments.py). Phases select what gets trained
-                     and evaluated.
+SEED                 Base RNG seed; local torch.Generators are seeded off it.
+N_TASK               Number of distinct tasks in the task stream.
 
-Data generator (see tasks.py DataGen / DataGenSine)
----------------------------------------------------
-CLASSIFICATION       If True, generate a classification target (one-hot / sign
-                     of hidden sum); if False, a scalar regression target.
-X_DIM                Input feature dimension (input_dim).
-Y_DIM                Output dimension (n classes for classification, else 1).
-TASK_SIZE            Base number of hidden dims allocated per task; controls
-                     task overlap and total generator hidden_size.
-FREQUENCY            Frequency of the sine nonlinearity in DataGenSine
-                     (y ~ sin(FREQUENCY * z)); higher = more oscillatory,
-                     harder targets.
-T                    Samples generated per data batch (DataGen n_samples).
-DATA_TEMP            Softmax temperature for label sampling in the classifier
-                     decoder; near-zero => near-deterministic argmax labels.
-CORRELATED_TASKS     If True, tasks share hidden dims via pairwise combinations;
-                     if False, tasks use disjoint dimensions.
-CONCEPT_SHIFT        If True, each task uses a different hidden subset (task
-                     identity changes the function); if False, all tasks share
-                     the same dims.
-DOMAIN_SHIFT_FACTOR  Scale of per-task input mean shift; 0 => all tasks share
-                     the same input distribution.
+Data generator (tasks.DataGenSine)
+----------------------------------
+CLASSIFICATION       One-hot classification target vs scalar regression.
+X_DIM, Y_DIM         Input / output dimensions.
+TASK_SIZE            Hidden dims allocated per task (controls task overlap).
+FREQUENCY            Sine frequency; higher = harder targets.
+T                    Samples per generated batch.
+DATA_TEMP            Label-sampling softmax temperature (classification).
+CORRELATED_TASKS     Tasks share hidden dims via pairwise combinations.
+CONCEPT_SHIFT        Each task uses a different hidden subset.
+DOMAIN_SHIFT_FACTOR  Per-task input mean shift; 0 = shared input distribution.
+DOMAIN_SHIFT         Dimensional domain shift: widen the input vector so each
+                     task's X_DIM values occupy their own slice (total width
+                     (N_TASK-1)*DOMAIN_SHIFT_STRIDE + X_DIM, zeros elsewhere).
+                     The task function itself is unchanged; the model input
+                     size follows the widened vector automatically.
+DOMAIN_SHIFT_STRIDE  Element-index shift between consecutive tasks' slices.
+                     0 = concept shift (all tasks share the same elements);
+                     >= X_DIM = fully disjoint (orthogonal) input supports.
+DOMAIN_DENSE_PROJECTION
+                     Apply a fixed random orthogonal projection (same width)
+                     to the final input vector: the sparse domain-shifted
+                     inputs become dense (no zero elements, so no trivially
+                     zero-gradient input weights) while preserving their
+                     information — a rotation of the domain.
+DOMAIN_PER_TASK_PROJECTION
+                     If True, N_TASK distinct projections (one per task);
+                     if False, a single shared projection for all tasks.
 
-Model hyperparameters (see models.py, masks.py)
-------------------------------------------------
-K                    k-winner-take-all budget: number of active (=1) units the
-                     mask keeps after sparsification (MASK_PARS["k"]).
-SQUARE_DIM           Side length of the square grid the mask is reshaped into
-                     for 2D lateral dynamics; HIDDEN_SIZE = SQUARE_DIM**2.
-LAYERS               Number of hidden MLP layers in the masked model.
-DROPOUT              Dropout probability applied in the model.
-INNER_DIM            Inner/bottleneck size passed to the model (MODEL_PARS
-                     "inner_size").
-LATERAL_B            Strength ("b") of lateral dynamics in the model's lateral
-                     conv; 0 disables lateral mixing.
-LATERAL_STEPS        Number of lateral dynamics iterations ("steps") in the
-                     model; 0 disables.
-KERNEL_SIZE          Conv kernel size for lateral smoothing (odd; padded to
-                     preserve size).
-TORUS                If True, lateral conv uses circular padding (wrap-around
-                     topology); if False, zero padding.
-CONFIGURE_PER_BATCH  If True, reconfigure the mask every batch; if False,
-                     reconfigure once per task.
+FTN backbone
+------------
+SQUARE_DIM           Mask-grid side length; HIDDEN_SIZE = SQUARE_DIM**2.
+LAYERS               ParallelMLP depth.
+INNER_DIM            ParallelMLP inner width.
+DROPOUT              Dropout on backbone features.
+LATERAL_B            Backbone feature-smoothing strength; 0 disables mixing.
+LATERAL_STEPS        Backbone feature-smoothing iterations; 0 disables.
+KERNEL_SIZE          Backbone lateral conv kernel size.
+TORUS                Circular padding for lateral convolutions.
+
+FTN mask / reconfiguration
+--------------------------
+K                    kWTA budget: number of active mask units.
+RECONFIG_STEPS       Gradient steps per mask reconfiguration.
+RECONFIG_LR          Adam lr for the mask logits.
+RECONFIG_SAMPLE_SIZE Max samples used per reconfiguration.
+RECONFIG_EVERY       Reconfigure the mask every N training batches (1 = every
+                     batch). 0 = reconfigure once at the start of each task
+                     block (the base/ CONFIGURE_PER_BATCH=False behavior);
+                     backwards eval then also reconfigures once per task
+                     instead of once per eval batch.
+RECONFIG_REACTIVE    Replace the RECONFIG_EVERY schedule with loss-triggered
+                     reconfiguration: reconfig once on the first training
+                     batch, then track an EMA of the batch-loss mean and
+                     variance and reconfig whenever the loss under the
+                     current mask exceeds mean + RECONFIG_REACTIVE_SD * sd.
+                     Boundary-free (state never resets at task switches).
+                     Training only; eval keeps the reconfig protocol.
+RECONFIG_REACTIVE_SD Trigger threshold: standard deviations above the EMA
+                     mean the batch loss must reach to trigger a reconfig.
+RECONFIG_REACTIVE_EMA
+                     Smoothing factor for the loss mean/variance EMA (higher
+                     = slower). Triggers are suppressed for ~1/(1-EMA)
+                     batches after each reconfig while the statistics re-form.
+MASK_KERNEL_SIZE     Mask lateral-smoothing kernel size (SmoothKWTA).
+MASK_LATERAL_STEPS   Mask lateral-smoothing iterations; 0 = plain KWTA,
+                     >0 = SmoothKWTA (smooth, then re-sparsify with kWTA).
+MASK_LATERAL_POLYAK  Polyak mixing of pre/post-smoothing masks per lateral
+                     step (0 = pure smoothing; ~0.95 = PolyakKWTA variants;
+                     1.0 skips smoothing entirely).
+MASK_LATERAL_NOISE_SD
+                     Gaussian noise added per mask lateral-smoothing step.
 
 Data sizes / schedule
 ---------------------
-TRAIN_DURATION       Number of training steps (batches) per task per epoch.
-N_EPOCHS             Number of epochs over the task stream.
-N_SAMPLE_PER_TASK    Samples per task retained for replay; feeds REPLAY_MAXLEN.
-N_EVAL_EPOCHS        Number of evaluation epochs.
-N_REPLAY_SAMPLES     Number of stored batches drawn per step from the buffer
-                     (0 disables replay).
-REPLAY_BATCH_SIZE    Rows used per replay minibatch. If < the observed batch
-                     size (T), that many rows are randomly sampled; if >= T
-                     (or None), the full batch is used.
-SHUFFLE_ON_REPLAY    If True, store the full observed batch and draw a fresh
-                     random REPLAY_BATCH_SIZE rows on every replay; if False,
-                     subsample REPLAY_BATCH_SIZE rows once when storing and
-                     reuse that fixed subset.
+TRAIN_DURATION       Training steps (batches) per task per epoch.
+N_EPOCHS             Epochs over the task stream.
+N_SAMPLE_PER_TASK    Batches per task retained for replay; feeds REPLAY_MAXLEN.
+N_EVAL_EPOCHS        Evaluation epochs.
+N_REPLAY_SAMPLES     Stored batches replayed per step (0 disables replay).
+REPLAY_BATCH_SIZE    Rows kept per stored replay batch (subsampled once at
+                     store time); None keeps the full batch.
 
 Backwards / prospective eval (forgetting monitor)
---------------------------------------------------
-EVAL_BACKWARDS       If True, re-evaluate on all previously seen tasks to
-                     measure forgetting.
-EVAL_PROSPECTIVE     If True, also evaluate on tasks not yet trained (forward
-                     transfer).
-N_RETRO_EVAL_BATCHES Number of batches used per prior task during backwards
-                     eval.
+-------------------------------------------------
+EVAL_BACKWARDS       Re-evaluate all previously seen tasks after each task.
+EVAL_PROSPECTIVE     Also evaluate not-yet-trained tasks (forward transfer).
+N_RETRO_EVAL_BATCHES Batches per task during backwards eval.
 
-Training hyperparameters
-------------------------
-TRAIN_LR             Learning rate for the main model optimizer.
-WEIGHT_DECAY         Weight decay (L2) for the optimizer.
-
-Plotting
---------
-LOSS_EMA_SMOOTHING   EMA smoothing factor for the plotted loss curve.
-PLOT_EVERY           Plot/log every N epochs.
-GIF_DURATION         Per-frame duration (ms) for saved GIF animations.
-GIF_SAVE_EPOCH       Epoch interval at which GIFs are saved.
-
-Derived properties
-------------------
-HIDDEN_SIZE          SQUARE_DIM**2 - hidden width of the masked model.
-N_OOD_TASKS          Number of out-of-distribution tasks (= N_TASK).
-REPLAY_MAXLEN        Replay buffer capacity (N_SAMPLE_PER_TASK * N_TASK).
-MODEL_PARS           Dict of model kwargs assembled from the above.
-MASK_PARS            Dict of mask-configurer kwargs, incl. reconfig_steps,
-                     reconfig_lr, reconfig_sample_size (mask-reconfiguration
-                     optimization budget).
+Training / plotting
+-------------------
+TRAIN_LR   Weight-optimizer hyperparameters.
+LOSS_EMA_SMOOTHING       EMA factor for the plotted loss curve.
+RENDER_STEPS             Render per-training-step mask visualizations (mask
+                         GIFs, task vis). False skips those; loss plots and
+                         the forgetting (transfer) matrices are always saved.
+PLOT_EVERY               Plot/log every N epochs.
+GIF_DURATION             Per-frame duration (ms) for GIFs.
+GIF_SAVE_EPOCH           Epoch interval at which GIFs are saved.
 """
-
-import masks
 
 
 class Default:
-    """Default experiment configuration."""
+    """Default experiment configuration (classification, 6 correlated tasks)."""
 
     # Experiment pars
-    SEED = 123  # random.randint(0, 9999)
-    N_TASK = 10
-    PHASES = [1]
+    SEED = 123
+    N_TASK = 24
 
     # Data generator
     CLASSIFICATION = True
@@ -130,33 +149,55 @@ class Default:
     FREQUENCY = 8
     T = 256
     DATA_TEMP = 1e-8
-    CORRELATED_TASKS = False
-    CONCEPT_SHIFT = True
-    DOMAIN_SHIFT_FACTOR = 0
 
-    # Model hyperpars
-    K = 128
-    SQUARE_DIM = 32 #int((K * (4)) ** 0.5)
+    CORRELATED_TASKS = True
+    CONCEPT_SHIFT = True
+
+    DOMAIN_SHIFT_FACTOR = 0
+    DOMAIN_SHIFT = False
+    DOMAIN_SHIFT_STRIDE = 0
+    DOMAIN_DENSE_PROJECTION = False
+    DOMAIN_PER_TASK_PROJECTION = False
+
+    # FTN backbone
+    SQUARE_DIM = 48
     LAYERS = 8
-    DROPOUT = 0.2
     INNER_DIM = 8
 
-    MASK_CONFIGURER = masks.SmoothKWTASlow
+    DROPOUT = 0.0
+
     LATERAL_B = 0.0
     LATERAL_STEPS = 0
-    KERNEL_SIZE = 5
-    TORUS = False
+    KERNEL_SIZE = 3
+    TORUS = True
 
-    CONFIGURE_PER_BATCH = False
+    # FTN mask / reconfiguration
+    K = 256
+
+    RECONFIG_ALGORITHM = "annealste"
+    RECONFIG_STEPS = 30
+    RECONFIG_LR = 0.3
+    RECONFIG_SAMPLE_SIZE = T
+
+    RECONFIG_EVERY = 1
+
+    RECONFIG_REACTIVE = False
+    RECONFIG_REACTIVE_SD = 5.0
+    RECONFIG_REACTIVE_EMA = 0.95
+
+    MASK_KERNEL_SIZE = 3
+    MASK_LATERAL_STEPS = 0  # 0 = plain KWTA; >0 = SmoothKWTA
+    MASK_LATERAL_POLYAK = 0.0
+    MASK_LATERAL_NOISE_SD = 0.0
 
     # Data sizes
-    TRAIN_DURATION = 1000
+    TRAIN_DURATION = 2500
     N_EPOCHS = 1
-    N_SAMPLE_PER_TASK = 8
     N_EVAL_EPOCHS = 1
+
+    N_SAMPLE_PER_TASK = 10
     N_REPLAY_SAMPLES = 1
-    REPLAY_BATCH_SIZE = 8
-    SHUFFLE_ON_REPLAY = False
+    REPLAY_BATCH_SIZE = 256
 
     # Backwards eval (forgetting monitor)
     EVAL_BACKWARDS = True
@@ -165,9 +206,9 @@ class Default:
 
     # Training hyperpars
     TRAIN_LR = 3e-4
-    WEIGHT_DECAY = 0.0
 
     # Plotting
+    RENDER_STEPS = False
     LOSS_EMA_SMOOTHING = 0.8
     PLOT_EVERY = 1
     GIF_DURATION = 20
@@ -178,192 +219,128 @@ class Default:
         return self.SQUARE_DIM**2
 
     @property
-    def N_OOD_TASKS(self):
-        return self.N_TASK
-
-    @property
     def REPLAY_MAXLEN(self):
         return self.N_SAMPLE_PER_TASK * self.N_TASK
 
     @property
-    def MODEL_PARS(self):
+    def FTN_PARS(self):
+        """Everything the FTN class takes besides input/output/hidden sizes."""
         return {
-            "b": self.LATERAL_B,
-            "steps": self.LATERAL_STEPS,
+            "square_dim": self.SQUARE_DIM,
+            "classification": self.CLASSIFICATION,
+            # backbone
             "layers": self.LAYERS,
-            "kernel_size": self.KERNEL_SIZE,
-            "dropout_p": self.DROPOUT,
             "inner_size": self.INNER_DIM,
-        }
-
-    @property
-    def MASK_PARS(self):
-        return {
+            "dropout_p": self.DROPOUT,
+            "lateral_b": self.LATERAL_B,
+            "lateral_steps": self.LATERAL_STEPS,
+            "lateral_kernel_size": self.KERNEL_SIZE,
+            # mask / reconfiguration
             "k": self.K,
+            "reconfig_steps": self.RECONFIG_STEPS,
+            "reconfig_lr": self.RECONFIG_LR,
+            "reconfig_sample_size": self.RECONFIG_SAMPLE_SIZE,
+            "reconfig_algorithm": self.RECONFIG_ALGORITHM,
+            "mask_kernel_size": self.MASK_KERNEL_SIZE,
+            "mask_lateral_steps": self.MASK_LATERAL_STEPS,
+            "mask_lateral_polyak": self.MASK_LATERAL_POLYAK,
+            "mask_lateral_noise_sd": self.MASK_LATERAL_NOISE_SD,
             "torus": self.TORUS,
-            "reconfig_steps": 30,
-            "reconfig_lr": 0.3,
-            "reconfig_sample_size": 256,
         }
 
 
-class Regression:
-    """Default experiment configuration."""
-
-    # Experiment pars
-    SEED = 123  # random.randint(0, 9999)
+class Smoke(Default):
+    """Tiny end-to-end configuration for fast sanity checks."""
     N_TASK = 3
-    PHASES = [1]
-    MASK_CONFIGURER = masks.KWTA
+    SQUARE_DIM = 8
+    LAYERS = 2
+    K = 16
+    RECONFIG_STEPS = 5
+    T = 64
+    TRAIN_DURATION = 5
+    N_SAMPLE_PER_TASK = 2
+    N_RETRO_EVAL_BATCHES = 2
 
-    # Data generator
-    CLASSIFICATION = False
-    X_DIM = 2
-    Y_DIM = 1
-    TASK_SIZE = 4
-    FREQUENCY = 12
-    T = 256
-    DATA_TEMP = 1e-8
-    CORRELATED_TASKS = True
-    CONCEPT_SHIFT = True
+
+class DomainShift(Default):
     DOMAIN_SHIFT_FACTOR = 0
+    DOMAIN_SHIFT = True
+    DOMAIN_SHIFT_STRIDE = 1
+    DOMAIN_DENSE_PROJECTION = True
+    DOMAIN_PER_TASK_PROJECTION = True
 
-    # Model hyperpars
-    SQUARE_DIM = 32
-    K = 192
-    LAYERS = 3
+class Replay(Default):
+    N_SAMPLE_PER_TASK = 10
+    N_REPLAY_SAMPLES = 1
+    REPLAY_BATCH_SIZE = 256
+
+class NoReplay(Default):
+    N_SAMPLE_PER_TASK = 0
+    N_REPLAY_SAMPLES = 0
+    REPLAY_BATCH_SIZE = 0
+
+class Reactive_Low(Default):
+    RECONFIG_EVERY = 0
+    RECONFIG_REACTIVE = True
+    RECONFIG_REACTIVE_SD = 5.0
+    RECONFIG_REACTIVE_EMA = 0.9
+
+class Reactive_Med(Default):
+    RECONFIG_EVERY = 0
+    RECONFIG_REACTIVE = True
+    RECONFIG_REACTIVE_SD = 3.0
+    RECONFIG_REACTIVE_EMA = 0.9
+
+class Reactive_High(Default):
+    RECONFIG_EVERY = 0
+    RECONFIG_REACTIVE = True
+    RECONFIG_REACTIVE_SD = 1.0
+    RECONFIG_REACTIVE_EMA = 0.9
+
+
+class PerTask(Default):
+    RECONFIG_EVERY = 0
+    RECONFIG_REACTIVE = False
+
+class PolyakSmooth(Default):
+    MASK_LATERAL_STEPS = 2  # 0 = plain KWTA; >0 = SmoothKWTA
+    MASK_LATERAL_POLYAK = 0.9
+    MASK_LATERAL_NOISE_SD = 0.0
+    MASK_KERNEL_SIZE = 5
+    RECONFIG_STEPS = 30
+    RECONFIG_LR = 0.3
     DROPOUT = 0.0
-
-    LATERAL_B = 0.0
-    LATERAL_STEPS = 0
-    KERNEL_SIZE = 3
+    RECONFIG_ALGORITHM = "annealste"
     TORUS = True
 
-    CONFIGURE_PER_BATCH = False
-
-    # Data sizes
-    TRAIN_DURATION = 100
-    N_EPOCHS = 50  # 1000 // TRAIN_DURATION
-    N_SAMPLE_PER_TASK = 10
-    N_EVAL_EPOCHS = 1
-
-    # Training hyperpars
-    TRAIN_LR = 3e-4
-    WEIGHT_DECAY = 0.0
-
-    # Plotting
-    LOSS_EMA_SMOOTHING = 0.8
-    PLOT_EVERY = 1
-    GIF_DURATION = 50
-    GIF_SAVE_EPOCH = 5
-
-    @property
-    def HIDDEN_SIZE(self):
-        return self.SQUARE_DIM**2
-
-    @property
-    def N_OOD_TASKS(self):
-        return self.N_TASK
-
-    @property
-    def REPLAY_MAXLEN(self):
-        return self.N_SAMPLE_PER_TASK * self.N_TASK
-
-    @property
-    def MODEL_PARS(self):
-        return {
-            "b": self.LATERAL_B,
-            "steps": self.LATERAL_STEPS,
-            "layers": self.LAYERS,
-            "kernel_size": self.KERNEL_SIZE,
-            "dropout": self.DROPOUT,
-        }
-
-    @property
-    def MASK_PARS(self):
-        return {
-            "k": self.K,
-            "torus": self.TORUS,
-            "reconfig_steps": 10,
-            "reconfig_lr": 0.2,
-        }
-
-
-class Regression_debug:
-    """Default experiment configuration."""
-
-    # Experiment pars
-    SEED = 123  # random.randint(0, 9999)
-    N_TASK = 1
-    PHASES = [1]
-    MASK_CONFIGURER = masks.KWTA
-
-    # Data generator
-    CLASSIFICATION = False
-    X_DIM = 2
-    Y_DIM = 1
-    TASK_SIZE = 4
-    FREQUENCY = 12
-    T = 2048
-    DATA_TEMP = 1e-8
-    CORRELATED_TASKS = False
-    CONCEPT_SHIFT = True
-    DOMAIN_SHIFT_FACTOR = 0
-
-    # Model hyperpars
-    SQUARE_DIM = 32
-    K = 192
-    LAYERS = 3
+class Smooth(Default):
+    MASK_LATERAL_STEPS = 2  # 0 = plain KWTA; >0 = SmoothKWTA
+    MASK_LATERAL_POLYAK = 0.0
+    MASK_LATERAL_NOISE_SD = 0.0
+    MASK_KERNEL_SIZE = 17
+    RECONFIG_STEPS = 1
+    RECONFIG_LR = 1.0
     DROPOUT = 0.0
-
-    LATERAL_B = 0.0
-    LATERAL_STEPS = 0
-    KERNEL_SIZE = 3
+    RECONFIG_ALGORITHM = "fast"
     TORUS = True
 
-    # Data sizes
-    TRAIN_DURATION = 500
-    N_EPOCHS = 50  # 1000 // TRAIN_DURATION
-    N_SAMPLE_PER_TASK = 10
-    N_EVAL_EPOCHS = 1
+class Fast(Default):
+    RECONFIG_STEPS = 10
+    RECONFIG_LR = 0.3
+    DROPOUT = 0.0
+    RECONFIG_ALGORITHM = "fast"
 
-    # Training hyperpars
-    TRAIN_LR = 3e-4
-    WEIGHT_DECAY = 0.0
+class Large(Default):
+    SQUARE_DIM = 96
+    K = 1024
 
-    # Plotting
-    LOSS_EMA_SMOOTHING = 0.8
-    PLOT_EVERY = 1
-    GIF_DURATION = 50
-    GIF_SAVE_EPOCH = 5
-
-    @property
-    def HIDDEN_SIZE(self):
-        return self.SQUARE_DIM**2
-
-    @property
-    def N_OOD_TASKS(self):
-        return self.N_TASK
-
-    @property
-    def REPLAY_MAXLEN(self):
-        return self.N_SAMPLE_PER_TASK * self.N_TASK
-
-    @property
-    def MODEL_PARS(self):
-        return {
-            "b": self.LATERAL_B,
-            "steps": self.LATERAL_STEPS,
-            "layers": self.LAYERS,
-            "kernel_size": self.KERNEL_SIZE,
-            "dropout": self.DROPOUT,
-        }
-
-    @property
-    def MASK_PARS(self):
-        return {
-            "k": self.K,
-            "torus": self.TORUS,
-            "reconfig_steps": 1,
-            "reconfig_lr": 1,
-        }
+class PolyakSmoothLarge(Default):
+    MASK_LATERAL_STEPS = 1  # 0 = plain KWTA; >0 = SmoothKWTA
+    MASK_LATERAL_POLYAK = 0.9
+    MASK_LATERAL_NOISE_SD = 0.0
+    MASK_KERNEL_SIZE = 17
+    RECONFIG_STEPS = 30
+    RECONFIG_LR = 0.3
+    DROPOUT = 0.0
+    RECONFIG_ALGORITHM = "annealste"
+    TORUS = True

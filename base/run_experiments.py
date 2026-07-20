@@ -1,107 +1,63 @@
 """
-run_experiments_2.py - Experiment pipeline for functional task networks.
+run_experiments.py - Multi-task learning experiment for functional task networks.
 
-Phases:
-  0: Pre-train task 0 (baseline for long-term recovery)
-  1: Multi-task learning on N tasks
-  2: Continual learning (2a: OOD neuron combos, 2b: new data generator)
-  3: Task 0 long-term recovery report
-  4: Neurogenesis (expand model, train on new generator)
+Trains a single FTN on a stream of N tasks (the former "phase 1"), with
+offline replay and a backwards/prospective forgetting monitor.
+
+v2 = base_rf + domain-shift options (see tasks.py), reconfiguration
+scheduling (RECONFIG_EVERY: per-batch / every-N / once per task block) and
+reactive loss-triggered reconfiguration (RECONFIG_REACTIVE), and the
+SmoothKWTA mask parameters exposed through FTN_PARS. No weight freezing.
 
 Design:
-  - All phases share a single model, optimizer, and replay buffer.
-  - run_phase() handles both training and evaluation via the `train` flag.
-  - The replay buffer persists across phases for continual learning.
-  - Set PHASES to any subset of [0,1,2,3,4] to run selected phases.
+  - The FTN owns its mask and reconfiguration: `ftn(x, y)` reconfigures the
+    mask on that batch and predicts; `ftn(x)` predicts with the current mask;
+    `ftn(x, m=...)` predicts under a stored mask (replay). This file only
+    optimizes the weights and decides *when* to reconfigure.
 """
 
 import argparse
 import os
-import random
+import sys
 from collections import defaultdict, deque
 
-import config
-import masks
-import models
 import numpy as np
-import tasks
 import torch
-import torch.nn.functional as F
+
+import config
+import tasks
 import utils
-from PIL import Image
+import viz
+from ftn import FTN
 
 # =============================================================================
-# Configuration
-# =============================================================================
-
-Config = config.Default()
-Model = models.NeuroModel
-DataGen = tasks.DataGenSine
-MaskConfigurer = Config.MASK_CONFIGURER
-
-
-# Generate the task images
-import subprocess
-import sys
-
-subprocess.run([sys.executable, "tasks.py"], check=True)
-
-# =============================================================================
-# Replay buffer (persists across phases)
+# Replay buffer
 # =============================================================================
 
 
 class ReplayBuffer:
-    """Stores (data, mask) pairs for offline replay across all experiment phases."""
+    """Stores (data, mask) pairs for offline replay.
 
-    def __init__(self, maxlen, batch_size=None, shuffle_on_replay=False):
+    If batch_size is set, each stored batch is subsampled to batch_size rows
+    once at store time.
+    """
+
+    def __init__(self, maxlen, batch_size=None):
         self.data = deque(maxlen=maxlen)
         self.masks = deque(maxlen=maxlen)
-        # Rows kept per replay minibatch; None keeps the full observed batch.
         self.batch_size = batch_size
-        # If True, keep the full observed batch and draw a fresh random
-        # `batch_size` rows on each replay; if False, subsample once at store
-        # time and reuse that fixed subset.
-        self.shuffle_on_replay = shuffle_on_replay
 
     def add(self, dat, m):
         x, y = dat
         n = x.shape[0]
-        if (
-            not self.shuffle_on_replay
-            and self.batch_size is not None
-            and self.batch_size < n
-        ):
+        if self.batch_size is not None and self.batch_size < n:
             idx = torch.randperm(n, device=x.device)[: self.batch_size]
             dat = (x[idx], y[idx])
         self.data.append(dat)
         self.masks.append(m.clone())
 
     def get(self, i):
-        """Return stored (x, y) at index i.
-
-        When SHUFFLE_ON_REPLAY is set, draw a fresh random `batch_size` rows
-        from the full stored batch; otherwise return the stored batch as-is
-        (already subsampled at store time).
-        """
-        x, y = self.data[i]
-        if (
-            self.shuffle_on_replay
-            and self.batch_size is not None
-            and self.batch_size < x.shape[0]
-        ):
-            idx = torch.randperm(x.shape[0], device=x.device)[: self.batch_size]
-            return x[idx], y[idx]
-        return x, y
-
-    def resize_masks(self, new_size):
-        """Zero-pad stored masks after model expansion (neurogenesis)."""
-        for i in range(len(self.masks)):
-            old = self.masks[i]
-            if old.shape[0] < new_size:
-                padded = torch.zeros(new_size, device=old.device)
-                padded[: old.shape[0]] = old
-                self.masks[i] = padded
+        return self.data[i]
 
     def __len__(self):
         return len(self.data)
@@ -110,15 +66,6 @@ class ReplayBuffer:
 # =============================================================================
 # Helpers
 # =============================================================================
-def wrap_datagen_ood(dg: DataGen):
-    dg.m = torch.bernoulli(torch.ones_like(dg.m) / Config.N_TASK)
-    return dg
-
-
-def make_rng(seed):
-    """Create a local torch.Generator on the current default device."""
-    device = torch.empty(0).device
-    return torch.Generator(device=device).manual_seed(seed)
 
 
 def make_data_gen(seed):
@@ -135,336 +82,209 @@ def make_data_gen(seed):
         correlated_tasks=Config.CORRELATED_TASKS,
         concept_shift=Config.CONCEPT_SHIFT,
         domain_shift_factor=Config.DOMAIN_SHIFT_FACTOR,
-        rng=make_rng(seed),
+        domain_shift=Config.DOMAIN_SHIFT,
+        domain_shift_stride=Config.DOMAIN_SHIFT_STRIDE,
+        domain_dense_projection=Config.DOMAIN_DENSE_PROJECTION,
+        domain_per_task_projection=Config.DOMAIN_PER_TASK_PROJECTION,
+        rng=tasks.make_rng(seed),
     )
 
 
-def evaluate_tasks(model, data_gen, mask_configurer, task_indices):
-    """Quick loss evaluation over multiple batches. Returns {task_idx: mean_loss}."""
+def accuracy(pred, y):
+    """Classification accuracy, or 1 - MSE/var(y) clipped to [0, 1]."""
+    if Config.CLASSIFICATION:
+        target = torch.where(y == 1)[1]
+        return (pred.argmax(-1) == target).float().mean().item()
+    mse = torch.nn.functional.mse_loss(pred.squeeze(), y.squeeze()).item()
+    var = float(y.float().var().item()) if y.numel() > 1 else 1.0
+    return max(0.0, 1.0 - mse / max(var, 1e-8))
+
+
+def evaluate_tasks(ftn, data_gen, task_indices):
+    """Quick loss evaluation over multiple batches. Returns {task_idx: mean_loss}.
+
+    Reconfigures per batch and evaluates on the same batch.
+    Restores the training mask on exit so eval never leaks state into
+    training (reconfigure() mutates ftn.m in place).
+    """
+    m_train = ftn.m.clone()
     results = {}
-    m = torch.zeros(model.hidden_size)
     for task_idx in task_indices:
         losses = []
         for _ in range(Config.N_EVAL_EPOCHS):
-            dat = data_gen(task_idx)
-            m = mask_configurer(model, dat, m)
-            x, y = dat
+            x, y = data_gen(task_idx)
+            ftn._reconfig(x, y)
             with torch.no_grad():
-                pred = model(x.unsqueeze(0), m)
-                if Config.CLASSIFICATION:
-                    target = torch.where(y == 1)[1]
-                    losses.append(F.cross_entropy(pred.squeeze(), target).item())
-                else:
-                    losses.append(F.mse_loss(pred.squeeze(), y.squeeze()).item())
+                losses.append(ftn.loss(ftn(x), y).item())
         results[task_idx] = np.mean(losses)
+    ftn.m.copy_(m_train)
     return results
 
 
-def evaluate_backwards(model, data_gen, mask_configurer, task_indices):
-    """Reconfigure & eval on each prior task for N_RETRO_EVAL_BATCHES batches.
+def evaluate_backwards(ftn, data_gen, task_indices):
+    """Reconfigure & eval on each task for N_RETRO_EVAL_BATCHES batches.
 
-    Respects CONFIGURE_PER_BATCH (reconfig every batch vs. once per task).
+    Reconfigures per batch (or once per task when RECONFIG_EVERY == 0,
+    matching base/'s CONFIGURE_PER_BATCH=False), then evaluates on a fresh
+    holdout batch.
+    Restores the training mask on exit so eval never leaks state into
+    training (reconfigure() mutates ftn.m in place; without this, reactive
+    mode would train under the last-evaluated task's support mask).
     Returns {task_idx: {"loss": mean_loss, "acc": mean_score}}.
-    `acc` is classification accuracy for CLASSIFICATION, otherwise
-    1 - MSE/var(y), clipped to [0, 1].
     """
+    m_train = ftn.m.clone()
     results = {}
     for task_idx in task_indices:
-        m = torch.zeros(mask_configurer.hidden_size)
-        losses = []
-        accs = []
-        if not Config.CONFIGURE_PER_BATCH:
-            m = mask_configurer(model, data_gen(task_idx), m)
+        losses, accs = [], []
+        if Config.RECONFIG_EVERY == 0:
+            ftn._reconfig(*data_gen(task_idx))
         for _ in range(Config.N_RETRO_EVAL_BATCHES):
-            if Config.CONFIGURE_PER_BATCH:
-                m = mask_configurer(model, data_gen(task_idx), m)
+            if Config.RECONFIG_EVERY != 0:
+                ftn._reconfig(*data_gen(task_idx))
             # Eval on a fresh holdout batch — not the one used to reconfigure.
             x, y = data_gen(task_idx)
             with torch.no_grad():
-                pred = model(x.unsqueeze(0), m)
-                p = pred.squeeze()
-                if Config.CLASSIFICATION:
-                    target = torch.where(y == 1)[1]
-                    losses.append(F.cross_entropy(p, target).item())
-                    accs.append((p.argmax(-1) == target).float().mean().item())
-                else:
-                    mse = F.mse_loss(p, y.squeeze()).item()
-                    losses.append(mse)
-                    var = float(y.float().var().item()) if y.numel() > 1 else 1.0
-                    accs.append(max(0.0, 1.0 - mse / max(var, 1e-8)))
+                pred = ftn(x)
+                losses.append(ftn.loss(pred, y).item())
+                accs.append(accuracy(pred, y))
         results[task_idx] = {
             "loss": float(np.mean(losses)),
             "acc": float(np.mean(accs)),
         }
+    ftn.m.copy_(m_train)
     return results
 
 
-def expand_model(model, new_hidden_size):
-    """Create a larger model, copying old weights into the corresponding submatrix."""
-    new_model = Model(
-        input_size=Config.X_DIM,
-        output_size=Config.Y_DIM,
-        hidden_size=new_hidden_size,
-        **Config.MODEL_PARS,
-    )
-    with torch.no_grad():
-        for old_fc, new_fc in zip(model.fc, new_model.fc):
-            oh, ow = old_fc.weight.shape
-            new_fc.weight[:oh, :ow] = old_fc.weight
-            new_fc.bias[:oh] = old_fc.bias
-        ow = model.out.weight.shape[1]
-        new_model.out.weight[:, :ow] = model.out.weight
-        new_model.out.bias[:] = model.out.bias
-    return new_model
-
-
-# =============================================================================
-# Plotting
-# =============================================================================
-
-
-def save_loss_plot(per_task_losses, suffix):
-    import matplotlib.pyplot as plt
-
-    # ent = -Config.Y_DIM * np.log(1.0 / Config.Y_DIM) * (1.0 / Config.Y_DIM)
-    for task_idx in sorted(per_task_losses.keys()):
-        if per_task_losses[task_idx]:
-            plt.plot(per_task_losses[task_idx], linewidth=1, label=f"Task {task_idx}")
-    plt.xlabel("Training step")
-    # plt.ylim(bottom=-0.05, top=ent + 0.25)
-    plt.ylim(bottom=-0.05, top=1)
-    plt.ylabel("Loss")
-    plt.legend(fontsize=7)
-    plt.savefig(f"images/loss_{suffix}.png")
-    plt.close()
-
-
-def save_eval_bar(eval_dict, labels, suffix):
-    import matplotlib.pyplot as plt
-
-    ent = -Config.Y_DIM * np.log(1.0 / Config.Y_DIM) * (1.0 / Config.Y_DIM)
-    keys = list(eval_dict.keys())
-    vals = [eval_dict[k] for k in keys]
-    lbls = [labels.get(k, str(k)) for k in keys]
-    plt.bar(range(len(keys)), vals, tick_label=lbls)
-    plt.ylabel("Loss")
-    plt.ylim(bottom=0, top=ent + 0.25)
-    plt.xticks(rotation=45, ha="right")
-    plt.tight_layout()
-    plt.savefig(f"images/eval_{suffix}.png")
-    plt.close()
-
-
-def save_forgetting_matrix(rows, row_order, col_order, suffix):
-    """Save accuracy matrix to images/forgetting_{suffix}.png.
-
-    rows[i] is a dict {task_idx: acc} captured after row_order[i] was first
-    trained. Columns span `col_order` (typically the full task sequence), so
-    prospective evals on not-yet-trained tasks fill the upper triangle.
-    Entries with no data are rendered white.
-    """
-    import matplotlib.pyplot as plt
-    from matplotlib.colors import LinearSegmentedColormap
-
-    n_rows = len(row_order)
-    n_cols = len(col_order)
-    if n_rows == 0 or n_cols == 0:
+def replay_step(ftn, replay_buffer):
+    """Accumulate gradients on stored batches whose masks overlap the current one."""
+    if len(replay_buffer) == 0:
         return
-    mat = np.full((n_rows, n_cols), np.nan, dtype=float)
-    for i, row in enumerate(rows):
-        for j, t in enumerate(col_order):
-            if t in row:
-                mat[i, j] = row[t]
-
-    cmap = LinearSegmentedColormap.from_list("red_white", ["red", "white"])
-    cmap = cmap.copy()
-    cmap.set_bad(color="white")
-
-    _, ax = plt.subplots(
-        figsize=(max(4, n_cols * 0.45), max(4, n_rows * 0.45)),
-    )
-    im = ax.imshow(mat, cmap=cmap, vmin=0.0, vmax=1.0, aspect="equal")
-    ax.set_xticks(range(n_cols))
-    ax.set_yticks(range(n_rows))
-    ax.set_xticklabels([str(t) for t in col_order], fontsize=7)
-    ax.set_yticklabels([str(t) for t in row_order], fontsize=7)
-    ax.set_xlabel("Evaluated task")
-    ax.set_ylabel("After training task")
-    ax.set_title("Accuracy (white=1, red=0)")
-
-    # Thin black cell borders.
-    ax.set_xticks(np.arange(-0.5, n_cols, 1), minor=True)
-    ax.set_yticks(np.arange(-0.5, n_rows, 1), minor=True)
-    ax.grid(which="minor", color="black", linewidth=0.5)
-    ax.tick_params(which="minor", length=0)
-
-    # Per-cell accuracy text (only for filled cells).
-    fontsize = max(4, min(9, int(70 / max(max(n_rows, n_cols), 1))))
-    for i in range(n_rows):
-        for j in range(n_cols):
-            v = mat[i, j]
-            if np.isnan(v):
-                continue
-            ax.text(
-                j,
-                i,
-                f"{v:.2f}",
-                ha="center",
-                va="center",
-                fontsize=fontsize,
-                color="black",
-            )
-
-    plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04, label="Accuracy")
-    plt.tight_layout()
-    plt.savefig(f"images/xfer_{suffix}.png", dpi=120)
-    plt.close()
-
-
-def save_eval_snapshots(snapshots, suffix):
-    import matplotlib.pyplot as plt
-
-    if not snapshots:
+    stored = torch.stack(list(replay_buffer.masks))
+    corrs = (stored * ftn.m).sum(-1) / ftn.m.sum()
+    keep = (corrs > 0.2) & (corrs <= 0.8)
+    overlap = torch.where(keep)[0]
+    if len(overlap) == 0:
         return
-    all_tasks = sorted(snapshots[0].keys())
-    for t in all_tasks:
-        plt.plot([s[t] for s in snapshots], label=f"Task {t}", linewidth=1)
-    plt.xlabel("Eval checkpoint")
-    plt.ylabel("Loss")
-    plt.legend(fontsize=7)
-    plt.savefig(f"images/eval_over_time_{suffix}.png")
-    plt.close()
+    choice = torch.randint(0, len(overlap), (Config.N_REPLAY_SAMPLES,))
+    for idx in overlap[choice]:
+        x_r, y_r = replay_buffer.get(idx.item())
+        m_r = replay_buffer.masks[idx.item()]
+        r_pred = ftn(x_r, m=m_r)
+        ftn.loss(r_pred, y_r).backward()
 
 
 # =============================================================================
-# Core: unified train/eval phase
+# Training
 # =============================================================================
 
 
-def run_phase(
-    model,
+def train(
+    ftn,
     data_gen,
-    mask_configurer,
     task_indices,
     n_epochs,
     suffix,
     optimizer,
     replay_buffer,
-    train=True,
-    eval_gen=None,
-    eval_tasks=None,
-    eval_mask=None,
-    block_dim=None,
+    out_dir="artifacts",
 ):
     """
-    Run a training or evaluation phase with visualization.
+    Multi-task training over the task stream, with visualization and the
+    backwards/prospective forgetting monitor.
 
-    When train=True: optimizes model weights with offline replay.
-    When train=False: forward-only passes (for visualization / loss tracking).
-
-    Returns (per_task_losses, eval_snapshots).
+    Returns per_task_losses.
     """
-    if block_dim is None:
-        block_dim = Config.SQUARE_DIM
-
-    # Reset Adam (m, v) at each training phase so optimizer state from a prior
-    # phase can't drift parameters whose gradient is zero under the new mask
-    # (matches the per-task reset in project_c_4/trainer.py).
-    if train:
-        optimizer.state = defaultdict(dict)
-
-    hidden = mask_configurer.hidden_size
-    n_blocks = hidden // (block_dim**2)
-    gh, gw = block_dim, n_blocks * block_dim
-
-    # Loss tracking
     per_task_losses = {t: [] for t in task_indices}
-    eval_snapshots = []
+    # RENDER_STEPS=False disables per-step mask rendering (GIFs); loss plots
+    # and the forgetting/transfer matrices still save.
+    animator = None
+    if Config.RENDER_STEPS:
+        animator = viz.MaskAnimator(
+            hidden_size=ftn.hidden_size,
+            block_dim=Config.SQUARE_DIM,
+            gif_duration=Config.GIF_DURATION,
+            gif_save_epoch=min(Config.GIF_SAVE_EPOCH, n_epochs) or 1,
+            out_dir=out_dir,
+        )
 
-    # Visualization state
-    frames, rgb_frames = [], []
-    m = torch.zeros(hidden)
-    m_ema = torch.zeros(gh, gw, 3)
-    red_net = torch.zeros(hidden)
-    green_net = torch.zeros(hidden)
-    blue_net = torch.zeros(hidden)
+    # Reactive reconfiguration (RECONFIG_REACTIVE): reconfigure once on the
+    # first training batch, then only when the batch loss under the current
+    # mask exceeds the EMA mean by RECONFIG_REACTIVE_SD standard deviations.
+    # State persists across task blocks — the mechanism has no boundary
+    # knowledge. Triggers are suppressed for ~1/(1-EMA) batches after each
+    # reconfig while the statistics re-form.
+    reactive = Config.RECONFIG_REACTIVE
+    r_sd = Config.RECONFIG_REACTIVE_SD
+    r_alpha = Config.RECONFIG_REACTIVE_EMA
+    r_warmup = int(np.ceil(1.0 / max(1.0 - r_alpha, 1e-8)))
+    r_mean, r_var, r_since = None, 0.0, 0
 
-    blank = Image.fromarray(np.zeros((gh, gw, 3), dtype=np.uint8), mode="RGB")
-    frames.extend([blank.copy() for _ in range(2)])
-    rgb_frames.extend([blank.copy() for _ in range(10)])
-
-    gif_save_epoch = min(Config.GIF_SAVE_EPOCH, n_epochs) or 1
     seen_tasks = []
     # Cumulative lower-triangular forgetting matrix: one row per first-time task.
     forgetting_rows = []
     for epoch in range(n_epochs):
+        snapshot = epoch % Config.PLOT_EVERY == 0
         for task in task_indices:
             loss_history = []
-            if not Config.CONFIGURE_PER_BATCH:
-                m = mask_configurer(model, data_gen(task), m)
+            # Reset Adam (m, v) per task so optimizer state from a prior task
+            # can't drift parameters whose gradient is zero under the new mask.
             optimizer.state = defaultdict(dict)
+            n_block_reconfigs = 0
             for i in range(Config.TRAIN_DURATION):
-                dat = data_gen(task)
-                if Config.CONFIGURE_PER_BATCH:
-                    m = mask_configurer(model, dat, m)
-
-                if train and i < Config.N_SAMPLE_PER_TASK:
-                    replay_buffer.add(dat, m)
-
-                # Clear stale gradients (from mask reconfiguration or prior step)
-                optimizer.zero_grad()
-
-                # Forward pass (no graph when not training)
-                with torch.set_grad_enabled(train):
-                    x, y = dat
-                    pred = model(x.unsqueeze(0), m)
-                    if Config.CLASSIFICATION:
-                        target = torch.where(y == 1)[1]
-                        loss = F.cross_entropy(pred.squeeze(), target)
+                x, y = data_gen(task)
+                if reactive:
+                    # Loss-triggered reconfiguration. r_mean is None only on
+                    # the very first training batch: do the one-time initial
+                    # reconfig there.
+                    if r_mean is None:
+                        ftn._reconfig(x, y)
+                        n_block_reconfigs += 1
+                        r_since = 0
+                    pred = ftn(x)
+                    loss = ftn.loss(pred, y)
+                    li_r = loss.item()
+                    sd = float(np.sqrt(max(r_var, 0.0)))
+                    if (
+                        r_mean is not None
+                        and r_since >= r_warmup
+                        and li_r > r_mean + r_sd * sd
+                    ):
+                        ftn._reconfig(x, y)
+                        n_block_reconfigs += 1
+                        r_since = 0
+                        pred = ftn(x)
+                        loss = ftn.loss(pred, y)
+                        li_r = loss.item()
+                    # EMA of loss mean/variance under the trained mask (the
+                    # pre-reconfig spike is never recorded).
+                    if r_mean is None:
+                        r_mean = li_r
                     else:
-                        loss = F.mse_loss(pred.squeeze(), y.squeeze())
+                        diff = li_r - r_mean
+                        r_mean = r_alpha * r_mean + (1 - r_alpha) * li_r
+                        r_var = r_alpha * r_var + (1 - r_alpha) * diff * diff
+                    r_since += 1
+                else:
+                    # Reconfigure the mask every RECONFIG_EVERY batches; 0 =
+                    # once at the start of each task block (CONFIGURE_PER_BATCH
+                    # =False in base/). Otherwise predict with the current mask.
+                    every = Config.RECONFIG_EVERY
+                    reconfig = (i == 0) if every == 0 else (i % every == 0)
+                    pred = ftn(x, y) if reconfig else ftn(x)
+                    loss = ftn.loss(pred, y)
+
+                if i < Config.N_SAMPLE_PER_TASK:
+                    replay_buffer.add((x, y), ftn.m)
 
                 if epoch == 0 and i == 0:
                     print(f"TASK {task} INITIAL_LOSS: {loss.item()}")
-                # if epoch == 5:
-                if train:
-                    loss.backward()
 
-                    # Offline replay: train on stored samples with overlapping masks
-                    if len(replay_buffer) > 0:
-                        stored = torch.stack(list(replay_buffer.masks))
-                        corrs = (stored * m).sum(-1) / m.sum()
-                        keep = (corrs > 0.2) & (corrs <= 0.8)
-                        overlap = torch.where(keep)[0]
-                        if len(overlap) > 0:
-                            idxes = torch.randint(
-                                0, len(overlap), (Config.N_REPLAY_SAMPLES,)
-                            )
-                            for idx in idxes:
-                                x_r, y_r = replay_buffer.get(idx.item())
-                                m_r = replay_buffer.masks[idx.item()]
-                                r_pred = model(x_r.unsqueeze(0), m_r)
-                                if Config.CLASSIFICATION:
-                                    r_tgt = torch.where(y_r == 1)[1]
-                                    F.cross_entropy(r_pred.squeeze(), r_tgt).backward()
-                                else:
-                                    F.mse_loss(
-                                        r_pred.squeeze(), y_r.squeeze()
-                                    ).backward()
-
-                    optimizer.step()
-
-                    # --- End-of-task visualization ---
-                    m_2d = masks.mask_to_grid(m.detach(), block_dim)
-                    m_ema[:, :, 0] = torch.max(0.95 * m_ema[:, :, 0], m_2d)
-                    m_ema[:, :, 1] = torch.max(0.30 * m_ema[:, :, 1], m_2d)
-                    m_ema[:, :, 2] = torch.max(0.975 * m_ema[:, :, 2], m_2d)
-
-                    if epoch % Config.PLOT_EVERY == 0:
-                        frame = Image.fromarray(
-                            (m_ema.cpu().numpy() * 255).astype(np.uint8), mode="RGB"
-                        )
-                        frames.append(frame)
+                optimizer.zero_grad()
+                loss.backward()
+                replay_step(ftn, replay_buffer)
+                optimizer.step()
+                if animator:
+                    animator.record_step(ftn.m, snapshot=snapshot)
 
                 # EMA loss tracking
                 li = loss.item()
@@ -477,30 +297,15 @@ def run_phase(
                     )
                 loss_history.append(loss_smooth)
 
-            # RGB channel assignment: task%3 → 0:blue, 1:red, 2:green
-            ch = task % 3
-            if ch == 0:
-                blue_net = m.clone()
-            elif ch == 1:
-                red_net = m.clone()
-            else:
-                green_net = m.clone()
-
-            if epoch % Config.PLOT_EVERY == 0:
-                rgb = torch.stack(
-                    [
-                        masks.mask_to_grid(c, block_dim)
-                        for c in [red_net, green_net, blue_net]
-                    ]
-                )
-                rgb = masks.normalize_mask(rgb) * 255
-                rgb = rgb.permute(1, 2, 0)
-                rgb_frames.append(
-                    Image.fromarray(rgb.detach().cpu().numpy().astype(np.uint8))
-                )
-                rgb_frames[-1].save(f"images/rgb_{suffix}.png")
-
+            if animator:
+                animator.record_task(task, ftn.m, suffix, snapshot=snapshot)
             per_task_losses[task].extend(loss_history)
+            if reactive:
+                print(
+                    f"  [{suffix}] task {task}: "
+                    f"reactive_reconfigs={n_block_reconfigs} "
+                    f"loss_ema={r_mean:.4f} sd={np.sqrt(max(r_var, 0.0)):.4f}"
+                )
 
             # Backwards eval: report loss on every task seen so far. If
             # EVAL_PROSPECTIVE is set, also eval on tasks not yet trained so
@@ -508,10 +313,10 @@ def run_phase(
             newly_seen = task not in seen_tasks
             if newly_seen:
                 seen_tasks.append(task)
-            if train and getattr(Config, "EVAL_BACKWARDS", False):
-                prospective = getattr(Config, "EVAL_PROSPECTIVE", False)
+            if Config.EVAL_BACKWARDS:
+                prospective = Config.EVAL_PROSPECTIVE
                 eval_set = list(task_indices) if prospective else list(seen_tasks)
-                bw = evaluate_backwards(model, data_gen, mask_configurer, eval_set)
+                bw = evaluate_backwards(ftn, data_gen, eval_set)
                 losses = {t: bw[t]["loss"] for t in eval_set}
                 accs = {t: bw[t]["acc"] for t in eval_set}
                 loss_str = " ".join(
@@ -532,40 +337,20 @@ def run_phase(
                 if newly_seen:
                     forgetting_rows.append(accs)
                     col_order = list(task_indices) if prospective else seen_tasks
-                    save_forgetting_matrix(
-                        forgetting_rows, seen_tasks, col_order, suffix
+                    viz.save_forgetting_matrix(
+                        forgetting_rows, seen_tasks, col_order, suffix,
+                        out_dir=out_dir,
                     )
 
-        # Periodic plot saves
-        if epoch % Config.PLOT_EVERY == 0:
-            save_loss_plot(per_task_losses, suffix)
+        # Periodic plot saves (kept even with RENDER_STEPS=False; only the
+        # per-step mask rendering is disabled)
+        if snapshot:
+            viz.save_loss_plot(per_task_losses, suffix, out_dir=out_dir)
 
-        # Periodic held-out evaluation
-        if eval_gen is not None and eval_tasks is not None:
-            if epoch % Config.PLOT_EVERY == 0:
-                mc = eval_mask or mask_configurer
-                eval_snapshots.append(evaluate_tasks(model, eval_gen, mc, eval_tasks))
+        if animator:
+            animator.maybe_save_gifs(epoch, suffix)
 
-        # GIF saves
-        if (epoch + 1) % gif_save_epoch == 0 and len(frames) > 1:
-            print(f"  [{suffix}] Saving GIFs at epoch {epoch + 1}")
-            frames[0].save(
-                f"images/bw_{suffix}.gif",
-                save_all=True,
-                append_images=frames[1:],
-                duration=Config.GIF_DURATION,
-                loop=0,
-            )
-            if len(rgb_frames) > 1:
-                rgb_frames[0].save(
-                    f"images/rgb_{suffix}.gif",
-                    save_all=True,
-                    append_images=rgb_frames[1:],
-                    duration=Config.GIF_DURATION,
-                    loop=0,
-                )
-
-    return per_task_losses, eval_snapshots
+    return per_task_losses
 
 
 # =============================================================================
@@ -577,270 +362,123 @@ if __name__ == "__main__":
     parser.add_argument(
         "--name",
         default="",
-        help="Tag appended to output filenames (e.g. 'kwta_seed1' → 'p1_mtl_kwta_seed1.png').",
+        help="Run name: outputs go to artifacts/<name>/ with <name> suffixed "
+        "to filenames (e.g. 'run1' → artifacts/run1/bw_run1.gif).",
+    )
+    parser.add_argument(
+        "--config",
+        nargs="+",
+        default=["Default"],
+        help="One or more config class names from config.py, combined left "
+        "to right — later ones override earlier ones on conflicts "
+        "(e.g. --config Default DomainShift NoReplay).",
+    )
+    parser.add_argument(
+        "--reconfig-every",
+        type=int,
+        default=None,
+        help="Override Config.RECONFIG_EVERY (batches between mask "
+        "reconfigurations; 0 = once per task block).",
+    )
+    parser.add_argument(
+        "--render-steps",
+        type=int,
+        choices=[0, 1],
+        default=None,
+        help="Override Config.RENDER_STEPS (0 = skip per-step mask GIFs and "
+        "task vis; loss plots and forgetting/transfer matrices still save).",
     )
     args = parser.parse_args()
     RUN_TAG = f"_{args.name}" if args.name else ""
+    # Per-run output directory: artifacts/<name>/ (files still carry the
+    # <name> suffix so runs can later be pooled into one folder).
+    OUT_DIR = os.path.join("artifacts", args.name) if args.name else "artifacts"
+
+    # Combine configs via MRO: bases are reversed so the LAST class listed
+    # wins conflicting attributes (properties included).
+    _bases = tuple(getattr(config, c) for c in reversed(args.config))
+    Config = type("+".join(args.config), _bases, {})()
+    if args.reconfig_every is not None:
+        Config.RECONFIG_EVERY = args.reconfig_every
+    if args.render_steps is not None:
+        Config.RENDER_STEPS = bool(args.render_steps)
+    DataGen = tasks.DataGenSine
 
     print("Running:")
-    print(Model.__name__)
-    print(DataGen.__name__)
-    print(MaskConfigurer.__name__)
+    print(f"Config: {type(Config).__name__}")
+    print(f"DataGen: {DataGen.__name__}")
     if RUN_TAG:
         print(f"Run tag: {RUN_TAG}")
 
-    torch.set_default_device("cuda")
-    os.makedirs("images", exist_ok=True)
+    torch.set_default_device("cuda" if torch.cuda.is_available() else "cpu")
+    os.makedirs(OUT_DIR, exist_ok=True)
+
+    # Record the effective config (post-composition, post-CLI-overrides) so
+    # every run directory is self-describing.
+    with open(os.path.join(OUT_DIR, f"config{RUN_TAG}.txt"), "w") as f:
+        f.write(f"# config: {type(Config).__name__}\n")
+        f.write(f"# argv: {' '.join(sys.argv)}\n")
+        for k in sorted(k for k in dir(Config) if k.isupper()):
+            f.write(f"{k} = {getattr(Config, k)!r}\n")
 
     if Config.SEED is not None:
         torch.manual_seed(Config.SEED)
 
-    # --- Shared setup (always created, regardless of PHASES) ---
-    task0_gen = make_data_gen(Config.SEED)
-    data_gen = make_data_gen(Config.SEED + 100)
-    ood_gen_a = wrap_datagen_ood(make_data_gen(Config.SEED + 100))
-    ood_gen_b = make_data_gen(Config.SEED + 1000)
-    ng_gen = make_data_gen(Config.SEED + 2000)
+    if Config.RENDER_STEPS:
+        tasks.save_task_vis(
+            Config, path=os.path.join(OUT_DIR, f"task_vis{RUN_TAG}.png")
+        )
 
-    model = Model(
-        input_size=Config.X_DIM,
+    data_gen = make_data_gen(Config.SEED + 100)
+    # With DOMAIN_SHIFT the input vector is wider than X_DIM; the generator
+    # is the single source of truth for the model's input width.
+    ftn = FTN(
+        input_size=data_gen.total_input_dim,
         output_size=Config.Y_DIM,
         hidden_size=Config.HIDDEN_SIZE,
-        **Config.MODEL_PARS,
+        **Config.FTN_PARS,
     )
-    mask_cfg = MaskConfigurer(
-        hidden_size=Config.HIDDEN_SIZE,
-        square_dim=Config.SQUARE_DIM,
-        classification=Config.CLASSIFICATION,
-        **Config.MASK_PARS,
-    )
-    optimizer = torch.optim.AdamW(
-        model.parameters(), lr=Config.TRAIN_LR, weight_decay=Config.WEIGHT_DECAY
-    )
+    optimizer = torch.optim.Adam(ftn.parameters(), lr=Config.TRAIN_LR)
     replay = ReplayBuffer(
         maxlen=Config.REPLAY_MAXLEN,
-        batch_size=getattr(Config, "REPLAY_BATCH_SIZE", None),
-        shuffle_on_replay=getattr(Config, "SHUFFLE_ON_REPLAY", False),
+        batch_size=Config.REPLAY_BATCH_SIZE,
+    )
+
+    if Config.RECONFIG_REACTIVE:
+        print(
+            f"Reconfig: REACTIVE sd={Config.RECONFIG_REACTIVE_SD} "
+            f"ema={Config.RECONFIG_REACTIVE_EMA} (RECONFIG_EVERY ignored)"
+        )
+    else:
+        print(f"Reconfig: every={Config.RECONFIG_EVERY} (0 = per task block)")
+    print(
+        f"Replay: {Config.N_REPLAY_SAMPLES}/step "
+        f"(buffer {Config.REPLAY_MAXLEN} x {Config.REPLAY_BATCH_SIZE} rows)"
     )
 
     ent = -Config.Y_DIM * np.log(1.0 / Config.Y_DIM) * (1.0 / Config.Y_DIM)
     print(
-        f"Model: {utils.count_parameters(model)} params, "
+        f"Model: {utils.count_parameters(ftn)} params, "
         f"hidden={Config.HIDDEN_SIZE} ({Config.SQUARE_DIM}x{Config.SQUARE_DIM})"
     )
     print(f"Chance-level loss: {ent:.4f}")
-    print(f"Active phases: {Config.PHASES}")
 
-    task0_trajectory = {}
+    print(
+        f"\n{'=' * 60}\nMulti-task learning ({Config.N_TASK} tasks)\n{'=' * 60}"
+    )
+    train(
+        ftn,
+        data_gen,
+        list(range(Config.N_TASK)),
+        Config.N_EPOCHS,
+        args.name,
+        optimizer,
+        replay,
+        out_dir=OUT_DIR,
+    )
+    mtl_eval = evaluate_tasks(ftn, data_gen, list(range(Config.N_TASK)))
 
-    # ----- Phase 0: Pre-train task 0 -----
-    if 0 in Config.PHASES:
-        print(f"\n{'=' * 60}\nPHASE 0: Pre-train task 0\n{'=' * 60}")
-        run_phase(
-            model,
-            task0_gen,
-            mask_cfg,
-            [0],
-            Config.N_EPOCHS,
-            f"p0_pretrain{RUN_TAG}",
-            optimizer,
-            replay,
-            train=True,
-        )
-        task0_trajectory["baseline"] = evaluate_tasks(model, task0_gen, mask_cfg, [0])[
-            0
-        ]
-        print(f"Task 0 baseline loss: {task0_trajectory['baseline']:.4f}")
-
-    # ----- Phase 1: Multi-task learning -----
-    if 1 in Config.PHASES:
-        print(
-            f"\n{'=' * 60}\nPHASE 1: Multi-task learning "
-            f"({Config.N_TASK} tasks)\n{'=' * 60}"
-        )
-        run_phase(
-            model,
-            data_gen,
-            mask_cfg,
-            list(range(Config.N_TASK)),
-            Config.N_EPOCHS,
-            f"p1_mtl{RUN_TAG}",
-            optimizer,
-            replay,
-            train=True,
-        )
-        mtl_eval = evaluate_tasks(model, data_gen, mask_cfg, list(range(Config.N_TASK)))
-        print("MTL eval:", {k: f"{v:.4f}" for k, v in mtl_eval.items()})
-        task0_trajectory["after_mtl"] = evaluate_tasks(model, task0_gen, mask_cfg, [0])[
-            0
-        ]
-
-    # ----- Phase 2: Continual learning with OOD tasks -----
-    if 2 in Config.PHASES:
-        # 2a: OOD neuron combinations (same feature space)
-        print(f"\n{'=' * 60}\nPHASE 2a: CL - OOD neuron combinations\n{'=' * 60}")
-        mask_kwta = masks.KWTA(Config.HIDDEN_SIZE, Config.SQUARE_DIM)
-        _, snaps_a = run_phase(
-            model,
-            ood_gen_a,
-            mask_kwta,
-            list(range(Config.N_OOD_TASKS)),
-            Config.N_EVAL_EPOCHS,
-            f"p2a_ood_neurons{RUN_TAG}",
-            optimizer,
-            replay,
-            train=False,
-            eval_gen=data_gen,
-            eval_tasks=list(range(Config.N_TASK)),
-        )
-        save_eval_snapshots(snaps_a, f"p2a_holdout{RUN_TAG}")
-        cl_a_eval = evaluate_tasks(
-            model, data_gen, mask_cfg, list(range(Config.N_TASK))
-        )
-        print("MTL tasks after CL-a:", {k: f"{v:.4f}" for k, v in cl_a_eval.items()})
-        task0_trajectory["after_cl_a"] = evaluate_tasks(
-            model, task0_gen, mask_cfg, [0]
-        )[0]
-        print(f"Task 0 after CL-a: {task0_trajectory['after_cl_a']:.4f}")
-
-        # 2b: New data generator (different seed)
-        print(f"\n{'=' * 60}\nPHASE 2b: CL - new data generator\n{'=' * 60}")
-        _, snaps_b = run_phase(
-            model,
-            ood_gen_b,
-            mask_kwta,
-            list(range(Config.N_OOD_TASKS)),
-            Config.N_EVAL_EPOCHS,
-            f"p2b_ood_data{RUN_TAG}",
-            optimizer,
-            replay,
-            train=False,
-            eval_gen=data_gen,
-            eval_tasks=list(range(Config.N_TASK)),
-        )
-        save_eval_snapshots(snaps_b, f"p2b_holdout{RUN_TAG}")
-        cl_b_eval = evaluate_tasks(
-            model, data_gen, mask_cfg, list(range(Config.N_TASK))
-        )
-        print("MTL tasks after CL-b:", {k: f"{v:.4f}" for k, v in cl_b_eval.items()})
-        task0_trajectory["after_cl_b"] = evaluate_tasks(
-            model, task0_gen, mask_cfg, [0]
-        )[0]
-        print(f"Task 0 after CL-b: {task0_trajectory['after_cl_b']:.4f}")
-
-    # ----- Phase 3: Task 0 long-term recovery report -----
-    if 3 in Config.PHASES:
-        print(f"\n{'=' * 60}\nPHASE 3: Task 0 recovery\n{'=' * 60}")
-        if task0_trajectory:
-            for label, val in task0_trajectory.items():
-                print(f"  {label:20s}: {val:.4f}")
-            save_eval_bar(
-                {i: v for i, v in enumerate(task0_trajectory.values())},
-                {i: k for i, k in enumerate(task0_trajectory.keys())},
-                f"task0_recovery{RUN_TAG}",
-            )
-        else:
-            print("  (no trajectory data - earlier phases were skipped)")
-
-    # ----- Phase 4: Neurogenesis -----
-    if 4 in Config.PHASES:
-        print(f"\n{'=' * 60}\nPHASE 4: Neurogenesis\n{'=' * 60}")
-
-        NEW_HIDDEN = Config.HIDDEN_SIZE * 2
-        print(f"Expanding: {Config.HIDDEN_SIZE} -> {NEW_HIDDEN} neurons")
-
-        model = expand_model(model, NEW_HIDDEN)
-        replay.resize_masks(NEW_HIDDEN)
-        mask_cfg = MaskConfigurer(
-            hidden_size=NEW_HIDDEN,
-            square_dim=Config.SQUARE_DIM,
-            classification=Config.CLASSIFICATION,
-            **Config.MASK_PARS,
-        )
-        optimizer = torch.optim.AdamW(
-            model.parameters(),
-            lr=Config.TRAIN_LR,
-            weight_decay=Config.WEIGHT_DECAY,
-        )
-        print(f"Expanded model: {utils.count_parameters(model)} params")
-
-        # Train on new generator
-        run_phase(
-            model,
-            ng_gen,
-            mask_cfg,
-            list(range(Config.N_TASK)),
-            Config.N_EPOCHS,
-            f"p4_ng_new{RUN_TAG}",
-            optimizer,
-            replay,
-            train=True,
-        )
-
-        # Re-train original tasks on expanded model
-        run_phase(
-            model,
-            data_gen,
-            mask_cfg,
-            list(range(Config.N_TASK)),
-            Config.N_EPOCHS,
-            f"p4_ng_orig{RUN_TAG}",
-            optimizer,
-            replay,
-            train=True,
-        )
-
-        # Mask allocation analysis
-        print("\nMask allocation (new-gen tasks):")
-        m_probe = torch.zeros(NEW_HIDDEN)
-        for t in range(Config.N_TASK):
-            m_probe = mask_cfg(model, ng_gen(t), m_probe)
-            old = m_probe[: Config.HIDDEN_SIZE].sum().item()
-            new = m_probe[Config.HIDDEN_SIZE :].sum().item()
-            total = m_probe.sum().item()
-            print(
-                f"  Task {t}: old={old:.0f} new={new:.0f} "
-                f"new_frac={new / max(total, 1):.1%}"
-            )
-
-        print("\nMask allocation (orig tasks on expanded model):")
-        ng_eval = evaluate_tasks(model, data_gen, mask_cfg, list(range(Config.N_TASK)))
-        m_probe = torch.zeros(NEW_HIDDEN)
-        for t in range(Config.N_TASK):
-            m_probe = mask_cfg(model, data_gen(t), m_probe)
-            old = m_probe[: Config.HIDDEN_SIZE].sum().item()
-            new = m_probe[Config.HIDDEN_SIZE :].sum().item()
-            total = m_probe.sum().item()
-            print(
-                f"  Task {t}: old={old:.0f} new={new:.0f} "
-                f"old_frac={old / max(total, 1):.1%} loss={ng_eval[t]:.4f}"
-            )
-
-        # Neurogenesis mask visualization
-        import matplotlib.pyplot as plt
-
-        m_viz = torch.zeros(NEW_HIDDEN)
-        fig, axes = plt.subplots(Config.N_TASK, 3, figsize=(12, 3 * Config.N_TASK))
-        if Config.N_TASK == 1:
-            axes = axes[np.newaxis, :]
-        for t in range(Config.N_TASK):
-            m_viz = mask_cfg(model, ng_gen(t), m_viz)
-            full = masks.mask_to_grid(m_viz.detach(), Config.SQUARE_DIM).cpu().numpy()
-            axes[t, 0].imshow(full[:, : Config.SQUARE_DIM], cmap="hot", vmin=0, vmax=1)
-            axes[t, 0].set_title(f"Task {t} - Old neurons")
-            axes[t, 1].imshow(full[:, Config.SQUARE_DIM :], cmap="hot", vmin=0, vmax=1)
-            axes[t, 1].set_title(f"Task {t} - New neurons")
-            axes[t, 2].imshow(full, cmap="hot", vmin=0, vmax=1)
-            axes[t, 2].set_title(f"Task {t} - Full mask")
-        plt.tight_layout()
-        plt.savefig(f"images/ng_mask_allocation{RUN_TAG}.png", dpi=150)
-        plt.close()
-
-    # ----- Summary -----
     print(f"\n{'=' * 60}\nEXPERIMENT COMPLETE\n{'=' * 60}")
-    if task0_trajectory:
-        print("\nTask 0 trajectory:")
-        for label, val in task0_trajectory.items():
-            print(f"  {label:20s}: {val:.4f}")
-        print(f"  {'(chance level)':20s}: {ent:.4f}")
-    print("\nOutputs saved to images/")
+    print("MTL eval:", {k: f"{v:.4f}" for k, v in mtl_eval.items()})
+    print(f"Chance-level loss: {ent:.4f}")
+    print(f"\nOutputs saved to {OUT_DIR}/")

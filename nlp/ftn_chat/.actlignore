@@ -1,0 +1,9 @@
+# Keep training artifacts on the pod's PVC — never sync them to the laptop.
+# (bank.pt alone is ~46GB; DevSpace sync is bidirectional.)
+checkpoints/
+checkpoints_smoke/
+checkpoints_*/
+data_cache/
+*.pt
+qa_synth.log
+nohup.out

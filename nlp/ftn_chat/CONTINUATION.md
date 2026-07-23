@@ -1,6 +1,65 @@
 # FTN-Chat: live prompt-routed expert-knowledge chat demo — continuation doc
 
-**Status:** v1 COMPLETE and running (2026-06-10). All modules implemented; bank
+**Status:** v2 REDESIGN (2026-07-19) — code complete, retraining required
+(`--fresh`; the old bank is shape-incompatible). Older sections below describe
+v1 and are historical.
+
+### v2 redesign (2026-07-19): Large/NoReplay/Reactive_Low + context distillation
+Project moved repos; new home is `nlp/ftn_chat` with its own pyproject, running
+on actl pod **ftn-chat** (8×H100 80GB, 250Gi PVC, namespace obelisk). The pod
+syncs ONLY this folder, so all task sources are snapshotted into `corpus/` by
+`make_corpus.py` (run locally after upstream edits).
+
+- **Training matches `base/run_experiments.py --config Large NoReplay
+  Reactive_Low`** (reactive + no-replay + plain-KWTA parts): annealSTE reconfig
+  30 steps @ lr 0.3 (init logits ~N(0,1e-5), matching base), plain KWTA —
+  SmoothKWTA lateral options (`lateral_steps/kernel/polyak/noise_sd/torus`)
+  kept in config + GUI but OFF by default. Bank size set independently of the
+  Large class (Kevin, rev 2 of this redesign): grid_dim=32 (H=1024 atoms),
+  k=128, rank-1 atoms, alpha=16.
+- **Banks on the LAST 25% of decoder layers only** (`lora_layer_frac=0.25` →
+  layers 21–27 of Qwen2.5-7B): the LoCoMo layer sweep showed extractable
+  knowledge lives in the last ~25% of blocks; mid-stack deltas were dead
+  weight. ~0.65B atom params total (~1.3GB bank.pt); model.py's explicit
+  device_map packs the 21 un-banked layers on GPU 0 and spreads the 7 banked
+  layers one per GPU 1–7.
+- **Checkpoints live OUTSIDE the synced workspace**: default ckpt_dir is
+  `~/ftn_chat_state/checkpoints` on the pod's home PVC (FTN_CKPT_DIR
+  overrides). DevSpace sync is bidirectional and once started pulling a bank.pt
+  to the laptop; large artifacts must never sit in /home/dev/workspace.
+  `.actlignore` additionally excludes checkpoints*/, data_cache/, *.pt, logs
+  (takes effect on sync-session restart).
+- **Reactive (loss-triggered) reconfiguration during training** (Reactive_Low):
+  reconfig once on the first batch ever, then only when batch loss > EMA mean
+  + 5.0·sd (ema=0.9, warmup ≈10 batches). Boundary-free: EMA state persists
+  across blocks AND across train.py invocations (state.json). Reconfig target
+  = one random batch member's bare question (the chat-time signal). Adam state
+  resets per block (as base does per task). Inference is unchanged: the app
+  reconfigures on EVERY user prompt.
+- **NO replay** (NoReplay): replay buffers/`replay.pt`, mid-band overlap
+  filtering, and rehearsal-by-default are gone from train.py.
+- **Context distillation, no raw-text training** (Cartridges-style self-study,
+  the recipe locked in the LoCoMo work): `qa_synth.py` generates diverse
+  self-contained questions per source chunk, then the teacher answers WITH the
+  chunk in context (batched, greedy); triples {question, answer, context} are
+  cached. train.py recomputes teacher logits on the fly — teacher = the SAME
+  backbone with the mask zeroed (bank inert) + context in the prompt; student
+  = masked bank, closed book; loss = KL over the answer tokens (kl_temp,
+  optional ce_weight). Teacher logits are mask-independent, so a reactive
+  re-reconfig only re-runs the student pass.
+- **Four new domains** (old sandbox/cscg/sudoku/genetic/robotics tasks dropped):
+  `base_ftn` (base/ftn.py + config.py — parameter-level Q&A), `explorer`
+  (agent_recode.py + recode.py + reservoir encoders — RDDPG_Dual architecture
+  + RECODE exploration), `globo` (globo_game docs + Globo-authored mods only;
+  vendored mods excluded except mod.confs — "what does Globo add vs the
+  engine"), `rl_mt10` (train_mt10_bc.py + train_mt10_ddpg.py + rl/robotics/
+  ftn.py — FTN adapted to BC and DDPG).
+- Misc: chunk_tokens 256→512 (richer distillation contexts), app UPSCALE now
+  adaptive (~1024px map at any grid_dim), refs built from QA-question reconfigs,
+  state.json guards H/k/rank/n_wrappers. `_probe_memorization.py` is a stale v1
+  throwaway (hardcoded cscg).
+
+**Status (older, v1):** v1 COMPLETE and running (2026-06-10). All modules implemented; bank
 trained (`checkpoints/bank.pt`, `refs.pt`); app serving on `127.0.0.1:7860`.
 
 ### Current state / results (2026-06-10, rev 2)

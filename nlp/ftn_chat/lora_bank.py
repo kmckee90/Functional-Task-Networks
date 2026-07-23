@@ -18,10 +18,11 @@ from typing import Iterable
 import torch
 import torch.nn as nn
 
-TARGET_MODULES_DEFAULT = (
-    "q_proj", "k_proj", "v_proj", "o_proj",
-    "up_proj", "gate_proj", "down_proj",
-)
+# Empty tuple = wrap EVERY nn.Linear inside the module handed to
+# install_lora_bank. This is the default: hybrid architectures (e.g. Qwen3.6's
+# Gated DeltaNet blocks) use projection names that a fixed q/k/v/o-style list
+# would silently miss. Pass explicit names to restrict.
+TARGET_MODULES_DEFAULT: tuple = ()
 
 
 @dataclass
@@ -125,16 +126,30 @@ class BankedLinear(nn.Module):
 
 def install_lora_bank(model, cfg: LoRABankConfig, controller: MaskController,
                       target_modules: Iterable[str] | None = None) -> list[BankedLinear]:
-    targets = tuple(target_modules or cfg.target_modules)
+    """Wrap linears under `model` with BankedLinear. With an empty target list
+    (the default) EVERY nn.Linear is wrapped — robust to architectures whose
+    projection names differ from the classic q/k/v/o convention."""
+    targets = tuple(target_modules if target_modules is not None else cfg.target_modules)
     wrappers: list[BankedLinear] = []
     for p in model.parameters():
         p.requires_grad = False
-    for _, parent in model.named_modules():
-        for child_name, child in list(parent.named_children()):
-            if isinstance(child, nn.Linear) and any(child_name.endswith(t) for t in targets):
-                new = BankedLinear(child, cfg, controller)
-                setattr(parent, child_name, new)
-                wrappers.append(new)
+    # Materialize the hit list BEFORE mutating the tree: setattr during a lazy
+    # named_modules() walk would re-visit each fresh BankedLinear and wrap its
+    # own `base` Linear, nesting without end. Also never descend into an
+    # existing BankedLinear (idempotence).
+    hits = []
+    for _, parent in list(model.named_modules()):
+        if isinstance(parent, BankedLinear):
+            continue
+        for child_name, child in parent.named_children():
+            if isinstance(child, nn.Linear) and not isinstance(child, BankedLinear) and (
+                not targets or any(child_name.endswith(t) for t in targets)
+            ):
+                hits.append((parent, child_name, child))
+    for parent, child_name, child in hits:
+        new = BankedLinear(child, cfg, controller)
+        setattr(parent, child_name, new)
+        wrappers.append(new)
     return wrappers
 
 

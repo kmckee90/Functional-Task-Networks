@@ -1,5 +1,12 @@
 """Load the Qwen backbone, install the LoRA bank, and expose small helpers.
 
+The bank attaches ONLY to the last `cfg.lora_layer_frac` fraction of the
+decoder stack (default 25%): the LoCoMo layer-localization sweep showed
+extractable semantic knowledge concentrates in the last ~25% of blocks while
+mid-stack deltas are dead weight. Within a banked layer, EVERY nn.Linear is
+wrapped (architecture-agnostic — covers Qwen3.6's Gated DeltaNet projections
+as well as classic attention/MLP names).
+
 Assumes torch.set_default_device("cuda") has been called at the entry point, so
 we avoid per-tensor device plumbing.
 """
@@ -8,7 +15,7 @@ from __future__ import annotations
 import math
 
 import torch
-from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from config import Config
 from lora_bank import (
@@ -21,34 +28,18 @@ from lora_bank import (
 )
 
 
-def _backbone_gib(name: str) -> float:
-    """Rough bf16 footprint (GiB) of the frozen backbone, from its config."""
-    c = AutoConfig.from_pretrained(name)
-    h, L, I, V = (c.hidden_size, c.num_hidden_layers,
-                  c.intermediate_size, c.vocab_size)
-    heads = c.num_attention_heads
-    kvh = getattr(c, "num_key_value_heads", heads)
-    hd = h // heads
-    per_layer = (h * h + 2 * (h * kvh * hd) + h * h) + 3 * h * I   # attn + mlp
-    embed = V * h * (1 if getattr(c, "tie_word_embeddings", False) else 2)
-    total = embed + L * per_layer + h
-    return total * 2 / 1024 ** 3
+def banked_layer_range(n_layers: int, layer_frac: float) -> tuple[int, int]:
+    """[start, end) decoder-layer indices that receive the bank."""
+    n_banked = max(1, round(n_layers * layer_frac))
+    return n_layers - n_banked, n_layers
 
 
 def _shard_plan(cfg: Config):
-    """device_map + max_memory that force the backbone to SPREAD across all
-    visible GPUs, so each decoder layer (and the bank atoms we attach to it,
-    which inherit base.weight.device) lands on a different card. Returns
-    (device_map, max_memory) or (None, None) for the single-GPU path."""
-    n = torch.cuda.device_count()
-    if n <= 1:
-        return None, None
-    gib = _backbone_gib(cfg.model_name)
-    # ceil-divide forces use of all n GPUs (cap*(n-1) < gib <= cap*n), with a
-    # little slack; the bank we add afterwards is NOT counted here (accelerate
-    # only plans the backbone load) but co-locates onto these same devices.
-    cap = max(2, math.ceil(gib * 1.05 / n))
-    return "auto", {i: f"{cap}GiB" for i in range(n)}
+    """device_map for the backbone. With rank-1 atoms the bank is small
+    (~0.25GB/layer), so an even split of the backbone across all GPUs is the
+    right layout — "balanced" also stays architecture-agnostic (no module-name
+    assumptions for hybrid DeltaNet stacks). Returns None for single-GPU."""
+    return "balanced" if torch.cuda.device_count() > 1 else None
 
 
 def build(cfg: Config):
@@ -58,10 +49,10 @@ def build(cfg: Config):
     if tokenizer.pad_token_id is None:
         tokenizer.pad_token = tokenizer.eos_token
 
-    device_map, max_memory = _shard_plan(cfg)
+    device_map = _shard_plan(cfg)
     model = AutoModelForCausalLM.from_pretrained(
         cfg.model_name, dtype=dtype, attn_implementation="eager",
-        device_map=device_map, max_memory=max_memory,
+        device_map=device_map,
     )
     if device_map is not None:
         devs = {str(p.device) for p in model.parameters()}
@@ -75,13 +66,19 @@ def build(cfg: Config):
         dropout=cfg.dropout, init_b_zero=cfg.init_b_zero,
     )
     controller = MaskController(H=cfg.H, k=cfg.k)
-    wrappers = install_lora_bank(model, lora_cfg, controller)
+
+    layers = model.model.layers
+    start, end = banked_layer_range(len(layers), cfg.lora_layer_frac)
+    wrappers: list[BankedLinear] = []
+    for i in range(start, end):
+        wrappers += install_lora_bank(layers[i], lora_cfg, controller)
     for w in wrappers:
         w.to(dtype=dtype)
 
     n_lora = sum(p.numel() for w in wrappers for p in w.lora_parameters())
     print(f"  bank: H={cfg.H} ({cfg.grid_dim}x{cfg.grid_dim}) k={cfg.k} "
-          f"rank={cfg.rank} -> {n_lora/1e6:.1f}M atom params over {len(wrappers)} layers")
+          f"rank={cfg.rank} -> {n_lora/1e9:.2f}B atom params over "
+          f"{len(wrappers)} linears in decoder layers [{start}, {end}) of {len(layers)}")
     return model, tokenizer, controller, wrappers, lora_cfg
 
 

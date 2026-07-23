@@ -1,11 +1,14 @@
 """Task registry for FTN-Chat continual learning.
 
 A *task* is a named block of text learned as one CL stage. To add a new dataset,
-call `register(key, label, color, globs)` — that's the whole extension point.
-Set `needs_sandbox=True` if the files live inside the astera-org/sandbox clone
-(data.ensure_sandbox() runs first). New tasks are appended to DEFAULT_ORDER and
-will be picked up by `train.py` as the next block on top of whatever is already
-trained.
+call `register(key, label, globs, color=...)` — that's the whole extension point.
+New tasks are appended to DEFAULT_ORDER and will be picked up by `train.py` as
+the next block on top of whatever is already trained.
+
+All task sources live under `corpus/` INSIDE this project so the pod (which
+syncs only nlp/ftn_chat) always has them. `make_corpus.py` snapshots them from
+the surrounding functional_task_networks repo — run it locally after upstream
+files change, then retrain the affected block.
 
 Dependency-light (no torch / no network at import) so config, data, app, and
 train can all import it without cycles.
@@ -16,9 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-REPO_KT = HERE.parent                       # experiments/func_net_kt
-EXPERIMENTS = REPO_KT.parent                # experiments/
-SANDBOX_CACHE = HERE / "data_cache" / "sandbox"
+CORPUS = HERE / "corpus"
 
 # A small, well-separated palette for tasks registered without an explicit color.
 PALETTE = [
@@ -34,19 +35,18 @@ class Task:
     label: str
     color: tuple            # RGB in 0..1 (for the mask viz)
     globs: list             # absolute glob strings; recursive ** supported
-    needs_sandbox: bool = False
 
 
 TASKS: dict[str, Task] = {}
 DEFAULT_ORDER: list[str] = []
 
 
-def register(key, label, globs, color=None, needs_sandbox=False, default=True):
+def register(key, label, globs, color=None, default=True):
     """Register a task. `globs` is a list of absolute glob patterns. Returns the
     Task. If color is None, one is auto-assigned from PALETTE."""
     if color is None:
         color = PALETTE[len(TASKS) % len(PALETTE)]
-    TASKS[key] = Task(key, label, tuple(color), list(globs), needs_sandbox)
+    TASKS[key] = Task(key, label, tuple(color), list(globs))
     if default and key not in DEFAULT_ORDER:
         DEFAULT_ORDER.append(key)
     return TASKS[key]
@@ -61,26 +61,28 @@ def colors() -> dict:
 
 
 # --- Currently registered tasks (block order = registration order) -----------
-# Pure text-prediction over one source file per domain (no Q&A synthesis).
-register("sudoku", "Sudoku (JAX gradient search)",
-         [str(SANDBOX_CACHE / "team/miguel/gso_vs_mp/sudoku/sudoku_gs.py"),
-          str(HERE / "domain_docs/sudoku_gs_doc.md")],   # code + NL annotation
-         color=(0.25, 0.80, 0.35), needs_sandbox=True)
+# Sources are snapshotted into corpus/ by make_corpus.py (see that file for the
+# upstream repo paths each snapshot comes from).
 
-register("genetic_programming", "Genetic programming (JAX)",
-         [str(EXPERIMENTS / "genetic_programming/jax_gp.py"),
-          str(EXPERIMENTS / "genetic_programming/jax_gp_doc.md")],   # code + NL annotation
-         color=(0.95, 0.70, 0.20))
+register("base_ftn", "Base FTN (ftn.py + config.py)",
+         [str(CORPUS / "base_ftn/ftn.py"),
+          str(CORPUS / "base_ftn/config.py")],
+         color=(0.90, 0.25, 0.25))
 
-register("robotics", "FTN robotics / RL (DDPG)",
-         [str(EXPERIMENTS / "robotics/train.py"),
-          str(EXPERIMENTS / "robotics/train_doc.md")],               # code + NL annotation
+register("explorer", "Explorer agent (RDDPG_Dual + RECODE)",
+         [str(CORPUS / "explorer/agent_recode.py"),
+          str(CORPUS / "explorer/recode.py"),
+          str(CORPUS / "explorer/reservoir_local_connectivity.py"),
+          str(CORPUS / "explorer/density_estimator.py"),
+          str(CORPUS / "explorer/observation_buffer.py")],
+         color=(0.25, 0.80, 0.35))
+
+register("rl_mt10", "FTN robotics MT10 (BC + DDPG)",
+         [str(CORPUS / "rl_mt10/train_mt10_bc.py"),
+          str(CORPUS / "rl_mt10/train_mt10_ddpg.py"),
+          str(CORPUS / "rl_mt10/ftn.py")],
          color=(0.30, 0.45, 0.95))
-
-register("cscg", "CSCG model (code)",
-         [str(SANDBOX_CACHE / "packages/algorithms/src/algorithms/cscg/cscg_he.py")],
-         color=(0.90, 0.25, 0.25), needs_sandbox=True)
 
 # --- To add a dataset, copy the pattern above, e.g.:
 # register("mydata", "My Dataset", ["/abs/path/**/*.py", "/abs/path/*.md"])
-# then:  uv run python train.py --tasks mydata     (trains it as the next block)
+# then:  uv run python qa_synth.py mydata && uv run python train.py --tasks mydata

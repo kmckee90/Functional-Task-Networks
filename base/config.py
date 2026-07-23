@@ -139,7 +139,7 @@ class Default:
 
     # Experiment pars
     SEED = 123
-    N_TASK = 24
+    N_TASK = 8
 
     # Data generator
     CLASSIFICATION = True
@@ -191,12 +191,129 @@ class Default:
     MASK_LATERAL_NOISE_SD = 0.0
 
     # Data sizes
-    TRAIN_DURATION = 2500
-    N_EPOCHS = 1
+    TRAIN_DURATION = 500
+    N_EPOCHS = 5
     N_EVAL_EPOCHS = 1
 
     N_SAMPLE_PER_TASK = 10
     N_REPLAY_SAMPLES = 1
+    REPLAY_BATCH_SIZE = 256
+
+    # Backwards eval (forgetting monitor)
+    EVAL_BACKWARDS = True
+    EVAL_PROSPECTIVE = True
+    N_RETRO_EVAL_BATCHES = 10
+
+    # Training hyperpars
+    TRAIN_LR = 3e-4
+
+    # Plotting
+    RENDER_STEPS = False
+    LOSS_EMA_SMOOTHING = 0.8
+    PLOT_EVERY = 1
+    GIF_DURATION = 20
+    GIF_SAVE_EPOCH = 1
+
+    @property
+    def HIDDEN_SIZE(self):
+        return self.SQUARE_DIM**2
+
+    @property
+    def REPLAY_MAXLEN(self):
+        return self.N_SAMPLE_PER_TASK * self.N_TASK
+
+    @property
+    def FTN_PARS(self):
+        """Everything the FTN class takes besides input/output/hidden sizes."""
+        return {
+            "square_dim": self.SQUARE_DIM,
+            "classification": self.CLASSIFICATION,
+            # backbone
+            "layers": self.LAYERS,
+            "inner_size": self.INNER_DIM,
+            "dropout_p": self.DROPOUT,
+            "lateral_b": self.LATERAL_B,
+            "lateral_steps": self.LATERAL_STEPS,
+            "lateral_kernel_size": self.KERNEL_SIZE,
+            # mask / reconfiguration
+            "k": self.K,
+            "reconfig_steps": self.RECONFIG_STEPS,
+            "reconfig_lr": self.RECONFIG_LR,
+            "reconfig_sample_size": self.RECONFIG_SAMPLE_SIZE,
+            "reconfig_algorithm": self.RECONFIG_ALGORITHM,
+            "mask_kernel_size": self.MASK_KERNEL_SIZE,
+            "mask_lateral_steps": self.MASK_LATERAL_STEPS,
+            "mask_lateral_polyak": self.MASK_LATERAL_POLYAK,
+            "mask_lateral_noise_sd": self.MASK_LATERAL_NOISE_SD,
+            "torus": self.TORUS,
+        }
+
+
+
+
+class Plane:
+    """Default experiment configuration (classification, 6 correlated tasks)."""
+
+    # Experiment pars
+    SEED = 123
+    N_TASK = 4
+
+    # Data generator
+    CLASSIFICATION = True
+    X_DIM = 2
+    Y_DIM = 2
+    TASK_SIZE = 4
+    FREQUENCY = 8
+    T = 256
+    DATA_TEMP = 1e-8
+
+    CORRELATED_TASKS = True
+    CONCEPT_SHIFT = True
+
+    DOMAIN_SHIFT_FACTOR = 0
+    DOMAIN_SHIFT = False
+    DOMAIN_SHIFT_STRIDE = 0
+    DOMAIN_DENSE_PROJECTION = False
+    DOMAIN_PER_TASK_PROJECTION = False
+
+    # FTN backbone
+    SQUARE_DIM = 32
+    LAYERS = 8
+    INNER_DIM = 8
+
+    DROPOUT = 0.0
+
+    LATERAL_B = 0.0
+    LATERAL_STEPS = 0
+    KERNEL_SIZE = 3
+    TORUS = True
+
+    # FTN mask / reconfiguration
+    K = 256
+
+    RECONFIG_ALGORITHM = "annealste" #annealste or fast
+    RECONFIG_STEPS = 30
+    RECONFIG_LR = 0.3
+    RECONFIG_SAMPLE_SIZE = T
+
+    RECONFIG_EVERY = 1
+
+    RECONFIG_REACTIVE = True
+    RECONFIG_REACTIVE_SD = 0.0
+    RECONFIG_REACTIVE_EMA = 0.80
+
+    MASK_KERNEL_SIZE = 3
+    MASK_LATERAL_STEPS = 0  # 0 = plain KWTA; >0 = SmoothKWTA
+    MASK_LATERAL_POLYAK = 0.0
+    MASK_LATERAL_NOISE_SD = 0.0
+
+    # Data sizes
+    TRAIN_DURATION = 500
+    N_EPOCHS = 1
+    N_EVAL_EPOCHS = 1
+
+    N_SAMPLE_PER_TASK = 10
+    N_REPLAY_SAMPLES = 0
     REPLAY_BATCH_SIZE = 256
 
     # Backwards eval (forgetting monitor)

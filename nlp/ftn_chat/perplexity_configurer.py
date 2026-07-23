@@ -36,7 +36,7 @@ class PerplexityConfigurer:
 
     def iterate(self, model, input_ids, attention_mask=None, steps=None,
                 reconfig_lr=None, lateral_steps=None, lateral_polyak=None, k=None,
-                init_mask=None, init_a=0.0, init_b=1e-3):
+                init_mask=None, init_a=0.0, init_b=None):
         """Generator form: run the reconfiguration search and YIELD the current
         mask at every step, so the caller can animate the search LIVE (one real
         forward pass per frame). The last yielded mask is the final selection;
@@ -62,6 +62,8 @@ class PerplexityConfigurer:
         lr = cfg.reconfig_lr if reconfig_lr is None else reconfig_lr
         n_lateral = cfg.lateral_steps if lateral_steps is None else lateral_steps
         polyak = cfg.lateral_polyak if lateral_polyak is None else lateral_polyak
+        if init_b is None:
+            init_b = cfg.reconfig_init_sd  # base annealSTE: logits ~ N(0, 1e-5)
         if attention_mask is None:
             attention_mask = torch.ones_like(input_ids)
 
@@ -119,13 +121,19 @@ class PerplexityConfigurer:
                 except Exception:
                     pass
 
-        # Lateral smoothing -> contiguous blobs, then final kwta.
+        # SmoothKWTA lateral dynamics -> contiguous blobs, then final kwta.
+        # n_lateral == 0 (the default) means plain KWTA: the loop is skipped
+        # and best_mask passes through unchanged. polyak >= 1.0 also skips
+        # smoothing entirely (base semantics).
         with torch.no_grad():
             m = best_mask.float()
-            for _ in range(n_lateral):
-                m_lat = self.smoother.step(m)
-                m = polyak * m + (1 - polyak) * m_lat
-                yield kwta(m, k)
+            if polyak < 1.0:
+                for _ in range(n_lateral):
+                    m_lat = self.smoother.step(m)
+                    if cfg.lateral_noise_sd > 0:
+                        m_lat = m_lat + torch.randn_like(m_lat) * cfg.lateral_noise_sd
+                    m = polyak * m + (1 - polyak) * m_lat
+                    yield kwta(m, k)
             final = kwta(m, k)
         ctrl.set_mask(final)
         self._last_nll = best_nll

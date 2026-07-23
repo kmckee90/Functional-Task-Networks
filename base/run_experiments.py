@@ -220,10 +220,14 @@ def train(
     r_mean, r_var, r_since = None, 0.0, 0
 
     seen_tasks = []
-    # Cumulative lower-triangular forgetting matrix: one row per first-time task.
-    forgetting_rows = []
     for epoch in range(n_epochs):
         snapshot = epoch % Config.PLOT_EVERY == 0
+        # Transfer/accuracy matrix for THIS epoch: one row per task as it is
+        # (re)trained during the epoch, evaluated across tasks. Reset each epoch
+        # so a multi-epoch run emits one xfer png per epoch (xfer_<name>_ep<e>);
+        # a single-epoch run keeps the original xfer_<name> filename.
+        forgetting_rows = []
+        epoch_row_tasks = []
         for task in task_indices:
             loss_history = []
             # Reset Adam (m, v) per task so optimizer state from a prior task
@@ -334,13 +338,20 @@ def train(
                     f"mean_loss={np.mean(list(losses.values())):.4f} "
                     f"mean_acc={np.mean(list(accs.values())):.3f}"
                 )
-                if newly_seen:
-                    forgetting_rows.append(accs)
-                    col_order = list(task_indices) if prospective else seen_tasks
-                    viz.save_forgetting_matrix(
-                        forgetting_rows, seen_tasks, col_order, suffix,
-                        out_dir=out_dir,
-                    )
+                # One row per task per epoch. In epoch 0 every task is newly
+                # seen, so this reproduces the previous single-epoch matrix;
+                # in later epochs it captures the full re-evaluated matrix.
+                forgetting_rows.append(accs)
+                epoch_row_tasks.append(task)
+                col_order = list(task_indices) if prospective else list(seen_tasks)
+                if n_epochs > 1:
+                    xfer_tag = f"{suffix}_ep{epoch}" if suffix else f"ep{epoch}"
+                else:
+                    xfer_tag = suffix
+                viz.save_forgetting_matrix(
+                    forgetting_rows, epoch_row_tasks, col_order, xfer_tag,
+                    out_dir=out_dir,
+                )
 
         # Periodic plot saves (kept even with RENDER_STEPS=False; only the
         # per-step mask rendering is disabled)
@@ -361,9 +372,11 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--name",
-        default="",
+        default="auto",
         help="Run name: outputs go to artifacts/<name>/ with <name> suffixed "
-        "to filenames (e.g. 'run1' → artifacts/run1/bw_run1.gif).",
+        "to filenames (e.g. 'run1' → artifacts/run1/bw_run1.gif). Pass 'auto' "
+        "to derive the name from the --config subconfigs joined with '_' plus "
+        "an incrementing integer (e.g. Reactive_Low_Large_0).",
     )
     parser.add_argument(
         "--config",
@@ -388,7 +401,35 @@ if __name__ == "__main__":
         help="Override Config.RENDER_STEPS (0 = skip per-step mask GIFs and "
         "task vis; loss plots and forgetting/transfer matrices still save).",
     )
+    parser.add_argument(
+        "--noidx",
+        action="store_true",
+        help="With --name auto, don't scan for the lowest free integer; "
+        "always use <base>_0 and overwrite any existing artifacts/ directory "
+        "of that name instead of incrementing.",
+    )
     args = parser.parse_args()
+
+    # --name auto: derive the run name from the subconfigs (the set of --config
+    # class names, which is exactly what lands after "# config:" in config.txt),
+    # joined with '_', plus the lowest free incrementing integer. The integer
+    # lets the same subconfig set be run repeatedly (e.g. with other params
+    # changed) without clobbering earlier artifacts/ directories.
+    if args.name == "auto":
+        base = "_".join(args.config)
+        i = 0
+        if not args.noidx:
+            existing = set()
+            if os.path.isdir("artifacts"):
+                existing = {
+                    d for d in os.listdir("artifacts")
+                    if os.path.isdir(os.path.join("artifacts", d))
+                }
+            while f"{base}_{i}" in existing:
+                i += 1
+        args.name = f"{base}_{i}"
+        print(f"--name auto resolved to: {args.name}")
+
     RUN_TAG = f"_{args.name}" if args.name else ""
     # Per-run output directory: artifacts/<name>/ (files still carry the
     # <name> suffix so runs can later be pooled into one folder).

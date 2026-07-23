@@ -22,7 +22,7 @@ and were produced by the bank as it evolved block-by-block).
 
     uv run python rebuild_refs_usage.py                 # all trained tasks
     uv run python rebuild_refs_usage.py --per-task 256  # cap reconfigs/task
-    uv run python rebuild_refs_usage.py --tasks robotics cscg
+    uv run python rebuild_refs_usage.py --tasks base_ftn globo
 """
 
 from __future__ import annotations
@@ -33,7 +33,7 @@ import time
 
 import torch
 from config import CFG
-from data import build_examples, build_task
+from data import build_task
 from model import build, load_bank
 from perplexity_configurer import PerplexityConfigurer
 
@@ -92,7 +92,7 @@ def main():
     t0 = time.time()
     for ti, key in enumerate(keys):
         data = build_task(CFG, tok, key)
-        raw = build_examples(CFG, tok, key, data)["raw"]
+        raw = [{"recfg": ch.detach().cpu()} for ch in data.train]
         n = min(len(raw), args.per_task)
         gen = torch.Generator(device="cpu").manual_seed(CFG.seed + ti)
         idx = torch.randperm(len(raw), generator=gen, device="cpu")[:n].tolist()

@@ -39,7 +39,14 @@ from transformers import StoppingCriteria, StoppingCriteriaList, TextIteratorStr
 
 # Colors come from the registry, so newly-added tasks are colored automatically.
 DOMAIN_COLORS = {k: np.array(c) for k, c in registry.colors().items()}
-UPSCALE = 22
+# Pixel upscale per atom, sized so the rendered map stays ~1000px regardless of
+# grid_dim (22 was tuned for the old 48x48 grid; 96x96 needs ~10).
+UPSCALE = max(4, 1024 // CFG.grid_dim)
+
+# Whether the model reasons ("thinks") before answering. Defaults to on (the
+# Qwen chat-template default); flipped off by the --no-thinking CLI flag in
+# _parse_cli(), which runs before the first generate() call.
+ENABLE_THINKING = True
 
 # Set by the Stop button; checked both in the reconfig/stream loops and inside
 # generate() so the worker thread actually halts (and frees the GPU) rather than
@@ -114,10 +121,20 @@ def _parse_cli():
         help="checkpoint folder to serve from (reads bank.pt, refs_usage.pt/"
         "refs.pt). Overrides FTN_CKPT_DIR and the config default.",
     )
+    p.add_argument(
+        "--no-thinking",
+        dest="no_thinking",
+        action="store_true",
+        help="disable the model's thinking/reasoning mode (enabled by default). "
+        "Passes enable_thinking=False to the chat template.",
+    )
     args, _ = p.parse_known_args()
     if args.ckpt_dir:
         CFG.ckpt_dir = Path(args.ckpt_dir).expanduser().resolve()
+    global ENABLE_THINKING
+    ENABLE_THINKING = not args.no_thinking
     print(f"  serving checkpoints from: {CFG.ckpt_dir}")
+    print(f"  thinking mode: {'enabled' if ENABLE_THINKING else 'disabled'}")
 
 
 def _sync_cfg_to_ckpt():
@@ -267,6 +284,7 @@ def respond(
     init_a,
     init_b,
     gamma,
+    enable_thinking,
 ):
     STOP_EVENT.clear()  # fresh request; ignore any prior Stop
     history = history + [
@@ -328,7 +346,11 @@ def respond(
         {"role": "user", "content": message},
     ]
     enc = TOK.apply_chat_template(
-        msgs, add_generation_prompt=True, return_tensors="pt", return_dict=True
+        msgs,
+        add_generation_prompt=True,
+        return_tensors="pt",
+        return_dict=True,
+        enable_thinking=bool(enable_thinking),
     ).to(DEV)
     cur_ids = enc["input_ids"]
     attn = enc["attention_mask"]
@@ -446,7 +468,7 @@ def main():
                     box = gr.Textbox(
                         scale=8,
                         show_label=False,
-                        placeholder="Ask about the code, the FTN paper, or the robotics work…",
+                        placeholder="Ask about the base FTN code, the explorer agent, Globo, or the MT10 robotics scripts…",
                     )
                     stop_btn = gr.Button("⏹ Stop", variant="stop", scale=1)
                     # Hidden for now: re-seeding doesn't reliably reproduce
@@ -458,6 +480,13 @@ def main():
                     height=380,
                 )
                 with gr.Accordion("Controls", open=False):
+                    # Per-message thinking toggle. Initial state honors the
+                    # --no-thinking CLI flag (ENABLE_THINKING); flipping it here
+                    # takes effect on the next message with no restart.
+                    thinking = gr.Checkbox(
+                        value=ENABLE_THINKING,
+                        label="Enable thinking (model reasons before answering)",
+                    )
                     temperature = gr.Slider(
                         0.0,
                         1.5,
@@ -472,12 +501,15 @@ def main():
                         step=1,
                         label="Reconfig steps (mask search depth)",
                     )
+                    # Default = CFG.lateral_steps (0 = plain KWTA, matching the
+                    # base Large/NoReplay/Reactive_Low config); raise the slider
+                    # to turn SmoothKWTA blob coherence on live.
                     lateral_steps = gr.Slider(
                         0,
                         10,
-                        value=3,
+                        value=CFG.lateral_steps,
                         step=1,
-                        label="Lateral smoothing steps (blob coherence)",
+                        label="Lateral smoothing steps (0 = plain KWTA)",
                     )
                     lateral_polyak = gr.Slider(
                         0.0,
@@ -555,6 +587,7 @@ def main():
                 init_a,
                 init_b,
                 gamma,
+                thinking,
             ],
             [chat, mask_img],
             show_progress="hidden",
@@ -569,7 +602,8 @@ def main():
         # returns to the deterministic state it had at load time.
         seed_btn.click(_reset_seed, None, None)
     print(
-        f"\nServing on 127.0.0.1:{CFG.port} — expose with:  tailscale serve {CFG.port}\n"
+        f"\nServing on 127.0.0.1:{CFG.port} — forward with e.g. "
+        f"`actl pod exec --port {CFG.port}` and open http://localhost:{CFG.port}\n"
     )
     demo.queue().launch(server_name="127.0.0.1", server_port=CFG.port)
 

@@ -23,6 +23,7 @@ zero_grad() from the caller.
 """
 
 import math
+from types import SimpleNamespace
 
 import torch
 import torch.nn as nn
@@ -168,6 +169,17 @@ class FTN(nn.Module):
                              gradient loop; mask_lateral_steps=0 = plain KWTA.
         torus:               Circular (wrap-around) padding for both lateral
                              convolutions.
+        use_second_mask:     Enable the DualMask two-stage reconfiguration. The
+                             first mask is reconfigured normally; then a second
+                             mask is reconfigured against mask2*mask1 with mask1
+                             frozen, and the effective mask becomes mask1*mask2.
+        k2, reconfig_steps2, reconfig_lr2, reconfig_sample_size2,
+        reconfig_algorithm2, mask_kernel_size2, mask_lateral_steps2,
+        mask_lateral_polyak2, mask_lateral_noise_sd2, torus2:
+                             The second mask's twin of every mask-1 knob above,
+                             so the second mask can use a different algorithm
+                             ("fast"/"annealste"), budget, K, lateral dynamics
+                             and torus. Ignored when use_second_mask is False.
     """
 
     def __init__(
@@ -184,7 +196,7 @@ class FTN(nn.Module):
         lateral_b: float = 0.0,
         lateral_steps: int = 0,
         lateral_kernel_size: int = 3,
-        # Mask / reconfiguration
+        # Mask / reconfiguration (first mask)
         k: int = 128,
         reconfig_steps: int = 30,
         reconfig_lr: float = 0.3,
@@ -195,11 +207,24 @@ class FTN(nn.Module):
         mask_lateral_polyak: float = 0.0,
         mask_lateral_noise_sd: float = 0.0,
         torus: bool = False,
+        # Second mask (DualMask); ignored when use_second_mask is False
+        use_second_mask: bool = False,
+        k2: int = 128,
+        reconfig_steps2: int = 30,
+        reconfig_lr2: float = 0.3,
+        reconfig_sample_size2: int = 2048,
+        reconfig_algorithm2 = "annealste",
+        mask_kernel_size2: int = 3,
+        mask_lateral_steps2: int = 0,
+        mask_lateral_polyak2: float = 0.0,
+        mask_lateral_noise_sd2: float = 0.0,
+        torus2: bool = False,
     ):
         super().__init__()
         self.hidden_size = hidden_size
         self.square_dim = square_dim
         self.classification = classification
+        self.use_second_mask = use_second_mask
 
         self.k = k
         self.reconfig_steps = reconfig_steps
@@ -220,14 +245,45 @@ class FTN(nn.Module):
         self.lateral = _uniform_conv(
             lateral_kernel_size, 1 / lateral_kernel_size**2, torus
         )
-        # Mask smoothing (summing kernel) for SmoothKWTA lateral dynamics
+        # Mask smoothing (summing kernel) for SmoothKWTA lateral dynamics.
+        # One conv per mask so each mask has its own kernel size / torus.
         self.mask_lateral = _uniform_conv(mask_kernel_size, 1.0, torus)
+        self.mask_lateral2 = _uniform_conv(mask_kernel_size2, 1.0, torus2)
 
-        # Current task mask
+        # Current effective task mask (mask1*mask2 in dual mode, else mask1),
+        # plus the two component masks (m2 stays zero in single-mask mode).
         self.register_buffer("m", torch.zeros(hidden_size))
+        self.register_buffer("m1", torch.zeros(hidden_size))
+        self.register_buffer("m2", torch.zeros(hidden_size))
 
-        # Which mask selection algorithm
-        if reconfig_algorithm == "fast":
+        # Per-mask hyperparameter bundles consumed by the reconfig algorithms.
+        self.spec1 = SimpleNamespace(
+            k=k,
+            steps=reconfig_steps,
+            lr=reconfig_lr,
+            sample_size=reconfig_sample_size,
+            algorithm=reconfig_algorithm,
+            lateral_conv=self.mask_lateral,
+            lateral_steps=mask_lateral_steps,
+            polyak=mask_lateral_polyak,
+            noise_sd=mask_lateral_noise_sd,
+        )
+        self.spec2 = SimpleNamespace(
+            k=k2,
+            steps=reconfig_steps2,
+            lr=reconfig_lr2,
+            sample_size=reconfig_sample_size2,
+            algorithm=reconfig_algorithm2,
+            lateral_conv=self.mask_lateral2,
+            lateral_steps=mask_lateral_steps2,
+            polyak=mask_lateral_polyak2,
+            noise_sd=mask_lateral_noise_sd2,
+        )
+
+        # Which reconfiguration routine forward()/callers dispatch through.
+        if use_second_mask:
+            self._reconfig = self.dual_reconfigure
+        elif reconfig_algorithm == "fast":
             self._reconfig = self.fast_reconfigure
         else:
             self._reconfig = self.reconfigure
@@ -255,8 +311,19 @@ class FTN(nn.Module):
             mask_lateral_polyak=mask_lateral_polyak,
             mask_lateral_noise_sd=mask_lateral_noise_sd,
             torus=torus,
+            use_second_mask=use_second_mask,
+            k2=k2,
+            reconfig_steps2=reconfig_steps2,
+            reconfig_lr2=reconfig_lr2,
+            reconfig_sample_size2=reconfig_sample_size2,
+            reconfig_algorithm2=reconfig_algorithm2,
+            mask_kernel_size2=mask_kernel_size2,
+            mask_lateral_steps2=mask_lateral_steps2,
+            mask_lateral_polyak2=mask_lateral_polyak2,
+            mask_lateral_noise_sd2=mask_lateral_noise_sd2,
+            torus2=torus2,
         )
-    
+
 
 
     # ---------------------------------------------------------------- forward
@@ -287,8 +354,8 @@ class FTN(nn.Module):
             m = self.m
         m = m.reshape(1, -1)
         z = self.features(x)
-        z = self._step_feature_lateral(z*m)*m # This is kind of useless.
-        return self.linear(z)
+        # z = self._step_feature_lateral(z*m)*m # This is kind of useless.
+        return self.linear(z*m)
 
     def loss(self, pred: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
         """Task loss: cross-entropy on one-hot targets, or MSE."""
@@ -299,35 +366,56 @@ class FTN(nn.Module):
 
     # ---------------------------------------------------------- reconfiguration
 
+    def _run_alg(
+        self,
+        x: torch.Tensor,
+        y: torch.Tensor,
+        spec: SimpleNamespace,
+        gate: torch.Tensor = None,
+    ) -> torch.Tensor:
+        """Dispatch to this spec's reconfiguration algorithm and return its
+        (unmultiplied) kWTA mask. `gate` is an optional frozen mask that gates
+        the features before selection (used to freeze mask1 while mask2 is
+        reconfigured against mask2*mask1)."""
+        if spec.algorithm == "fast":
+            return self._fast_alg(x, y, spec, gate)
+        return self._annealste_alg(x, y, spec, gate)
+
     @torch.enable_grad()
-    def reconfigure(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+    def _annealste_alg(
+        self,
+        x: torch.Tensor,
+        y: torch.Tensor,
+        spec: SimpleNamespace,
+        gate: torch.Tensor = None,
+    ) -> torch.Tensor:
         """
-        Reconfigure the mask for the task represented by (x, y).
+        Annealed straight-through KWTA reconfiguration for one mask.
 
-        Annealed straight-through KWTA: optimize a real-valued mask logit with
-        Adam, where the forward mask is kwta(logits + noise) with an annealed
-        noise temperature and a sigmoid STE for gradients. Keeps the best mask
-        by loss, then (optionally) applies lateral smoothing + re-sparsifies.
-
-        All weights are detached: gradients flow only into the mask logits.
-        Updates self.m in place and returns it.
+        Optimize a real-valued mask logit with Adam, where the forward mask is
+        kwta(logits + noise) with an annealed noise temperature and a sigmoid
+        STE for gradients. Keeps the best mask by loss, then (optionally)
+        applies lateral smoothing + re-sparsifies. All weights are detached:
+        gradients flow only into the mask logits. Returns the kWTA mask.
         """
-        n = min(self.reconfig_sample_size, x.shape[0])
+        n = min(spec.sample_size, x.shape[0])
         x, y = x[:n], y[:n]
 
         m = nn.Parameter(torch.randn_like(self.m) * 0.00001)
-        optimizer = torch.optim.Adam([m], lr=self.reconfig_lr)
+        optimizer = torch.optim.Adam([m], lr=spec.lr)
 
         z = self.parallel(x).detach()
         w = self.linear.weight.detach()
+        if gate is not None:
+            z = z * gate.reshape(1, -1)
 
         lowest_loss = torch.inf
         best = None
-        for i in range(self.reconfig_steps):
+        for i in range(spec.steps):
             sm = torch.sigmoid(m)
-            tau = m.detach().std() * math.exp(-i / (self.reconfig_steps / 4))
+            tau = m.detach().std() * math.exp(-i / (spec.steps / 4))
             noise = torch.randn_like(m) * tau
-            mask = kwta(m + noise, k=self.k) + sm - sm.detach()
+            mask = kwta(m + noise, k=spec.k) + sm - sm.detach()
 
             y_pred = F.linear(z * mask, w)
             loss = self.loss(y_pred, y)
@@ -341,40 +429,41 @@ class FTN(nn.Module):
                 lowest_loss = loss.item()
 
         # Lateral dynamics (spatial smoothing) + re-sparsification.
-        # With mask_lateral_steps == 0 this leaves the KWTA mask unchanged.
-        if self.mask_lateral_polyak < 1.0:
-            for _ in range(self.mask_lateral_steps):
-                m_lat = self._step_mask_lateral(best)
-                best = (
-                    self.mask_lateral_polyak * best
-                    + (1 - self.mask_lateral_polyak) * m_lat
-                )
-            best = kwta(best, k=self.k)
+        # With lateral_steps == 0 this leaves the KWTA mask unchanged.
+        if spec.polyak < 1.0:
+            for _ in range(spec.lateral_steps):
+                m_lat = self._step_mask_lateral(best, spec.lateral_conv, spec.noise_sd)
+                best = spec.polyak * best + (1 - spec.polyak) * m_lat
+            best = kwta(best, k=spec.k)
 
-        self.m.copy_(best)
-        return self.m
-
-    # ---------------------------------------------------------- Fast reconfig
+        return best
 
     @torch.enable_grad()
-    def fast_reconfigure(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+    def _fast_alg(
+        self,
+        x: torch.Tensor,
+        y: torch.Tensor,
+        spec: SimpleNamespace,
+        gate: torch.Tensor = None,
+    ) -> torch.Tensor:
         """
-        Reconfigure the mask for the task represented by (x, y).
+        Fast (RMSprop, no annealing/STE) reconfiguration for one mask.
 
         All weights are detached: gradients flow only into the mask logits.
-        Updates self.m in place and returns it.
+        Returns the kWTA mask.
         """
-        n = min(self.reconfig_sample_size, x.shape[0])
+        n = min(spec.sample_size, x.shape[0])
         x, y = x[:n], y[:n]
 
         m = nn.Parameter(torch.randn_like(self.m) * 0.00001)
-        optimizer = torch.optim.RMSprop([m], lr=self.reconfig_lr)
+        optimizer = torch.optim.RMSprop([m], lr=spec.lr)
 
         z = self.parallel(x).detach()
         w = self.linear.weight.detach()
+        if gate is not None:
+            z = z * gate.reshape(1, -1)
 
-        for i in range(self.reconfig_steps):
-            
+        for i in range(spec.steps):
             y_pred = F.linear(z * torch.sigmoid(m), w)
             loss = self.loss(y_pred, y)
 
@@ -384,14 +473,47 @@ class FTN(nn.Module):
 
         with torch.no_grad():
             # Lateral dynamics (spatial smoothing) + re-sparsification.
-            # With mask_lateral_steps == 0 this leaves the KWTA mask unchanged.
-            if self.mask_lateral_polyak < 1.0:
-                for _ in range(self.mask_lateral_steps):
-                    m_lat = self._step_mask_lateral(m)
-                    m = self.mask_lateral_polyak * m + (1 - self.mask_lateral_polyak) * m_lat
+            # With lateral_steps == 0 this leaves the KWTA mask unchanged.
+            if spec.polyak < 1.0:
+                for _ in range(spec.lateral_steps):
+                    m_lat = self._step_mask_lateral(m, spec.lateral_conv, spec.noise_sd)
+                    m = spec.polyak * m + (1 - spec.polyak) * m_lat
 
-        mask = kwta(m, k=self.k)
-        self.m.copy_(mask)
+        return kwta(m, k=spec.k)
+
+    def reconfigure(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+        """Single-mask annealed-STE reconfiguration; updates self.m in place."""
+        best = self._annealste_alg(x, y, self.spec1)
+        self.m1.copy_(best)
+        self.m.copy_(best)
+        return self.m
+
+    # ---------------------------------------------------------- Fast reconfig
+
+    def fast_reconfigure(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+        """Single-mask fast reconfiguration; updates self.m in place."""
+        best = self._fast_alg(x, y, self.spec1)
+        self.m1.copy_(best)
+        self.m.copy_(best)
+        return self.m
+
+    # ---------------------------------------------------------- Dual reconfig
+
+    def dual_reconfigure(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+        """
+        Two-stage DualMask reconfiguration.
+
+        Reconfigure the first mask normally (mask1), then reconfigure the
+        second mask against mask2*mask1 with mask1 frozen, and set the
+        effective mask to mask1*mask2. Each mask uses its own spec (algorithm,
+        K, lateral dynamics, torus, ...). Updates self.m in place and returns
+        it; self.m1/self.m2 hold the two components.
+        """
+        m1 = self._run_alg(x, y, self.spec1, gate=None)
+        self.m1.copy_(m1)
+        m2 = self._run_alg(x, y, self.spec2, gate=m1)
+        self.m2.copy_(m2)
+        self.m.copy_(m1 * m2)
         return self.m
 
 
@@ -425,14 +547,22 @@ class FTN(nn.Module):
             h = self.lateral_b * h + (1 - self.lateral_b) * self.lateral(h)
         return h.reshape(hshape)
 
-    def _step_mask_lateral(self, m: torch.Tensor) -> torch.Tensor:
+    def _step_mask_lateral(
+        self, m: torch.Tensor, conv: nn.Module = None, noise_sd: float = None
+    ) -> torch.Tensor:
         """
         One lateral-smoothing step on the mask. Blocks of square_dim**2 units
         are smoothed independently, so each block (e.g. pre/post neurogenesis
-        populations) keeps its own spatial topology.
+        populations) keeps its own spatial topology. `conv`/`noise_sd` default
+        to the first mask's smoothing conv / noise (the second mask passes its
+        own via its spec).
         """
+        if conv is None:
+            conv = self.mask_lateral
+        if noise_sd is None:
+            noise_sd = self.mask_lateral_noise_sd
         g = mask_to_grid(m, self.square_dim).unsqueeze(0).unsqueeze(0)
-        g = self.mask_lateral(g).squeeze(0).squeeze(0)
-        if self.mask_lateral_noise_sd > 0:
-            g = g + torch.randn_like(g) * self.mask_lateral_noise_sd
+        g = conv(g).squeeze(0).squeeze(0)
+        if noise_sd > 0:
+            g = g + torch.randn_like(g) * noise_sd
         return mask_to_vec(g, self.square_dim)

@@ -105,6 +105,20 @@ MASK_LATERAL_POLYAK  Polyak mixing of pre/post-smoothing masks per lateral
 MASK_LATERAL_NOISE_SD
                      Gaussian noise added per mask lateral-smoothing step.
 
+Second mask (DualMask)
+----------------------
+USE_SECOND_MASK      Enable two-stage masking. mask1 is reconfigured normally,
+                     then mask2 is reconfigured against mask2*mask1 with mask1
+                     frozen; the effective mask applied by the network is
+                     mask1*mask2. False = single mask (default).
+K_2, RECONFIG_ALGORITHM_2, RECONFIG_STEPS_2, RECONFIG_LR_2,
+RECONFIG_SAMPLE_SIZE_2, MASK_KERNEL_SIZE_2, MASK_LATERAL_STEPS_2,
+MASK_LATERAL_POLYAK_2, MASK_LATERAL_NOISE_SD_2, TORUS_2
+                     The second mask's twin of each mask-1 knob, so mask2 can
+                     use its own algorithm ("fast"/"annealste"), budget, K,
+                     lateral dynamics, kernel size and torus. Ignored when
+                     USE_SECOND_MASK is False.
+
 Data sizes / schedule
 ---------------------
 TRAIN_DURATION       Training steps (batches) per task per epoch.
@@ -139,7 +153,7 @@ class Default:
 
     # Experiment pars
     SEED = 123
-    N_TASK = 8
+    N_TASK = 3
 
     # Data generator
     CLASSIFICATION = True
@@ -160,7 +174,7 @@ class Default:
     DOMAIN_PER_TASK_PROJECTION = False
 
     # FTN backbone
-    SQUARE_DIM = 48
+    SQUARE_DIM = 96
     LAYERS = 8
     INNER_DIM = 8
 
@@ -172,11 +186,11 @@ class Default:
     TORUS = True
 
     # FTN mask / reconfiguration
-    K = 256
+    K = 1024
 
-    RECONFIG_ALGORITHM = "annealste"
-    RECONFIG_STEPS = 30
-    RECONFIG_LR = 0.3
+    RECONFIG_ALGORITHM = "fast"
+    RECONFIG_STEPS = 1
+    RECONFIG_LR = 1
     RECONFIG_SAMPLE_SIZE = T
 
     RECONFIG_EVERY = 1
@@ -185,14 +199,32 @@ class Default:
     RECONFIG_REACTIVE_SD = 5.0
     RECONFIG_REACTIVE_EMA = 0.95
 
-    MASK_KERNEL_SIZE = 3
-    MASK_LATERAL_STEPS = 0  # 0 = plain KWTA; >0 = SmoothKWTA
+    MASK_KERNEL_SIZE = 21
+    MASK_LATERAL_STEPS = 3  # 0 = plain KWTA; >0 = SmoothKWTA
     MASK_LATERAL_POLYAK = 0.0
     MASK_LATERAL_NOISE_SD = 0.0
 
+    # Second mask (DualMask). When USE_SECOND_MASK is True the mask is
+    # reconfigured in two stages: mask1 is reconfigured normally, then mask2 is
+    # reconfigured against mask2*mask1 with mask1 frozen. The effective mask is
+    # mask1*mask2. Every mask-1 knob above has a *_2 twin so the second mask can
+    # use its own algorithm ("fast"/"annealste"), budget, K, lateral dynamics,
+    # kernel size and torus. Ignored when USE_SECOND_MASK is False.
+    USE_SECOND_MASK = True
+    K_2 = 64
+    RECONFIG_ALGORITHM_2 = "annealste"  # annealste or fast
+    RECONFIG_STEPS_2 = 30
+    RECONFIG_LR_2 = 0.3
+    RECONFIG_SAMPLE_SIZE_2 = T
+    MASK_KERNEL_SIZE_2 = 3
+    MASK_LATERAL_STEPS_2 = 0  # 0 = plain KWTA; >0 = SmoothKWTA
+    MASK_LATERAL_POLYAK_2 = 0.0
+    MASK_LATERAL_NOISE_SD_2 = 0.0
+    TORUS_2 = True
+
     # Data sizes
     TRAIN_DURATION = 500
-    N_EPOCHS = 5
+    N_EPOCHS = 1
     N_EVAL_EPOCHS = 1
 
     N_SAMPLE_PER_TASK = 10
@@ -208,7 +240,7 @@ class Default:
     TRAIN_LR = 3e-4
 
     # Plotting
-    RENDER_STEPS = False
+    RENDER_STEPS = True
     LOSS_EMA_SMOOTHING = 0.8
     PLOT_EVERY = 1
     GIF_DURATION = 20
@@ -246,6 +278,18 @@ class Default:
             "mask_lateral_polyak": self.MASK_LATERAL_POLYAK,
             "mask_lateral_noise_sd": self.MASK_LATERAL_NOISE_SD,
             "torus": self.TORUS,
+            # second mask (DualMask)
+            "use_second_mask": self.USE_SECOND_MASK,
+            "k2": self.K_2,
+            "reconfig_steps2": self.RECONFIG_STEPS_2,
+            "reconfig_lr2": self.RECONFIG_LR_2,
+            "reconfig_sample_size2": self.RECONFIG_SAMPLE_SIZE_2,
+            "reconfig_algorithm2": self.RECONFIG_ALGORITHM_2,
+            "mask_kernel_size2": self.MASK_KERNEL_SIZE_2,
+            "mask_lateral_steps2": self.MASK_LATERAL_STEPS_2,
+            "mask_lateral_polyak2": self.MASK_LATERAL_POLYAK_2,
+            "mask_lateral_noise_sd2": self.MASK_LATERAL_NOISE_SD_2,
+            "torus2": self.TORUS_2,
         }
 
 
@@ -307,6 +351,19 @@ class Plane:
     MASK_LATERAL_POLYAK = 0.0
     MASK_LATERAL_NOISE_SD = 0.0
 
+    # Second mask (DualMask); see Default for the semantics.
+    USE_SECOND_MASK = False
+    K_2 = 256
+    RECONFIG_ALGORITHM_2 = "annealste"  # annealste or fast
+    RECONFIG_STEPS_2 = 30
+    RECONFIG_LR_2 = 0.3
+    RECONFIG_SAMPLE_SIZE_2 = T
+    MASK_KERNEL_SIZE_2 = 3
+    MASK_LATERAL_STEPS_2 = 0  # 0 = plain KWTA; >0 = SmoothKWTA
+    MASK_LATERAL_POLYAK_2 = 0.0
+    MASK_LATERAL_NOISE_SD_2 = 0.0
+    TORUS_2 = True
+
     # Data sizes
     TRAIN_DURATION = 500
     N_EPOCHS = 1
@@ -363,6 +420,18 @@ class Plane:
             "mask_lateral_polyak": self.MASK_LATERAL_POLYAK,
             "mask_lateral_noise_sd": self.MASK_LATERAL_NOISE_SD,
             "torus": self.TORUS,
+            # second mask (DualMask)
+            "use_second_mask": self.USE_SECOND_MASK,
+            "k2": self.K_2,
+            "reconfig_steps2": self.RECONFIG_STEPS_2,
+            "reconfig_lr2": self.RECONFIG_LR_2,
+            "reconfig_sample_size2": self.RECONFIG_SAMPLE_SIZE_2,
+            "reconfig_algorithm2": self.RECONFIG_ALGORITHM_2,
+            "mask_kernel_size2": self.MASK_KERNEL_SIZE_2,
+            "mask_lateral_steps2": self.MASK_LATERAL_STEPS_2,
+            "mask_lateral_polyak2": self.MASK_LATERAL_POLYAK_2,
+            "mask_lateral_noise_sd2": self.MASK_LATERAL_NOISE_SD_2,
+            "torus2": self.TORUS_2,
         }
 
 
@@ -447,6 +516,23 @@ class Fast(Default):
     DROPOUT = 0.0
     RECONFIG_ALGORITHM = "fast"
 
+class DualMask(Default):
+    """Two-stage masking: reconfigure mask1, then mask2 against mask2*mask1
+    with mask1 frozen; the effective mask is mask1*mask2. The second mask
+    mirrors the first here (same annealed-STE algorithm and budget); override
+    the *_2 knobs to give it a different algorithm/K/lateral dynamics/torus."""
+    USE_SECOND_MASK = True
+    K_2 = 256
+    RECONFIG_ALGORITHM_2 = "annealste"
+    RECONFIG_STEPS_2 = 30
+    RECONFIG_LR_2 = 0.3
+    MASK_KERNEL_SIZE_2 = 3
+    MASK_LATERAL_STEPS_2 = 0
+    MASK_LATERAL_POLYAK_2 = 0.0
+    MASK_LATERAL_NOISE_SD_2 = 0.0
+    TORUS_2 = True
+
+
 class Large(Default):
     SQUARE_DIM = 96
     K = 1024
@@ -461,3 +547,34 @@ class PolyakSmoothLarge(Default):
     DROPOUT = 0.0
     RECONFIG_ALGORITHM = "annealste"
     TORUS = True
+
+
+class DualMask(Default):
+    TORUS = False
+    K = 1024
+    RECONFIG_ALGORITHM = "fast"
+    RECONFIG_STEPS = 1
+    RECONFIG_LR = 1
+    RECONFIG_EVERY = 1
+
+    # RECONFIG_REACTIVE = False
+    # RECONFIG_REACTIVE_SD = 5.0
+    # RECONFIG_REACTIVE_EMA = 0.95
+
+    MASK_KERNEL_SIZE = 21
+    MASK_LATERAL_STEPS = 3  # 0 = plain KWTA; >0 = SmoothKWTA
+    MASK_LATERAL_POLYAK = 0.0
+    MASK_LATERAL_NOISE_SD = 0.0
+
+    USE_SECOND_MASK = True
+    K_2 = 64
+    RECONFIG_ALGORITHM_2 = "annealste"  # annealste or fast
+    RECONFIG_STEPS_2 = 30
+    RECONFIG_LR_2 = 0.3
+    # RECONFIG_SAMPLE_SIZE_2 = T
+    MASK_KERNEL_SIZE_2 = 3
+    MASK_LATERAL_STEPS_2 = 0  # 0 = plain KWTA; >0 = SmoothKWTA
+    MASK_LATERAL_POLYAK_2 = 0.0
+    MASK_LATERAL_NOISE_SD_2 = 0.0
+    TORUS_2 = False
+

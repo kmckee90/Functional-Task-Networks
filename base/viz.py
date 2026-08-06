@@ -31,11 +31,19 @@ class MaskAnimator:
     """
 
     def __init__(self, hidden_size, block_dim, gif_duration, gif_save_epoch,
-                 out_dir="artifacts"):
+                 out_dir="artifacts", ema_scale=1.0):
         self.block_dim = block_dim
         self.gif_duration = gif_duration
         self.gif_save_epoch = gif_save_epoch
         self.out_dir = out_dir
+
+        # Trail decay of the bw_*.gif EMA channels. Green decays fast (bright
+        # head of the trail); red + blue persist, giving the purple mid-trail
+        # and the blue tail. ema_scale stretches the red/blue time constants:
+        # decay**(1/scale), so scale=2 doubles the time constant (longer
+        # purple/blue trails), scale=0.5 halves it.
+        ema_scale = max(float(ema_scale), 1e-6)
+        self.decay = (0.95 ** (1 / ema_scale), 0.30, 0.975 ** (1 / ema_scale))
 
         n_blocks = hidden_size // (block_dim**2)
         gh, gw = block_dim, n_blocks * block_dim
@@ -51,9 +59,8 @@ class MaskAnimator:
     def record_step(self, m, snapshot=True):
         """Per-step EMA update of mask activity; snapshot appends a GIF frame."""
         m_2d = mask_to_grid(m.detach(), self.block_dim)
-        self.m_ema[:, :, 0] = torch.max(0.95 * self.m_ema[:, :, 0], m_2d)
-        self.m_ema[:, :, 1] = torch.max(0.30 * self.m_ema[:, :, 1], m_2d)
-        self.m_ema[:, :, 2] = torch.max(0.975 * self.m_ema[:, :, 2], m_2d)
+        for c, decay in enumerate(self.decay):
+            self.m_ema[:, :, c] = torch.max(decay * self.m_ema[:, :, c], m_2d)
 
         if snapshot:
             frame = Image.fromarray(

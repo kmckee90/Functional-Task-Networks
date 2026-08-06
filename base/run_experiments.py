@@ -205,6 +205,7 @@ def train(
             gif_duration=Config.GIF_DURATION,
             gif_save_epoch=min(Config.GIF_SAVE_EPOCH, n_epochs) or 1,
             out_dir=out_dir,
+            ema_scale=getattr(Config, "GIF_EMA_SCALE", 1.0),
         )
 
     # Reactive reconfiguration (RECONFIG_REACTIVE): reconfigure once on the

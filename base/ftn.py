@@ -43,6 +43,41 @@ def kwta(x: torch.Tensor, k: int) -> torch.Tensor:
     return out
 
 
+def closest_stored(best: torch.Tensor, stored: torch.Tensor) -> torch.Tensor:
+    """The stored mask most similar to `best` (largest overlap / intersection).
+
+    `best` is a flat (H,) mask; `stored` is (N, H). Returns a clone of the
+    highest-overlap row. Used by the match-stored annealste reconfiguration
+    option to snap the running best onto a previous task's mask.
+    """
+    overlap = (stored * best.reshape(1, -1)).sum(-1)
+    return stored[overlap.argmax()].clone()
+
+
+def best_stored(
+    ref: torch.Tensor,
+    stored: torch.Tensor,
+    topk: int = 1,
+    loss_fn=None,
+) -> torch.Tensor:
+    """Recall a stored mask to snap the running best onto (Hopfield-style).
+
+    `ref` is a flat mask; `stored` is (N, H). Candidates are the `topk` stored
+    masks with highest overlap with `ref`. With topk <= 1 (or no loss_fn) this
+    is the single closest match, identical to `closest_stored`. Otherwise each
+    of the top-k candidates is scored by `loss_fn(candidate_row) -> float` and
+    the lowest-loss (best-performing) one is returned. Returns a clone of the
+    chosen row.
+    """
+    overlap = (stored * ref.reshape(1, -1)).sum(-1)
+    topk = max(1, min(int(topk), stored.shape[0]))
+    if topk == 1 or loss_fn is None:
+        return stored[overlap.argmax()].clone()
+    idx = torch.topk(overlap, topk).indices
+    losses = torch.tensor([float(loss_fn(stored[j])) for j in idx])
+    return stored[idx[int(losses.argmin())]].clone()
+
+
 def normalize_mask(m: torch.Tensor) -> torch.Tensor:
     """Normalize mask to [0, 1] range."""
     m = m - m.min()
@@ -124,13 +159,44 @@ class ParallelMLP(nn.Module):
             nn.init.uniform_(w, -bound, bound)
             nn.init.uniform_(b, -s_b / math.sqrt(fan_in), s_b / math.sqrt(fan_in))
 
-    def forward(self, x):
+    def forward(self, x, detach: bool = False):
+        # detach=True runs the block with its weights detached from the graph,
+        # so a caller (e.g. a stacked mask search) gets gradients on the masks
+        # only, never on these parameters — mirroring the reconfig algorithms'
+        # `self.parallel(x).detach()`, but usable mid-stack where the input
+        # itself carries mask gradients.
         h = x.unsqueeze(-2)  # (B, 1, D) — broadcasts over K
         for i, (W, b) in enumerate(zip(self.weights, self.biases)):
+            if detach:
+                W, b = W.detach(), b.detach()
             h = torch.einsum("bki,kij->bkj", h, W) + b  # (B, K, out_i)
             if i < self.n_layers:  # relu on hidden layers only, not the output
                 h = torch.relu(h)
-        return h.squeeze(-1)  # (B, K)
+        out = h.squeeze(-1)
+        out = torch.sigmoid(out)
+        # out = torch.bernoulli(out_sm) + out_sm - out_sm.detach()
+        return out  # (B, K)
+
+
+def task_loss(pred, y, classification: bool = False, binary: bool = False):
+    """Task loss shared by all FTN variants (training and the mask search).
+
+    binary=True:         per-cell binary cross-entropy with logits. Targets are
+                         independent bits in {0, 1} of the same shape as pred
+                         (e.g. the composition task's binary matrices); every
+                         output unit is its own sigmoid classifier.
+    classification=True: single-label softmax cross-entropy on one-hot targets
+                         (exactly one 1 per row = pick one of output_size classes).
+    otherwise:           mean squared error (scalar/vector regression).
+
+    binary takes precedence over classification.
+    """
+    if binary:
+        return F.binary_cross_entropy_with_logits(pred, y.float())
+    if classification:
+        target = torch.where(y == 1)[1]
+        return F.cross_entropy(pred, target)
+    return F.mse_loss(pred.squeeze(), y.squeeze())
 
 
 # =============================================================================
@@ -189,6 +255,7 @@ class FTN(nn.Module):
         hidden_size: int,
         square_dim: int,
         classification: bool = False,
+        binary: bool = False,
         # Backbone
         layers: int = 3,
         inner_size: int = 8,
@@ -202,11 +269,16 @@ class FTN(nn.Module):
         reconfig_lr: float = 0.3,
         reconfig_sample_size: int = 2048,
         reconfig_algorithm = "annealste", #annealste (default) or fast
+        reconfig_noise_scale: float = 1.0,
         mask_kernel_size: int = 3,
         mask_lateral_steps: int = 0,
         mask_lateral_polyak: float = 0.0,
         mask_lateral_noise_sd: float = 0.0,
         torus: bool = False,
+        # Match-stored reconfiguration (annealste only)
+        match_stored: bool = False,
+        match_stored_after: int = 0,
+        match_stored_topk: int = 1,
         # Second mask (DualMask); ignored when use_second_mask is False
         use_second_mask: bool = False,
         k2: int = 128,
@@ -224,15 +296,27 @@ class FTN(nn.Module):
         self.hidden_size = hidden_size
         self.square_dim = square_dim
         self.classification = classification
+        self.binary = binary
         self.use_second_mask = use_second_mask
 
         self.k = k
         self.reconfig_steps = reconfig_steps
         self.reconfig_lr = reconfig_lr
         self.reconfig_sample_size = reconfig_sample_size
+        self.reconfig_noise_scale = reconfig_noise_scale
         self.mask_lateral_steps = mask_lateral_steps
         self.mask_lateral_polyak = mask_lateral_polyak
         self.mask_lateral_noise_sd = mask_lateral_noise_sd
+
+        # Match-stored reconfiguration option (see _annealste_alg). A reference to
+        # the live replay / noise-probe mask buffer (a deque), wired in by
+        # run_experiments; None disables regardless of match_stored.
+        self.match_stored = match_stored
+        self.match_stored_after = match_stored_after
+        # Hopfield recall breadth: consider the top-k highest-overlap stored
+        # masks and keep the best-performing one (by loss). 1 = closest match.
+        self.match_stored_topk = match_stored_topk
+        self._stored_masks_ref = None
 
         self.lateral_b = lateral_b
         self.lateral_steps = lateral_steps
@@ -295,6 +379,7 @@ class FTN(nn.Module):
             hidden_size=hidden_size,
             square_dim=square_dim,
             classification=classification,
+            binary=binary,
             layers=layers,
             inner_size=inner_size,
             dropout_p=dropout_p,
@@ -306,11 +391,15 @@ class FTN(nn.Module):
             reconfig_lr=reconfig_lr,
             reconfig_sample_size=reconfig_sample_size,
             reconfig_algorithm=reconfig_algorithm,
+            reconfig_noise_scale=reconfig_noise_scale,
             mask_kernel_size=mask_kernel_size,
             mask_lateral_steps=mask_lateral_steps,
             mask_lateral_polyak=mask_lateral_polyak,
             mask_lateral_noise_sd=mask_lateral_noise_sd,
             torus=torus,
+            match_stored=match_stored,
+            match_stored_after=match_stored_after,
+            match_stored_topk=match_stored_topk,
             use_second_mask=use_second_mask,
             k2=k2,
             reconfig_steps2=reconfig_steps2,
@@ -327,6 +416,12 @@ class FTN(nn.Module):
 
 
     # ---------------------------------------------------------------- forward
+
+    def set_stored_masks_ref(self, masks_ref):
+        """Wire in the live buffer of stored task masks (a deque, e.g.
+        ReplayBuffer.masks / NoiseProbeBuffer.masks) used by the match-stored
+        annealste option. run_experiments sets this; None disables it."""
+        self._stored_masks_ref = masks_ref
 
     def features(self, x: torch.Tensor) -> torch.Tensor:
         """Backbone features before masking: (B, hidden_size)."""
@@ -358,11 +453,8 @@ class FTN(nn.Module):
         return self.linear(z*m)
 
     def loss(self, pred: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
-        """Task loss: cross-entropy on one-hot targets, or MSE."""
-        if self.classification:
-            target = torch.where(y == 1)[1]
-            return F.cross_entropy(pred, target)
-        return F.mse_loss(pred.squeeze(), y.squeeze())
+        """Task loss: per-cell BCE (binary), one-hot cross-entropy, or MSE."""
+        return task_loss(pred, y, self.classification, self.binary)
 
     # ---------------------------------------------------------- reconfiguration
 
@@ -409,12 +501,29 @@ class FTN(nn.Module):
         if gate is not None:
             z = z * gate.reshape(1, -1)
 
+        # Match-stored option: after match_stored_after steps, snap the running
+        # best to the closest previous-task mask in the buffer and let the rest
+        # of the steps try to beat it. Gated to the primary mask (gate is None)
+        # and to a populated buffer.
+        do_match = (
+            self.match_stored
+            and gate is None
+            and self._stored_masks_ref is not None
+            and len(self._stored_masks_ref) > 0
+        )
+        stored = torch.stack(list(self._stored_masks_ref)) if do_match else None
+        swapped = False
+
+        def _cand_loss(cand: torch.Tensor) -> float:
+            with torch.no_grad():
+                return self.loss(F.linear(z * cand.reshape(1, -1), w), y).item()
+
         lowest_loss = torch.inf
         best = None
         for i in range(spec.steps):
             sm = torch.sigmoid(m)
             tau = m.detach().std() * math.exp(-i / (spec.steps / 4))
-            noise = torch.randn_like(m) * tau
+            noise = torch.randn_like(m) * tau * self.reconfig_noise_scale
             mask = kwta(m + noise, k=spec.k) + sm - sm.detach()
 
             y_pred = F.linear(z * mask, w)
@@ -427,6 +536,21 @@ class FTN(nn.Module):
             if loss.item() < lowest_loss:
                 best = mask.clone().detach()
                 lowest_loss = loss.item()
+
+            # Replace best with the closest stored mask, and make its loss the
+            # bar the remaining steps must beat.
+            if do_match and not swapped and (i + 1) >= self.match_stored_after:
+                ref = best if best is not None else kwta(m.detach(), spec.k)
+                m_stored = best_stored(ref, stored, self.match_stored_topk, _cand_loss)
+                lowest_loss = _cand_loss(m_stored)
+                best = m_stored
+                swapped = True
+
+        # match_stored_after >= steps never triggers in the loop: anchor to the
+        # best stored mask now (end with a stored mask).
+        if do_match and not swapped:
+            ref = best if best is not None else kwta(m.detach(), spec.k)
+            best = best_stored(ref, stored, self.match_stored_topk, _cand_loss)
 
         # Lateral dynamics (spatial smoothing) + re-sparsification.
         # With lateral_steps == 0 this leaves the KWTA mask unchanged.

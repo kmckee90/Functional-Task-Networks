@@ -29,6 +29,7 @@ expert_data/
 logs/
 runs/
 wandb/
+artifacts/
 
 # Datasets (downloaded/regenerable)
 data/MNIST/

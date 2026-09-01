@@ -127,6 +127,79 @@ def save_loss_plot(per_task_losses, suffix, out_dir="artifacts"):
     plt.close()
 
 
+def save_value_matrix(
+    mat,
+    row_order,
+    col_order,
+    prefix,
+    suffix,
+    out_dir="artifacts",
+    title="",
+    xlabel="",
+    ylabel="",
+    cmap_colors=("red", "white"),
+    vmin=0.0,
+    vmax=1.0,
+    fmt="{:.2f}",
+    cbar_label="",
+):
+    """Save an (n_rows, n_cols) value matrix as a heatmap to
+    {out_dir}/{prefix}{tag(suffix)}.png.
+
+    Generalizes save_forgetting_matrix for arbitrary value matrices (accuracy,
+    variance, neuron sharing, ...). Non-finite cells (NaN/inf) render white,
+    every finite cell is annotated with fmt, and thin black cell borders are
+    drawn. cmap_colors is a low->high color list; vmax=None autoscales to the
+    finite maximum of the matrix.
+    """
+    import matplotlib.pyplot as plt
+    from matplotlib.colors import LinearSegmentedColormap
+
+    mat = np.asarray(mat, dtype=float)
+    n_rows, n_cols = mat.shape
+    if n_rows == 0 or n_cols == 0:
+        return
+    if vmax is None:
+        finite = mat[np.isfinite(mat)]
+        vmax = float(finite.max()) if finite.size else 1.0
+        if vmax <= vmin:
+            vmax = vmin + 1e-8
+
+    cmap = LinearSegmentedColormap.from_list("vm", list(cmap_colors)).copy()
+    cmap.set_bad(color="white")
+
+    _, ax = plt.subplots(figsize=(max(4, n_cols * 0.45), max(4, n_rows * 0.45)))
+    im = ax.imshow(mat, cmap=cmap, vmin=vmin, vmax=vmax, aspect="equal")
+    ax.set_xticks(range(n_cols))
+    ax.set_yticks(range(n_rows))
+    ax.set_xticklabels([str(t) for t in col_order], fontsize=7)
+    ax.set_yticklabels([str(t) for t in row_order], fontsize=7)
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(ylabel)
+    ax.set_title(title)
+
+    ax.set_xticks(np.arange(-0.5, n_cols, 1), minor=True)
+    ax.set_yticks(np.arange(-0.5, n_rows, 1), minor=True)
+    ax.grid(which="minor", color="black", linewidth=0.5)
+    ax.tick_params(which="minor", length=0)
+
+    fontsize = max(4, min(9, int(70 / max(max(n_rows, n_cols), 1))))
+    for i in range(n_rows):
+        for j in range(n_cols):
+            v = mat[i, j]
+            if not np.isfinite(v):
+                continue
+            ax.text(
+                j, i, fmt.format(v), ha="center", va="center",
+                fontsize=fontsize, color="black",
+            )
+
+    plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04, label=cbar_label)
+    plt.tight_layout()
+    plt.savefig(f"{out_dir}/{prefix}{tag(suffix)}.png", dpi=120)
+    plt.close()
+
+
 def save_forgetting_matrix(rows, row_order, col_order, suffix, out_dir="artifacts"):
     """Save accuracy matrix to {out_dir}/xfer{tag(suffix)}.png.
 

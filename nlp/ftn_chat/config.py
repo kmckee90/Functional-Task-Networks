@@ -41,7 +41,8 @@ class Config:
     # Qwen3.6-27B: dense-FFN hybrid (Gated DeltaNet + full attention), 64
     # layers, thinking toggle. Dense FFNs keep the full bank design; the
     # last-25%-layers evidence came from its dense sibling Qwen3-32B.
-    model_name: str = "Qwen/Qwen3.6-27B"
+    # model_name: str = "Qwen/Qwen3.6-27B"
+    model_name: str = "Qwen/Qwen3-8B"
     bf16: bool = True
     # Banks attach ONLY to the last quarter of the decoder stack: the LoCoMo
     # layer-localization sweep found extractable semantic knowledge lives in
@@ -52,14 +53,14 @@ class Config:
     grid_dim: int = 32  # H = grid_dim**2 atoms (32 -> 1024)
     k: int = 128  # active atoms per forward pass
     rank: int = 1  # rank-1 atoms (scaling=alpha/k is rank-independent)
-    alpha: float = 16.0  # authority to override the frozen base prior
-    dropout: float = 0.05
+    alpha: float = 64.0  # authority to override the frozen base prior
+    dropout: float = 0.00
     init_b_zero: bool = False  # MUST be False: see CONTINUATION.md §6
 
     # --- Prompt-perplexity reconfiguration (annealSTE; base Default budget) ---
-    reconfig_steps: int = 30  # annealSTE inner steps at INFERENCE  [RECONFIG_STEPS]
-    train_reconfig_steps: int = 30  # per-reconfig steps during training
-    reconfig_lr: float = 0.3  # Adam lr for the mask logits          [RECONFIG_LR]
+    reconfig_steps: int = 240  # annealSTE inner steps at INFERENCE  [RECONFIG_STEPS]
+    train_reconfig_steps: int = 240  # per-reconfig steps during training
+    reconfig_lr: float = 0.03  # Adam lr for the mask logits          [RECONFIG_LR]
     reconfig_init_sd: float = 1e-5  # mask-logit init noise sd (base: randn*1e-5)
     # SmoothKWTA lateral options — AVAILABLE but OFF by default (plain KWTA,
     # matching Default.MASK_LATERAL_STEPS=0 in the base config).
@@ -67,7 +68,7 @@ class Config:
     lateral_kernel: int = 3  # smoothing kernel size              [MASK_KERNEL_SIZE]
     lateral_polyak: float = 0.0  # pre/post smoothing mix         [MASK_LATERAL_POLYAK]
     lateral_noise_sd: float = 0.0  # per-step mask noise          [MASK_LATERAL_NOISE_SD]
-    torus: bool = True  # circular padding for the lateral conv   [TORUS]
+    torus: bool = False  # circular padding for the lateral conv   [TORUS]
 
     # --- Reactive (loss-triggered) reconfiguration during training ---
     # Reconfigure once on the first training batch, then track an EMA of the
@@ -76,7 +77,7 @@ class Config:
     # state persists across task blocks AND across train.py invocations
     # (stored in state.json). [Reactive_Low]
     reactive: bool = True
-    reactive_sd: float = 5.0  # trigger threshold in EMA sds  [RECONFIG_REACTIVE_SD]
+    reactive_sd: float = 3.0  # trigger threshold in EMA sds  [RECONFIG_REACTIVE_SD]
     reactive_ema: float = 0.9  # EMA smoothing; warmup ~1/(1-ema)=10 batches
 
     # --- Data ---

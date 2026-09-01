@@ -64,8 +64,10 @@ class BankedLinear(nn.Module):
     """Frozen base linear + bank of H LoRA atoms.
 
     Forward: y = base(x) + (alpha/k) * sum_j m_j (x @ A_j @ B_j)
+    Dense over the full bank: every atom is gated by its mask entry m_j (no top-k
+    gather), so every mask logit receives a gradient during reconfiguration.
     Memory-safe: contract atom and rank dims in one einsum, never materialising
-    the (..., k, out) intermediate.
+    the (..., H, out) intermediate.
     """
 
     def __init__(self, base: nn.Linear, cfg: LoRABankConfig, controller: MaskController):
@@ -107,16 +109,20 @@ class BankedLinear(nn.Module):
         m = self.controller.mask
         if m.device != dev:
             m = m.to(dev)
-        active = (m > 0).nonzero(as_tuple=True)[0]
-        if active.numel() == 0:
-            return y
-        w = m[active].to(x.dtype)
-        A_act = self.A[active].to(x.dtype)
-        B_act = self.B[active].to(x.dtype)
+        w = m.to(x.dtype)
+        A_all = self.A.to(x.dtype)
+        B_all = self.B.to(x.dtype)
         xd = self.dropout(x)
-        proj = torch.einsum("...i,kir->...kr", xd, A_act)
+        # Dense: every atom's delta is computed and gated by its mask entry m_h,
+        # so every logit has a path to the loss and gets a gradient during
+        # reconfiguration (PerplexityConfigurer). Inactive atoms (m_h == 0)
+        # contribute zero value but a nonzero straight-through gradient — the
+        # base FTN's "compute-all-then-select" behavior. Swap this for a top-k
+        # gather over (m > 0) to make the search gradient sparse (k atoms) at
+        # lower forward cost.
+        proj = torch.einsum("...i,hir->...hr", xd, A_all)
         proj = proj * w.view(*([1] * (proj.dim() - 2)), -1, 1)
-        delta = torch.einsum("...kr,kro->...o", proj, B_act)
+        delta = torch.einsum("...hr,hro->...o", proj, B_all)
         return y + self.scaling * delta
 
     def lora_parameters(self) -> Iterable[nn.Parameter]:

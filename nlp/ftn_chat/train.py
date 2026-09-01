@@ -239,7 +239,7 @@ class ReactiveState:
 
 def train_block(
     model, ctrl, cfgr, opt, key, ex, rehearsal, reactive,
-    steps, rsteps, gen, dev, tok, t0, epoch,
+    steps, rsteps, gen, dev, tok, t0, epoch, ref_acc,
 ):
     """Train one task for a SINGLE epoch by context distillation with reactive
     reconfig. main() owns the epoch loop and interleaves the tasks, so one call
@@ -250,7 +250,14 @@ def train_block(
     and trains the selected atoms on the student KL. The mask is only
     re-searched when the reactive heuristic fires (or on the first batch ever),
     reconfiguring on one random member's bare question — the same signal
-    inference uses."""
+    inference uses.
+
+    Returns the task's reference mask (kwta over the dwell-weighted sum of every
+    step's training mask) — used ONLY for GUI color-coding, harvested for free
+    from the masks training already produced (no extra reconfiguration searches;
+    the polished usage-weighted refs come from rebuild_refs_usage.py offline).
+    `ref_acc` is the caller-owned (H,) accumulator for this task; it persists
+    across epochs, so the returned mask reflects usage over ALL epochs so far."""
     pad_id = tok.pad_token_id if tok.pad_token_id is not None else tok.eos_token_id
     qa = ex["qa"]
     if not qa:
@@ -299,6 +306,13 @@ def train_block(
         # spike is never recorded).
         reactive.update(float(loss.detach()))
 
+        # Harvest the mask this step trained under for the task's reference mask
+        # (GUI color-coding only). m is k-hot each step and persists until a
+        # reconfig, so summing every step dwell-weights by how long each mask
+        # was active; kwta at block end picks the atoms the task used most. No
+        # extra reconfiguration passes — this replaces the old build_ref sweep.
+        ref_acc += m.detach().float().cpu()
+
         opt.zero_grad()
         loss.backward()
         opt.step()
@@ -319,18 +333,7 @@ def train_block(
         f"loss_ema={reactive.mean:.4f} sd={reactive.sd():.4f}",
         flush=True,
     )
-
-
-def build_ref(model, cfgr, ex, dev):
-    """Reference mask: sum of masks reconfigured on QA questions (the same
-    signal chat-time routing sees) plus raw support chunks, top-k."""
-    model.eval()
-    acc = torch.zeros(CFG.H, device="cpu")
-    probes = [e["recfg"] for e in ex["qa"][:24]] + [e["recfg"] for e in ex["support"]]
-    for recfg in probes:
-        mm, _, _ = cfgr(model, recfg.to(dev).unsqueeze(0))
-        acc = acc + mm.float().cpu()
-    return kwta(acc, CFG.k)
+    return kwta(ref_acc, CFG.k)
 
 
 def main():
@@ -391,6 +394,10 @@ def main():
         print(f"  examples[{key}]: {len(ex['qa'])} distillation triples", flush=True)
         task_ex[key] = ex
 
+    # Per-task reference-mask accumulators, owned here so they persist across
+    # epochs: each task's mask usage is summed over every epoch, not reset per
+    # pass (see train_block).
+    ref_acc = {k: torch.zeros(CFG.H, device="cpu") for k in to_run}
     for epoch in range(args.epochs):
         if not to_run:
             break
@@ -400,11 +407,13 @@ def main():
             # optimizer momentum from the previous task can't drift atoms the
             # new mask excludes.
             opt.state = defaultdict(dict)
-            train_block(
+            # train_block returns the task's reference mask, harvested from the
+            # masks it actually trained under — no extra reconfiguration sweep.
+            refs[key] = train_block(
                 model, ctrl, cfgr, opt, key, ex, rehearsal, reactive,
                 args.steps, args.reconfig_steps, gen, dev, tok, t0, epoch,
+                ref_acc[key],
             )
-            refs[key] = build_ref(model, cfgr, ex, dev)
             if key not in trained:
                 trained.append(key)
         # Persist once per epoch: bank + refs for every task + reactive EMA.

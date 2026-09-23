@@ -165,7 +165,8 @@ class ParallelMLP(nn.Module):
         # only, never on these parameters — mirroring the reconfig algorithms'
         # `self.parallel(x).detach()`, but usable mid-stack where the input
         # itself carries mask gradients.
-        h = x.unsqueeze(-2)  # (B, 1, D) — broadcasts over K
+        # Shared inputs (B,D), or per-neuron inputs (B,K,D) for local wave patches.
+        h = x.unsqueeze(-2) if x.ndim == 2 else x
         for i, (W, b) in enumerate(zip(self.weights, self.biases)):
             if detach:
                 W, b = W.detach(), b.detach()
@@ -173,9 +174,92 @@ class ParallelMLP(nn.Module):
             if i < self.n_layers:  # relu on hidden layers only, not the output
                 h = torch.relu(h)
         out = h.squeeze(-1)
-        out = torch.sigmoid(out)
+        out = torch.tanh(out)
         # out = torch.bernoulli(out_sm) + out_sm - out_sm.detach()
         return out  # (B, K)
+
+
+class ParallelQuadMLP(nn.Module):
+    """hidden_size independent per-neuron *quadratic* MLPs, each mapping the
+    shared input -> a scalar unit, vectorized across units with einsum (the
+    parallel-MLP trick applied to a Quad0 block).
+
+    Each block projects its input h to quad_dim features q = tanh(W_sig h), forms
+    the full quadratic feature set [h, q, outer(q, q)] (the linear term plus every
+    pairwise product of the q features), then linearly maps that to the next
+    block's input. `layers` inner blocks of width `inner_size` are stacked
+    (blocks = layers + 1, matching ParallelMLP's depth convention); the final
+    block maps to output_size. Every parameter's leading dim is hidden_size, so
+    each unit is a private MLP evaluated in parallel — no weights shared across
+    units. Mirrors ParallelMLP's interface: forward(x, detach) -> (B, hidden_size)
+    in [0, 1], plus .weights / .biases lists for FTN.expand()."""
+
+    def __init__(self, input_size, output_size, hidden_size, layers,
+                 inner_size, quad_dim):
+        super().__init__()
+        self.n_layers = layers
+        self.quad_dim = quad_dim
+        sizes = [input_size] + [inner_size] * layers + [output_size]
+        # Per block: a sigma projection (in_b -> quad_dim, feeding tanh) and an
+        # output map over the quadratic feature vector [h, q, q⊗q] (length
+        # in_b + quad_dim + quad_dim**2) -> out_b.
+        self.sig_w = nn.ParameterList()
+        self.sig_b = nn.ParameterList()
+        self.out_w = nn.ParameterList()
+        self.out_b = nn.ParameterList()
+        for i in range(len(sizes) - 1):
+            in_b, out_b = sizes[i], sizes[i + 1]
+            z_b = in_b + quad_dim + quad_dim * quad_dim
+            self.sig_w.append(nn.Parameter(torch.empty(hidden_size, in_b, quad_dim)))
+            self.sig_b.append(nn.Parameter(torch.empty(hidden_size, quad_dim)))
+            self.out_w.append(nn.Parameter(torch.empty(hidden_size, z_b, out_b)))
+            self.out_b.append(nn.Parameter(torch.empty(hidden_size, out_b)))
+        self._init_weights(sizes)
+
+    def _init_weights(self, sizes):
+        for i in range(len(self.sig_w)):
+            in_b = sizes[i]
+            z_b = self.out_w[i].shape[1]
+            out_b = sizes[i + 1]
+            s, s_b = 6.0, 0.1
+            # sigma projection: Kaiming-uniform on the fan-in (feeds a tanh)
+            bound = math.sqrt(s / in_b)
+            nn.init.uniform_(self.sig_w[i], -bound, bound)
+            nn.init.uniform_(self.sig_b[i], -s_b / math.sqrt(in_b), s_b / math.sqrt(in_b))
+            # output map: Xavier-uniform over the quadratic feature fan-in
+            bound = math.sqrt(s / (z_b + out_b))
+            nn.init.uniform_(self.out_w[i], -bound, bound)
+            nn.init.uniform_(self.out_b[i], -s_b / math.sqrt(z_b), s_b / math.sqrt(z_b))
+
+    # expand() (neurogenesis) copies backbone params by leading (unit) dim; expose
+    # every per-neuron tensor the same way ParallelMLP exposes .weights / .biases.
+    @property
+    def weights(self):
+        return list(self.sig_w) + list(self.out_w)
+
+    @property
+    def biases(self):
+        return list(self.sig_b) + list(self.out_b)
+
+    def forward(self, x, detach: bool = False):
+        # Broadcast the shared input across the K units -> (B, K, in), so the
+        # first block is a per-unit einsum just like the deeper blocks (which
+        # already carry a private per-unit state). expand() is a view; einsum
+        # consumes it without materializing the copy.
+        K = self.sig_w[0].shape[0]
+        h = x.unsqueeze(-2).expand(x.shape[0], K, x.shape[-1])
+        for i in range(len(self.sig_w)):
+            sw, sb = self.sig_w[i], self.sig_b[i]
+            ow, ob = self.out_w[i], self.out_b[i]
+            if detach:
+                sw, sb, ow, ob = sw.detach(), sb.detach(), ow.detach(), ob.detach()
+            q = torch.tanh(torch.einsum("bki,kij->bkj", h, sw) + sb)   # (B,K,quad)
+            q2 = torch.einsum("bkp,bkq->bkpq", q, q)                   # (B,K,quad,quad)
+            q2 = q2.reshape(q2.shape[0], q2.shape[1], -1)              # (B,K,quad**2)
+            z = torch.cat((h, q, q2), dim=-1)                         # (B,K,z_b)
+            h = torch.einsum("bkz,kzo->bko", z, ow) + ob              # (B,K,out_b)
+        out = h.squeeze(-1)          # (B, K)  (output_size == 1)
+        return torch.sigmoid(out)
 
 
 def task_loss(pred, y, classification: bool = False, binary: bool = False):
@@ -259,6 +343,8 @@ class FTN(nn.Module):
         # Backbone
         layers: int = 3,
         inner_size: int = 8,
+        backbone: str = "mlp",   # "mlp" (ParallelMLP) | "quad" (ParallelQuadMLP)
+        quad_dim: int = 8,       # per-unit quad feature width (backbone == "quad")
         dropout_p: float = 0.2,
         lateral_b: float = 0.0,
         lateral_steps: int = 0,
@@ -321,8 +407,15 @@ class FTN(nn.Module):
         self.lateral_b = lateral_b
         self.lateral_steps = lateral_steps
 
-        # Backbone
-        self.parallel = ParallelMLP(input_size, 1, hidden_size, layers, inner_size)
+        # Backbone: per-unit MLP (default) or per-unit quadratic MLP. Both expose
+        # forward(x)->(B, hidden_size) plus .weights/.biases, so everything
+        # downstream (mask, reconfiguration, readout, expand) is unchanged.
+        if backbone == "quad":
+            self.parallel = ParallelQuadMLP(
+                input_size, 1, hidden_size, layers, inner_size, quad_dim
+            )
+        else:
+            self.parallel = ParallelMLP(input_size, 1, hidden_size, layers, inner_size)
         self.linear = nn.Linear(hidden_size, output_size, bias=False)
         self.dropout = nn.Dropout(p=dropout_p)
         # Feature smoothing (averaging kernel); no-op when lateral_steps == 0
@@ -382,6 +475,8 @@ class FTN(nn.Module):
             binary=binary,
             layers=layers,
             inner_size=inner_size,
+            backbone=backbone,
+            quad_dim=quad_dim,
             dropout_p=dropout_p,
             lateral_b=lateral_b,
             lateral_steps=lateral_steps,

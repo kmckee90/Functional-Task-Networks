@@ -1,0 +1,17 @@
+# FTN run metrics (parseable: KEY = value; NA = unavailable)
+run_name = wave_shared_detach_smoke
+config = WaveSmoke+WaveSharedMask+WaveDetach
+seed = 123
+n_tasks = 2
+n_params_trainable = 17600
+n_params_total = 17609
+flops_forward = 5066752
+wall_time_forward_ms = 3.26022
+wall_time_reconfig_ms = 31.405
+avg_task_block_wall_s = 0.379025
+avg_recall_eval_acc = 0.375
+avg_forward_transfer_eval_acc = 0.3125
+avg_forward_transfer_change_per_block = NA
+avg_train_acc_current_block = 0.5625
+avg_eval_acc_current_task = 0.5625
+avg_mask_overlap_pct = 0

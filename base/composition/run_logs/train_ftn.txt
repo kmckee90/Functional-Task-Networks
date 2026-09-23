@@ -1,0 +1,27 @@
+run_compose: GF2Compose_s123 | family=gf2 arch=lorarnn d=16 k(steps)=3 n(cell layers)=3
+tasks: 12 train + 4 holdout; distinct catalog=27
+params(trainable)=156672
+  step     0: loss_ema=0.6917 | train_acc=0.513 | holdout_acc=0.515 | 16s
+  step   200: loss_ema=0.5501 | train_acc=0.645 | holdout_acc=0.635 | 402s
+  step   400: loss_ema=0.4968 | train_acc=0.669 | holdout_acc=0.649 | 788s
+  step   600: loss_ema=0.4702 | train_acc=0.688 | holdout_acc=0.670 | 1176s
+  step   800: loss_ema=0.4469 | train_acc=0.701 | holdout_acc=0.681 | 1562s
+  step  1000: loss_ema=0.4297 | train_acc=0.707 | holdout_acc=0.688 | 1948s
+  step  1200: loss_ema=0.4228 | train_acc=0.713 | holdout_acc=0.694 | 2334s
+  step  1400: loss_ema=0.4097 | train_acc=0.725 | holdout_acc=0.699 | 2719s
+  step  1600: loss_ema=0.4170 | train_acc=0.726 | holdout_acc=0.695 | 3104s
+  step  1800: loss_ema=0.3959 | train_acc=0.730 | holdout_acc=0.698 | 3489s
+  step  2000: loss_ema=0.3924 | train_acc=0.730 | holdout_acc=0.697 | 3874s
+  step  2200: loss_ema=0.3866 | train_acc=0.733 | holdout_acc=0.703 | 4260s
+  step  2400: loss_ema=0.3866 | train_acc=0.737 | holdout_acc=0.705 | 4645s
+  step  2600: loss_ema=0.3813 | train_acc=0.739 | holdout_acc=0.704 | 5031s
+  step  2800: loss_ema=0.3777 | train_acc=0.740 | holdout_acc=0.703 | 5417s
+  step  3000: loss_ema=0.3713 | train_acc=0.744 | holdout_acc=0.710 | 5805s
+  step  3200: loss_ema=0.3704 | train_acc=0.743 | holdout_acc=0.707 | 6189s
+  step  3400: loss_ema=0.3641 | train_acc=0.751 | holdout_acc=0.718 | 6574s
+  step  3600: loss_ema=0.3622 | train_acc=0.756 | holdout_acc=0.722 | 6959s
+  step  3800: loss_ema=0.3625 | train_acc=0.760 | holdout_acc=0.730 | 7344s
+  step  3999: loss_ema=0.3526 | train_acc=0.766 | holdout_acc=0.738 | 7727s
+
+Saved checkpoint + curves to artifacts/GF2Compose_s123/
+Final: train_acc=0.766 holdout_acc=0.738

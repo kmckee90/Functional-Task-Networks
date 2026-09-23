@@ -173,32 +173,46 @@ def evaluate_backwards(ftn, data_gen, task_indices):
 
     Reconfigures per batch (or once per task when RECONFIG_EVERY == 0,
     matching base/'s CONFIGURE_PER_BATCH=False), then evaluates on a fresh
-    holdout batch.
+    holdout batch. EVAL_RECONFIG_STEPS overrides the training search length
+    for both backwards and prospective tasks when set.
     Restores the training mask on exit so eval never leaks state into
     training (reconfigure() mutates ftn.m in place; without this, reactive
     mode would train under the last-evaluated task's support mask).
     Returns {task_idx: {"loss": mean_loss, "acc": mean_score}}.
     """
     m_train = ftn.m.clone()
+    eval_steps = Config.EVAL_RECONFIG_STEPS
+    train_steps = ftn.reconfig_steps
+    primary_spec = getattr(ftn, "spec1", None)
+    train_spec_steps = primary_spec.steps if primary_spec is not None else None
+    if eval_steps is not None:
+        ftn.reconfig_steps = eval_steps
+        if primary_spec is not None:
+            primary_spec.steps = eval_steps
     results = {}
-    for task_idx in task_indices:
-        losses, accs = [], []
-        if Config.RECONFIG_EVERY == 0:
-            ftn._reconfig(*data_gen(task_idx))
-        for _ in range(Config.N_RETRO_EVAL_BATCHES):
-            if Config.RECONFIG_EVERY != 0:
+    try:
+        for task_idx in task_indices:
+            losses, accs = [], []
+            if Config.RECONFIG_EVERY == 0:
                 ftn._reconfig(*data_gen(task_idx))
-            # Eval on a fresh holdout batch — not the one used to reconfigure.
-            x, y = data_gen(task_idx)
-            with torch.no_grad():
-                pred = ftn(x)
-                losses.append(ftn.loss(pred, y).item())
-                accs.append(accuracy(pred, y))
-        results[task_idx] = {
-            "loss": float(np.mean(losses)),
-            "acc": float(np.mean(accs)),
-        }
-    ftn.m.copy_(m_train)
+            for _ in range(Config.N_RETRO_EVAL_BATCHES):
+                if Config.RECONFIG_EVERY != 0:
+                    ftn._reconfig(*data_gen(task_idx))
+                # Eval on a fresh holdout batch — not the one used to reconfigure.
+                x, y = data_gen(task_idx)
+                with torch.no_grad():
+                    pred = ftn(x)
+                    losses.append(ftn.loss(pred, y).item())
+                    accs.append(accuracy(pred, y))
+            results[task_idx] = {
+                "loss": float(np.mean(losses)),
+                "acc": float(np.mean(accs)),
+            }
+    finally:
+        ftn.m.copy_(m_train)
+        ftn.reconfig_steps = train_steps
+        if primary_spec is not None:
+            primary_spec.steps = train_spec_steps
     return results
 
 
@@ -800,6 +814,22 @@ if __name__ == "__main__":
             residual=arch in ("stack_residual", "rnn_residual"),
             **Config.STACK_PARS,
         )
+    elif arch == "wave":
+        from wave_ftn import WaveFTN
+        ftn = WaveFTN(
+            input_size=data_gen.total_input_dim,
+            output_size=data_gen.output_dim,
+            hidden_size=Config.HIDDEN_SIZE,
+            **Config.WAVE_PARS,
+        )
+    elif arch == "lorarnn":
+        from lora_rnn_ftn import LoRARNNFTN
+        ftn = LoRARNNFTN(
+            input_size=data_gen.total_input_dim,
+            output_size=data_gen.output_dim,
+            hidden_size=Config.HIDDEN_SIZE,
+            **Config.LORARNN_PARS,
+        )
     elif arch == "hml":
         from hml_ftn_stable import HMLFTN
         ftn = HMLFTN(
@@ -807,6 +837,15 @@ if __name__ == "__main__":
             output_size=data_gen.output_dim,
             hidden_size=Config.HIDDEN_SIZE,
             **Config.HML_PARS,
+        )
+    elif arch == "quad":
+        # Same FTN (mask / reconfig / readout) as base, per-unit backbone swapped
+        # for the einsum-vectorized ParallelQuadMLP (backbone="quad" in QUAD_PARS).
+        ftn = FTN(
+            input_size=data_gen.total_input_dim,
+            output_size=data_gen.output_dim,
+            hidden_size=Config.HIDDEN_SIZE,
+            **Config.QUAD_PARS,
         )
     else:
         ftn = FTN(

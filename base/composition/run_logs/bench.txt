@@ -1,0 +1,21 @@
+bench: d=16 k=3 n=3 B=[4, 8, 16, 25, 32, 64, 128, 256, 512] Q=512 seeds=[0, 1, 2] reconfig_steps(eval)=120 ttt=False
+  [  train] B=   4: ftn=0.691 deepset=0.761 catalog_cap=1.000 linear_cap=0.500 memorization=0.561 identity=0.721
+  [  train] B=   8: ftn=0.726 deepset=0.763 catalog_cap=1.000 linear_cap=0.502 memorization=0.589 identity=0.721
+  [  train] B=  16: ftn=0.748 deepset=0.766 catalog_cap=1.000 linear_cap=0.799 memorization=0.616 identity=0.721
+  [  train] B=  25: ftn=0.755 deepset=0.768 catalog_cap=1.000 linear_cap=1.000 memorization=0.632 identity=0.721
+  [  train] B=  32: ftn=0.758 deepset=0.768 catalog_cap=1.000 linear_cap=1.000 memorization=0.641 identity=0.721
+  [  train] B=  64: ftn=0.762 deepset=0.768 catalog_cap=1.000 linear_cap=1.000 memorization=0.665 identity=0.721
+  [  train] B= 128: ftn=0.764 deepset=0.768 catalog_cap=1.000 linear_cap=1.000 memorization=0.689 identity=0.721
+  [  train] B= 256: ftn=0.767 deepset=0.768 catalog_cap=1.000 linear_cap=1.000 memorization=0.714 identity=0.721
+  [  train] B= 512: ftn=0.764 deepset=0.768 catalog_cap=1.000 linear_cap=1.000 memorization=0.738 identity=0.721
+  [holdout] B=   4: ftn=0.666 deepset=0.732 catalog_cap=1.000 linear_cap=0.500 memorization=0.546 identity=0.678
+  [holdout] B=   8: ftn=0.691 deepset=0.732 catalog_cap=1.000 linear_cap=0.502 memorization=0.568 identity=0.678
+  [holdout] B=  16: ftn=0.716 deepset=0.737 catalog_cap=1.000 linear_cap=0.812 memorization=0.591 identity=0.678
+  [holdout] B=  25: ftn=0.728 deepset=0.739 catalog_cap=1.000 linear_cap=1.000 memorization=0.608 identity=0.678
+  [holdout] B=  32: ftn=0.730 deepset=0.740 catalog_cap=1.000 linear_cap=1.000 memorization=0.616 identity=0.678
+  [holdout] B=  64: ftn=0.732 deepset=0.739 catalog_cap=1.000 linear_cap=1.000 memorization=0.640 identity=0.678
+  [holdout] B= 128: ftn=0.735 deepset=0.740 catalog_cap=1.000 linear_cap=1.000 memorization=0.667 identity=0.678
+  [holdout] B= 256: ftn=0.736 deepset=0.741 catalog_cap=1.000 linear_cap=1.000 memorization=0.692 identity=0.678
+  [holdout] B= 512: ftn=0.733 deepset=0.741 catalog_cap=1.000 linear_cap=1.000 memorization=0.718 identity=0.678
+Saved /home/dev/workspace/composition/artifacts/GF2Compose_s123/bench_sweep.csv
+Saved /home/dev/workspace/composition/artifacts/GF2Compose_s123/bench_sweep.png

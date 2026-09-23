@@ -1,0 +1,15 @@
+run_compose: Big_screen | family=gf2 arch=lorarnn d=16 k(steps)=3 n(cell layers)=3
+tasks: 12 train + 4 holdout; distinct catalog=27
+params(trainable)=979200
+  step     0: loss_ema=0.6921 | train_acc=0.502 | holdout_acc=0.501 | 28s
+  step   200: loss_ema=0.6697 | train_acc=0.527 | holdout_acc=0.500 | 793s
+  step   400: loss_ema=0.6820 | train_acc=0.523 | holdout_acc=0.499 | 1556s
+  step   600: loss_ema=0.6725 | train_acc=0.525 | holdout_acc=0.502 | 2320s
+  step   800: loss_ema=0.6764 | train_acc=0.526 | holdout_acc=0.503 | 3081s
+  step  1000: loss_ema=0.6809 | train_acc=0.510 | holdout_acc=0.501 | 3842s
+  step  1200: loss_ema=0.6832 | train_acc=0.515 | holdout_acc=0.500 | 4605s
+  step  1400: loss_ema=0.6865 | train_acc=0.517 | holdout_acc=0.496 | 5368s
+  step  1499: loss_ema=0.6888 | train_acc=0.515 | holdout_acc=0.498 | 5814s
+
+Saved checkpoint + curves to artifacts/Big_screen/
+Final: train_acc=0.515 holdout_acc=0.498

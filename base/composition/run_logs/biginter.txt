@@ -1,0 +1,16 @@
+run_compose: BigInter_screen | family=gf2 arch=lorarnn d=16 k(steps)=3 n(cell layers)=3
+tasks: 12 train + 4 holdout; distinct catalog=27
+params(trainable)=979200
+intermediate: primitives 0..749 (3 primitive tasks, k=1), then compositions
+  step     0: loss_ema=0.6966 | train_acc=0.503 | holdout_acc=0.503 | 26s
+  step   200: loss_ema=0.2254 | train_acc=0.508 | holdout_acc=0.498 | 435s
+  step   400: loss_ema=0.0477 | train_acc=0.508 | holdout_acc=0.502 | 840s
+  step   600: loss_ema=0.0037 | train_acc=0.508 | holdout_acc=0.501 | 1245s
+  step   800: loss_ema=0.4495 | train_acc=0.509 | holdout_acc=0.502 | 1738s
+  step  1000: loss_ema=0.6800 | train_acc=0.515 | holdout_acc=0.501 | 2489s
+  step  1200: loss_ema=0.6791 | train_acc=0.518 | holdout_acc=0.502 | 3240s
+  step  1400: loss_ema=0.6813 | train_acc=0.514 | holdout_acc=0.498 | 3991s
+  step  1499: loss_ema=0.6848 | train_acc=0.511 | holdout_acc=0.495 | 4375s
+
+Saved checkpoint + curves to artifacts/BigInter_screen/
+Final: train_acc=0.511 holdout_acc=0.495

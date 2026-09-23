@@ -410,10 +410,17 @@ class StackFTN(nn.Module):
         detach=True detaches every block/readout weight so gradients reach only
         the masks (used by the mask search); detach=False is the trainable pass
         and also applies dropout to each population.
+
+        The number of steps run is len(masks), so this also serves the shorter
+        recurrent unroll used by intermediate (single-operator) training — a
+        recurrent cell is weight-tied, so 1..n_stack steps all reuse the same
+        cell/readout. len(masks) must be <= n_stack for the stacked (non-tied)
+        variants, whose per-layer blocks/readouts are indexed by l.
         """
+        n_steps = len(masks)
         h = self._encode(x, detach)
         out = 0.0
-        for l in range(self.n_stack):
+        for l in range(n_steps):
             # Normalize the fed-back state before every step but the first (the
             # first input is embed(x) — the data — which is left untouched).
             if l > 0 and self.rnn_step_rmsnorm:
@@ -431,7 +438,7 @@ class StackFTN(nn.Module):
                 if self.detach_mask_deep_path:
                     h = z * masks[l].detach().reshape(1, -1)
         if not self.residual:
-            out = self._readout(self.n_stack - 1, h, detach)  # last masked layer
+            out = self._readout(n_steps - 1, h, detach)  # last masked layer
         return out
 
     def forward(self, x, y=None, m=None):
@@ -501,8 +508,17 @@ class StackFTN(nn.Module):
         return masks
 
     @torch.enable_grad()
-    def _search_simultaneous(self, x, y, anneal: bool) -> list:
-        """Jointly optimize all n_stack layers' logits against the final loss."""
+    def _search_simultaneous(self, x, y, anneal: bool, n_steps=None) -> list:
+        """Jointly optimize the per-step logits against the final loss.
+
+        n_steps (default n_stack) is how many recurrent steps / masks to search.
+        Passing n_steps < n_stack searches a shorter unroll — used by
+        intermediate (single-operator) training on the weight-tied recurrent
+        cell. Match-stored recall is only defined for the full n_stack unroll (it
+        recalls whole n_stack-length stored masks), so it is disabled when
+        n_steps != n_stack.
+        """
+        n_layers = self.n_stack if n_steps is None else int(n_steps)
         n = min(self.reconfig_sample_size, x.shape[0])
         x, y = x[:n], y[:n]
 
@@ -510,7 +526,7 @@ class StackFTN(nn.Module):
             (torch.randn(self.layer_size) * self.reconfig_init_sd)
             .detach()
             .requires_grad_(True)
-            for _ in range(self.n_stack)
+            for _ in range(n_layers)
         ]
         opt = torch.optim.Adam(logits, lr=self.reconfig_lr)
 
@@ -520,6 +536,7 @@ class StackFTN(nn.Module):
         do_match = (
             # anneal
             self.match_stored
+            and n_layers == self.n_stack
             and self._stored_masks_ref is not None
             and len(self._stored_masks_ref) > 0
         )
@@ -772,4 +789,31 @@ class StackFTN(nn.Module):
         masks = self._search_first_mask(x, y, anneal=anneal)
         self.m.copy_(torch.cat(masks))
         return self.m
+
+    # ------------------------------------------------ short-unroll (intermediate)
+
+    def forward_k(self, x, y=None, k_steps=None) -> torch.Tensor:
+        """Run the recurrence for k_steps steps (default n_stack), returning the
+        prediction. With y given, first cold-start reconfigure k_steps per-step
+        masks via the simultaneous search (annealed-STE, or 'fast'); with y None,
+        reuse the first k_steps masks currently held in self.m.
+
+        Intended for INTERMEDIATE training (k_steps < n_stack, e.g. k_steps=1 on
+        a single-operator dataset): because the recurrent cell and readout are
+        weight-tied and step-count-independent, a short unroll trains exactly the
+        same weights the full-length eval unroll uses. It does NOT persist the
+        searched masks into self.m (self.m stays the full n_stack eval buffer), so
+        it never disturbs eval / viz / replay. Recurrent architectures only; the
+        stacked (non-tied) variants have distinct per-layer weights, so a short
+        unroll would train only the first k blocks (allowed, but not the point).
+        """
+        k = self.n_stack if k_steps is None else int(k_steps)
+        if not (1 <= k <= self.n_stack):
+            raise ValueError(f"k_steps must be in [1, n_stack={self.n_stack}], got {k}")
+        if y is not None:
+            anneal = self.reconfig_algorithm != "fast"
+            masks = self._search_simultaneous(x, y, anneal=anneal, n_steps=k)
+        else:
+            masks = self._split(self.m)[:k]
+        return self._forward_stack(x, masks, detach=False)
 

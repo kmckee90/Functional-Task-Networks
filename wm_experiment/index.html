@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark" />
+    <title>SceneTrace — Working Memory Experiment</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main id="app">
+      <section id="welcome" class="screen welcome-screen active" aria-labelledby="welcome-title">
+        <div class="brand" aria-label="SceneTrace">
+          <span class="brand-mark">+</span>
+          <span>SCENETRACE</span>
+        </div>
+        <div class="welcome-grid">
+          <div>
+            <p class="eyebrow">VISUAL RELATION SEARCH · N=1</p>
+            <h1 id="welcome-title">Hold the whole scene<br />in mind.</h1>
+            <p class="lede">
+              You’ll see arrangements of colored forms. Keep your eyes on the center
+              <strong>×</strong> and take in the scene as a whole. After a variable interval, the
+              × becomes a question. Answer while the scene remains visible.
+            </p>
+            <div class="protocol">
+              <div><strong>18</strong><span>trials</span></div>
+              <div><strong>~3</strong><span>minutes</span></div>
+              <div><strong>Local</strong><span>data only</span></div>
+            </div>
+          </div>
+          <form id="setup-form" class="setup-card">
+            <label for="participant">PARTICIPANT CODE</label>
+            <input id="participant" name="participant" maxlength="32" autocomplete="off" spellcheck="false" />
+            <p class="field-note">Generated automatically; change it if you use your own coding scheme.</p>
+            <div class="instruction-list">
+              <p><span>01</span> Sit at a comfortable distance and use a desktop-sized window.</p>
+              <p><span>02</span> Keep your gaze on the central ×; the question and answers will replace it.</p>
+              <p><span>03</span> Respond accurately; if unsure, make your best guess.</p>
+            </div>
+            <label class="check-row">
+              <input id="acknowledge" type="checkbox" required />
+              <span>I understand and am ready to begin.</span>
+            </label>
+            <button class="primary" type="submit">Begin experiment <span>→</span></button>
+            <p class="privacy">No information leaves this browser. This is a research prototype, not a diagnostic test.</p>
+          </form>
+        </div>
+      </section>
+
+      <section id="trial" class="screen trial-screen" aria-label="Experiment trial">
+        <header class="trial-header">
+          <div class="brand compact"><span class="brand-mark">+</span><span>SCENETRACE</span></div>
+          <div class="trial-progress-wrap">
+            <span id="trial-label">TRIAL 01 / 18</span>
+            <div class="progress-track"><div id="progress-fill"></div></div>
+          </div>
+          <button id="quit-button" class="text-button" type="button">End early</button>
+        </header>
+
+        <div id="stage" class="stage">
+          <canvas id="scene-canvas" aria-label="Visual scene"></canvas>
+          <div id="fixation" class="fixation" aria-hidden="true">×</div>
+          <div id="phase-message" class="phase-message" aria-live="polite"></div>
+          <div id="question-panel" class="question-panel" aria-live="polite">
+            <p class="eyebrow">ANSWER FROM THE VISIBLE SCENE</p>
+            <h2 id="question-text"></h2>
+            <div id="answer-options" class="answer-options"></div>
+            <p class="key-hint">Press 1–4 or click an answer</p>
+          </div>
+        </div>
+
+        <footer class="trial-footer">
+          <span id="phase-label">GET READY</span>
+          <span id="focus-note">Keep your eyes on the center ×</span>
+        </footer>
+      </section>
+
+      <section id="results" class="screen results-screen" aria-labelledby="results-title">
+        <div class="results-topline">
+          <div class="brand compact"><span class="brand-mark">+</span><span>SCENETRACE</span></div>
+          <span>SESSION COMPLETE</span>
+        </div>
+        <div class="results-hero">
+          <div>
+            <p class="eyebrow">YOUR RESULTS</p>
+            <h1 id="results-title">Search session<br />complete.</h1>
+            <p id="session-meta" class="lede"></p>
+          </div>
+          <div class="score-ring" aria-label="Overall score">
+            <span id="score-value">—</span>
+            <small>overall accuracy</small>
+          </div>
+        </div>
+
+        <div class="results-grid">
+          <article class="result-card wide">
+            <div class="card-heading"><h2>Accuracy by question onset</h2><span>VIEWING TIME</span></div>
+            <div id="delay-chart" class="delay-chart"></div>
+          </article>
+          <article class="result-card">
+            <div class="card-heading"><h2>Response profile</h2><span>SUMMARY</span></div>
+            <dl class="metrics">
+              <div><dt>Correct</dt><dd id="correct-metric">—</dd></div>
+              <div><dt>Median response</dt><dd id="rt-metric">—</dd></div>
+              <div><dt>Focus interruptions</dt><dd id="focus-metric">—</dd></div>
+            </dl>
+          </article>
+          <article class="result-card wide">
+            <div class="card-heading"><h2>Question detail</h2><span>RELATION TYPE</span></div>
+            <div id="type-table" class="type-table"></div>
+          </article>
+        </div>
+
+        <div class="result-actions">
+          <button id="download-json" class="primary" type="button">Download full data <span>↓</span></button>
+          <button id="download-csv" class="secondary" type="button">Download trial CSV</button>
+          <button id="restart" class="text-button" type="button">Start a new session</button>
+        </div>
+        <details class="method-note">
+          <summary>What is included in the data?</summary>
+          <p>The JSON includes the session seed, trial order, timing, generated object properties, question alternatives, correct answers, responses, and focus interruptions. The CSV is a flat trial-level summary.</p>
+        </details>
+      </section>
+    </main>
+
+    <dialog id="end-dialog">
+      <h2>End the session?</h2>
+      <p>Your completed trials will still appear in the results, marked as an early stop.</p>
+      <div class="dialog-actions">
+        <button id="continue-session" class="secondary" type="button">Continue</button>
+        <button id="confirm-end" class="danger" type="button">End & view results</button>
+      </div>
+    </dialog>
+
+    <script type="module" src="experiment.js"></script>
+  </body>
+</html>

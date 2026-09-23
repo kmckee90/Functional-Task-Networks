@@ -1,0 +1,11 @@
+DeepSet in-context baseline: d=16 params=411408 B in [2,256] steps=4000
+  step     0: loss=0.6936 train_acc(B=256)=0.499 holdout_acc(B=256)=0.507
+  step   500: loss=0.4484 train_acc(B=256)=0.717 holdout_acc(B=256)=0.674
+  step  1000: loss=0.3828 train_acc(B=256)=0.725 holdout_acc(B=256)=0.674
+  step  1500: loss=0.3770 train_acc(B=256)=0.742 holdout_acc(B=256)=0.693
+  step  2000: loss=0.4429 train_acc(B=256)=0.741 holdout_acc(B=256)=0.706
+  step  2500: loss=0.3608 train_acc(B=256)=0.754 holdout_acc(B=256)=0.719
+  step  3000: loss=0.3464 train_acc(B=256)=0.759 holdout_acc(B=256)=0.730
+  step  3500: loss=0.3194 train_acc(B=256)=0.765 holdout_acc(B=256)=0.748
+  step  3999: loss=0.4234 train_acc(B=256)=0.770 holdout_acc(B=256)=0.743
+Saved artifacts/GF2Compose_s123/deepset.pt

@@ -32,6 +32,13 @@ Architecture
 ARCHITECTURE         Backbone family:
                      "base" (default) - the ParallelMLP FTN in ftn.py (compute
                        all z, mask selects a subspace).
+                     "quad" - the base FTN with the per-unit MLP backbone swapped
+                       for ParallelQuadMLP (ftn.py): each maskable unit is a
+                       private, einsum-vectorized stack of Quad0-style blocks
+                       (linear + pairwise-product features) instead of a ReLU MLP.
+                       LAYERS/INNER_DIM set depth/width as for the MLP backbone;
+                       QUAD_DIM sets each unit's quad feature width. Mask /
+                       reconfiguration are identical to "base".
                      "lora" - FTN-LoRA in lora_ftn.py (one frozen random MLP
                        backbone, mask selects k of H trainable LoRA atoms).
                      "stack" / "stack_residual" - the stacked-mask FTN in
@@ -42,6 +49,11 @@ ARCHITECTURE         Backbone family:
                        weight-tied ParallelMLP cell unrolled over N recurrent
                        steps (a linear input encoder + a shared readout), so it
                        is one FTN activating a different mask each step.
+                     "wave" - one shared ParallelMLP reads concat(task input,
+                       primary wave field), masks its output z, and injects z
+                       into a fixed local WaveTanh reservoir on the neuron grid.
+                       STACK_LAYERS processing steps share all weights; the
+                       final output is Wz. Reservoirs reset for every sample.
                      "hml" - the higher-order multilinear FTN in hml_ftn.py: a
                        distinct input population tanh(Wx) seeds the recurrence,
                        and a weight-tied recurrent population unrolled HML_DEPTH
@@ -49,6 +61,18 @@ ARCHITECTURE         Backbone family:
                        (HML_RANK) multilinear interactions up to HML_MAX_ORDER.
                        A linear decoder reads every masked level (depth+1 masks)
                        and their outputs are summed.
+                     "lorarnn" - FTN-LoRA-RNN in lora_rnn_ftn.py: a single
+                       recurrent LoRA layer unrolled STACK_LAYERS steps. Its
+                       recurrent weight matrix is an FTN-LoRA bank (one frozen
+                       random base + H=square_dim**2 rank-LORA_RANK atoms), and a
+                       distinct per-step mask selects k atoms -> a distinct
+                       effective recurrent weight matrix at each step (recycles
+                       the RNN FTN's per-step masks and FTN-LoRA's atom bank).
+                       FTNLORA_IO picks how the input/output weights avoid being
+                       shared across mask selections: "fixed" = frozen random
+                       input encoder + output readout (only the N per-step masks
+                       are searched); "ftn" = dedicated input/output atom banks
+                       each with their own searched mask (m_in, m_out).
 TASK                 Which data-generation task the experiment runs:
                      "sine"    - tasks.DataGenSine (the original sine task).
                      "compose" - task_comp.DataGenComposition (function
@@ -289,6 +313,42 @@ STACK_CONCAT_READOUT Residual output topology. False (default) = accumulative:
                      already uses per-layer readouts, so this only changes the
                      recurrent-residual (rnn_residual) case; no-op otherwise.
 
+Wave FTN (ARCHITECTURE == "wave")
+--------------------------------
+STACK_LAYERS         Processing steps; one shared neuron bank and final readout.
+WAVE_STEP_MASKS      True = independently searched per-step masks (overlap is
+                     allowed); False = one mask reused at every processing step.
+WAVE_RECONFIG_BPTT   True = mask gradients flow through the full reservoir
+                     history. False = detach history before the final step:
+                     only the final mask use receives gradient. With independent
+                     masks, the prefix stays fixed; with a shared mask, only its
+                     final use is differentiated. Weight training always uses
+                     BPTT regardless of this reconfiguration-only option.
+WAVE_RHO            Exact linearized spectral radius per reservoir microstep.
+WAVE_C, WAVE_OMEGA   Spatial coupling and oscillation parameters; require c>0,
+                     omega>0 and omega²+(16/3)c²<4. 0<rho<=1 is supported.
+WAVE_PADDING        "zeros", "circular", or "reflect" at the reservoir edges.
+WAVE_INPUT_KERNEL_SIZE
+                     Positive odd J: each neuron reads its centered JxJ primary
+                     reservoir patch, using WAVE_PADDING. J//2 < SQUARE_DIM.
+WAVE_SUBSTEPS       Autonomous wave updates after each single z injection.
+WAVE_INPUT_SCALE    Fixed scale of z added directly to the primary wave field.
+                     No learned injection or reservoir weights; no input to the
+                     secondary field. Existing LAYERS/INNER_DIM/DROPOUT and
+                     K/RECONFIG_*/MASK_* configure neurons and mask search.
+WAVE_INPUT_FIRST_STEP_ONLY
+                     False = give task input at every processing step (default).
+                     True = zero task input after the first step, including for
+                     explicit per-step input tensors. Reservoir input remains
+                     active. Applies to training, mask search, and animation.
+WAVE_INPUT_THRESHOLD
+                     Admit only masked z values with abs(z) strictly greater
+                     than this threshold, measured BEFORE WAVE_INPUT_SCALE.
+                     Retained values keep their amplitude; the Wz readout and
+                     existing ripples are not thresholded. 0 disables gating.
+                     Positive thresholds use a hard gate (zero injection
+                     gradient for rejected values), including in mask search.
+
 HML FTN (ARCHITECTURE == "hml")
 -------------------------------
 A distinct input population z0 = tanh(input_proj(x)) (square_dim**2 neurons)
@@ -353,6 +413,8 @@ Backwards / prospective eval (forgetting monitor)
 EVAL_BACKWARDS       Re-evaluate all previously seen tasks after each task.
 EVAL_PROSPECTIVE     Also evaluate not-yet-trained tasks (forward transfer).
 N_RETRO_EVAL_BATCHES Batches per task during backwards eval.
+EVAL_RECONFIG_STEPS  Reconfiguration steps for backwards/prospective eval.
+                     None uses the training RECONFIG_STEPS value.
 
 Entropy tests (post-hoc out-of-distribution subspace probe)
 -----------------------------------------------------------
@@ -445,6 +507,7 @@ class Default:
     SQUARE_DIM = 64
     LAYERS = 8
     INNER_DIM = 8
+    QUAD_DIM = 8   # ARCHITECTURE=="quad" only: per-unit quad feature width
 
     DROPOUT = 0.0
 
@@ -503,6 +566,25 @@ class Default:
     LORA_B0_SCALE = 0.01
     RECONFIG_INIT_SD = 1e-5
 
+    # FTN-LoRA-RNN (ARCHITECTURE == "lorarnn")
+    # A single recurrent LoRA layer unrolled STACK_LAYERS steps, a distinct mask
+    # per step selecting a distinct low-rank effective recurrent weight matrix
+    # from one shared atom bank (recycles the RNN FTN + FTN-LoRA parameters).
+    # Reuses the LoRA atom knobs (LORA_WIDTH/RANK/ALPHA/WEIGHT_SCALE/B0_SCALE/
+    # BIAS/DROPOUT), the recurrent step count (STACK_LAYERS) and RNN_STEP_RMSNORM.
+    FTNLORA_IO = "fixed"   # "fixed" = frozen random input/output maps (only the
+                           #   per-step recurrent masks are searched);
+                           # "ftn"   = dedicated input/output atom banks each with
+                           #   their own searched mask (m_in, m_out).
+    # The recurrent cell is a RNN_CELL_LAYERS-deep LoRA MLP: each of the k =
+    # STACK_LAYERS recurrent steps applies an n-layer deep feed-forward block
+    # (inner RNN_CELL_INNER_ACT nonlinearities), all n layers gated by that step's
+    # single mask (one atom adapts weights across the whole depth). n == 1 is the
+    # original single-layer recurrent cell.
+    RNN_CELL_LAYERS = 1            # n: feed-forward layers per recurrent step
+    RNN_CELL_INNER_ACT = "relu"    # activation between the n cell layers
+    RNN_STEP_ACT = "tanh"          # activation on each recurrent step output
+
     # Stacked / recurrent-mask FTN
     STACK_LAYERS = 4
     STACK_SEQUENTIAL = False
@@ -511,10 +593,54 @@ class Default:
     STACK_DETACH_MASK_DEEP_PATH = False
     STACK_CONCAT_READOUT = False   # residual only; rnn_residual: per-step readouts
 
+    # Wave reservoir recurrence (ARCHITECTURE == "wave")
+    WAVE_STEP_MASKS = True
+    WAVE_RECONFIG_BPTT = True
+    WAVE_RHO = 0.99
+    WAVE_C = 0.65
+    WAVE_OMEGA = 0.15
+    WAVE_PADDING = "circular"
+    WAVE_SUBSTEPS = 4
+    WAVE_INPUT_SCALE = 0.025
+    WAVE_INPUT_THRESHOLD = 0.0
+    WAVE_INPUT_FIRST_STEP_ONLY = False
+    WAVE_INPUT_KERNEL_SIZE = 3
+
     # HML FTN (ARCHITECTURE == "hml")
     HML_DEPTH = 4       # recurrent applications of the HMLCell; masks = depth+1
     HML_RANK = 4        # rank R of the per-neuron multilinear interactions
     HML_MAX_ORDER = 2   # highest interaction order P (2 = one quadratic term)
+
+    # ---- Shuffled multi-task composition experiment (run_compose.py) ----
+    # Non-continual: J training + K held-out composition tasks. Each gradient
+    # step draws SHUFFLE_TASKS_PER_STEP batches, each from a DIFFERENT random
+    # training task; the model cold-start reconfigures a unique mask per batch
+    # and the weight gradients from all of them are accumulated before one
+    # optimizer step (shuffled task training, not sequential blocks). Held-out
+    # tasks are never trained (they probe whether reconfiguration composes the
+    # learned primitives into an unseen function). The data generator is built
+    # with N_TASK = SHUFFLE_N_TRAIN + SHUFFLE_N_HOLDOUT.
+    SHUFFLE_N_TRAIN = 6         # J training composition tasks
+    SHUFFLE_N_HOLDOUT = 4       # K held-out tasks (never trained)
+    SHUFFLE_TASKS_PER_STEP = 4  # N task-batches accumulated per gradient step
+    SHUFFLE_STEPS = 2000        # total gradient steps
+    SHUFFLE_EVAL_EVERY = 100    # eval train + held-out tasks every N steps
+    SHUFFLE_EVAL_BATCHES = 8    # batches averaged per task at eval
+    SHUFFLE_EVAL_RECONFIG_STEPS = None  # reconfig steps to use at EVAL only
+                                        # (None = same as training RECONFIG_STEPS);
+                                        # e.g. train cheap, search harder at eval
+
+    # Intermediate (single-operator) training: instead of training on the
+    # length-COMP_STEPS compositions, train ONE recurrent step of the model on a
+    # COMP_STEPS=1 dataset — teach the weight-tied recurrent cell each primitive
+    # operator directly. Eval is unchanged (full-length compositions), so it
+    # probes whether reconfiguration can chain the learned primitives. Recurrent
+    # architectures only (rnn / rnn_residual / lorarnn: they expose forward_k).
+    COMPOSE_INTERMEDIATE = False       # train on single operators, not compositions
+    COMPOSE_INTERMEDIATE_STEPS = 1     # composition length of the training data
+                                       # = recurrent steps trained per batch
+    COMPOSE_INTERMEDIATE_N_TASKS = 3   # distinct primitive tasks to train on
+                                       # (3 single operators when STEPS=1)
 
     # Data sizes
     TRAIN_DURATION = 500
@@ -539,9 +665,10 @@ class Default:
     EVAL_BACKWARDS = True
     EVAL_PROSPECTIVE = True
     N_RETRO_EVAL_BATCHES = 10
+    EVAL_RECONFIG_STEPS = 60
 
     # Entropy tests (post-hoc OOD subspace probe; see ENTROPY_TESTS in glossary)
-    ENTROPY_TESTS = True
+    ENTROPY_TESTS = False
     ENTROPY_TEST_TRIALS = 10
 
     # Training hyperpars
@@ -615,6 +742,15 @@ class Default:
             "mask_lateral_noise_sd2": self.MASK_LATERAL_NOISE_SD_2,
             "torus2": self.TORUS_2,
         }
+
+    @property
+    def QUAD_PARS(self):
+        """Everything FTN takes for ARCHITECTURE=="quad": the base FTN_PARS with
+        the per-unit backbone swapped from ParallelMLP to the einsum-vectorized
+        ParallelQuadMLP. The block count / inner width reuse LAYERS / INNER_DIM
+        (same as the MLP backbone); QUAD_DIM sets each unit's quad feature width.
+        All mask / reconfiguration knobs are identical to the base FTN's."""
+        return dict(self.FTN_PARS, backbone="quad", quad_dim=self.QUAD_DIM)
 
     @property
     def LORA_PARS(self):
@@ -694,6 +830,22 @@ class Default:
         }
 
     @property
+    def WAVE_PARS(self):
+        """Shared FTN neurons/search knobs plus the fixed wave recurrence."""
+        pars = dict(self.STACK_PARS)
+        for key in ("sequential", "rnn_step_rmsnorm", "rnn_recurrent_mask",
+                    "detach_mask_deep_path", "concat_readout"):
+            pars.pop(key)
+        return dict(pars, step_masks=self.WAVE_STEP_MASKS,
+                    reconfig_bptt=self.WAVE_RECONFIG_BPTT,
+                    wave_rho=self.WAVE_RHO, wave_c=self.WAVE_C,
+                    wave_omega=self.WAVE_OMEGA, wave_padding=self.WAVE_PADDING,
+                    wave_substeps=self.WAVE_SUBSTEPS, wave_input_scale=self.WAVE_INPUT_SCALE,
+                    wave_input_threshold=self.WAVE_INPUT_THRESHOLD,
+                    wave_input_first_step_only=self.WAVE_INPUT_FIRST_STEP_ONLY,
+                    wave_input_kernel_size=self.WAVE_INPUT_KERNEL_SIZE)
+
+    @property
     def HML_PARS(self):
         """Everything HMLFTN takes besides input/output/hidden sizes. Reuses the
         shared K / RECONFIG_* / MASK_* mask-search knobs so the HML mask search
@@ -718,6 +870,50 @@ class Default:
             "match_stored": self.RECONFIG_MATCH_STORED,
             "match_stored_after": self.RECONFIG_MATCH_STORED_AFTER,
             "match_stored_topk": self.RECONFIG_MATCH_STORED_TOPK,
+            "mask_kernel_size": self.MASK_KERNEL_SIZE,
+            "mask_lateral_steps": self.MASK_LATERAL_STEPS,
+            "mask_lateral_polyak": self.MASK_LATERAL_POLYAK,
+            "mask_lateral_noise_sd": self.MASK_LATERAL_NOISE_SD,
+            "torus": self.TORUS,
+        }
+
+    @property
+    def LORARNN_PARS(self):
+        """Everything LoRARNNFTN takes besides input/output/hidden sizes. Reuses
+        the LoRA atom knobs, the recurrent step count (STACK_LAYERS) and
+        RNN_STEP_RMSNORM, and the shared K / RECONFIG_* / MASK_* mask-search
+        knobs so its simultaneous per-mask search matches the recurrent FTN's."""
+        return {
+            "square_dim": self.SQUARE_DIM,
+            "classification": self.CLASSIFICATION,
+            "binary": self.BINARY,
+            # topology
+            "io": self.FTNLORA_IO,
+            "n_steps": self.STACK_LAYERS,
+            "rnn_step_rmsnorm": self.RNN_STEP_RMSNORM,
+            "cell_layers": self.RNN_CELL_LAYERS,
+            "inner_activation": self.RNN_CELL_INNER_ACT,
+            "step_activation": self.RNN_STEP_ACT,
+            # LoRA atoms / recurrent hidden width
+            "width": self.LORA_WIDTH,
+            "rank": self.LORA_RANK,
+            "alpha": self.LORA_ALPHA,
+            "weight_scale": self.LORA_WEIGHT_SCALE,
+            "b0_scale": self.LORA_B0_SCALE,
+            "use_bias": self.LORA_BIAS,
+            "dropout_p": self.LORA_DROPOUT,
+            # reconfiguration (mask search)
+            "k": self.K,
+            "reconfig_steps": self.RECONFIG_STEPS,
+            "reconfig_lr": self.RECONFIG_LR,
+            "reconfig_sample_size": self.RECONFIG_SAMPLE_SIZE,
+            "reconfig_algorithm": self.RECONFIG_ALGORITHM,
+            "reconfig_init_sd": self.RECONFIG_INIT_SD,
+            "reconfig_noise_scale": self.RECONFIG_NOISE_SCALE,
+            "match_stored": self.RECONFIG_MATCH_STORED,
+            "match_stored_after": self.RECONFIG_MATCH_STORED_AFTER,
+            "match_stored_topk": self.RECONFIG_MATCH_STORED_TOPK,
+            "match_tie_steps": self.RECONFIG_MATCH_TIE_STEPS,
             "mask_kernel_size": self.MASK_KERNEL_SIZE,
             "mask_lateral_steps": self.MASK_LATERAL_STEPS,
             "mask_lateral_polyak": self.MASK_LATERAL_POLYAK,
@@ -937,11 +1133,223 @@ class LoRA(Default):
     N_EPOCHS = 1
 
     RECONFIG_ALGORITHM = "annealste"
-    RECONFIG_STEPS = 30
+    RECONFIG_STEPS = 60
     RECONFIG_LR = 0.3
+
+class LoRARNN(Default):
+    """FTN-LoRA-RNN: a single recurrent LoRA layer unrolled STACK_LAYERS steps,
+    a distinct mask per step selecting a distinct low-rank effective recurrent
+    weight matrix from one shared atom bank. Recycles the RNN FTN (per-step
+    masks over one weight-tied cell) and FTN-LoRA (mask selects k of H low-rank
+    atoms) parameters.
+
+    Every specific RNN and LoRA knob is spelled out here at its current default
+    so it can be tuned/tested in place. FTNLORA_IO selects how the input/output
+    weights avoid being shared across mask selections:
+      "fixed" - frozen random input encoder + output readout (only the N
+                per-step recurrent masks are searched).
+      "ftn"   - dedicated input/output atom banks each with their own searched
+                mask (m_in, m_out), searched jointly with the per-step masks."""
+    ARCHITECTURE = "lorarnn"
+
+    # Input/output weight handling (see FTNLORA_IO in the glossary).
+    FTNLORA_IO = "ftn"       # "fixed" | "ftn"
+
+    # Recurrent topology (reused RNN knobs).
+    STACK_LAYERS = 4           # recurrent steps == number of per-step masks
+    RNN_STEP_RMSNORM = False   # RMSNorm the fed-back state before each step > 0
+
+    # LoRA atoms / recurrent hidden width (reused LoRA knobs).
+    LORA_WIDTH = 256            # recurrent hidden-state width
+    LORA_RANK = 1              # rank of each low-rank atom
+    LORA_ALPHA = 256.0          # LoRA scaling; effective delta scaled by alpha/K
+    LORA_WEIGHT_SCALE = 1.0    # frozen random base init std (N(0, scale/sqrt(fan_in)))
+    LORA_B0_SCALE = 0.01       # B/bias init scale (atom reachability for the search)
+    LORA_BIAS = True           # per-atom bias deltas
+    LORA_DROPOUT = 0.0
+
+    # Mask search budget/algorithm (shared K / RECONFIG_* knobs, current defaults).
+    SQUARE_DIM=32
+    K = 128
+    RECONFIG_ALGORITHM = "annealste"
+    RECONFIG_STEPS = 15
+    RECONFIG_LR = 0.3
+    RECONFIG_INIT_SD = 1e-5
+    RECONFIG_NOISE_SCALE = 1.0
+
+
+class LoRARNN_FTNIO(LoRARNN):
+    """LoRA-RNN with dedicated input/output atom banks + masks (m_in, m_out)
+    searched alongside the per-step recurrent masks."""
+    FTNLORA_IO = "ftn"
+
+
+# =============================================================================
+# ComposeShuffle parameter glossary (run_compose.py)
+# =============================================================================
+# The knobs ComposeShuffle sets for the shuffled (non-continual) composition
+# experiment. The compose-task and backbone/mask knobs are the same ones
+# documented in the top-of-file glossary (reused here); the SHUFFLE_* knobs are
+# specific to run_compose.py's shuffled training loop.
+#
+# Compose task shape (task_comp.DataGenComposition; see "Data generator: compose")
+# --------------------------------------------------------------------------------
+# TASK              "compose" - selects the function-composition task.
+# COMP_MATRIX_DIM   Matrix side length N; input/output dim = N**2. Larger N =>
+#                   more distinct length-COMP_STEPS compositions available (the
+#                   generator needs >= SHUFFLE_N_TRAIN + SHUFFLE_N_HOLDOUT of
+#                   them, else it errors).
+# COMP_STEPS        Operators per composition (composition depth). More steps =>
+#                   more, harder tasks.
+# COMP_P            Bernoulli probability for each input matrix entry being 1
+#                   (also sets the per-cell BCE chance-level baseline).
+# COMP_SHIFT        Columns used by the shift_right operator.
+#
+# Backbone / architecture (see "Architecture" + "Stacked / recurrent-mask FTN")
+# -----------------------------------------------------------------------------
+# ARCHITECTURE      "rnn_residual" - one weight-tied cell unrolled STACK_LAYERS
+#                   steps with a per-step mask and a summed per-step readout.
+#                   Compose ComposeShuffleLoRA to switch to "lorarnn" instead.
+# LAYERS            Per-step ParallelMLP depth of the recurrent cell.
+# STACK_LAYERS      Recurrent steps == number of per-step masks (a natural match
+#                   to composition depth, but independent of COMP_STEPS).
+# SQUARE_DIM        Mask-grid side length; HIDDEN_SIZE = SQUARE_DIM**2 units per
+#                   step (atoms per bank for lorarnn).
+# K                 kWTA budget: active mask units per step.
+# T                 Samples per generated task batch (data_gen batch size).
+#
+# Shuffled training schedule (run_compose.py only)
+# ------------------------------------------------
+# SHUFFLE_N_TRAIN         J: number of trained composition tasks (indices 0..J-1).
+# SHUFFLE_N_HOLDOUT       K: held-out tasks (indices J..J+K-1), never trained;
+#                         their eval accuracy probes compositional generalization.
+# SHUFFLE_TASKS_PER_STEP  N: distinct training tasks drawn per gradient step
+#                         (one batch each, each cold-start-reconfigured to its
+#                         own mask); their weight gradients are accumulated before
+#                         one optimizer step. Sampled without replacement when
+#                         N <= J, else with replacement.
+# SHUFFLE_STEPS           Total gradient (accumulation) steps.
+# SHUFFLE_EVAL_EVERY      Evaluate train + held-out tasks every N steps.
+# SHUFFLE_EVAL_BATCHES    Batches averaged per task at each eval (cold-start
+#                         reconfig on one batch, score on a fresh one).
+# SHUFFLE_EVAL_RECONFIG_STEPS
+#                         Reconfiguration (mask-search) steps to use at EVAL only,
+#                         overriding RECONFIG_STEPS for the eval cold starts (both
+#                         periodic and final). None = use the training value.
+#                         Lets you train with a cheap search but reconfigure more
+#                         thoroughly when measuring (or vice versa). The anneal
+#                         schedule rescales with the step count automatically.
+#
+# Intermediate (single-operator) training (run_compose.py only)
+# -------------------------------------------------------------
+# COMPOSE_INTERMEDIATE    When True, train on a SEPARATE single-operator dataset
+#                         (COMPOSE_INTERMEDIATE_STEPS-length compositions, i.e.
+#                         the primitive operators at length 1) running only that
+#                         many recurrent steps per batch (forward_k) — teaching
+#                         the weight-tied cell each operator directly — instead of
+#                         the length-COMP_STEPS compositions. Eval is unchanged
+#                         (full-length compositions on the train/holdout split),
+#                         so it tests whether reconfiguration can chain the
+#                         learned primitives. Recurrent architectures only.
+# COMPOSE_INTERMEDIATE_STEPS
+#                         Composition length of the intermediate training data,
+#                         and the number of recurrent steps trained per batch
+#                         (1 = single operators). Must be <= STACK_LAYERS.
+# COMPOSE_INTERMEDIATE_N_TASKS
+#                         How many distinct primitive tasks to train on (3 single
+#                         operators exist when STEPS=1; raise STEPS/MATRIX_DIM for
+#                         more at longer intermediate lengths).
+class ComposeShuffle(Default):
+    """Defaults for run_compose.py: shuffled multi-task composition training on
+    the RNN-residual FTN (one weight-tied cell reused across every task; the
+    per-step masks carry task identity). J training + K held-out compositions;
+    each gradient step accumulates SHUFFLE_TASKS_PER_STEP cold-start-reconfigured
+    task batches. Compose ComposeShuffleLoRA (or another arch) to swap the
+    backbone."""
+    TASK = "compose"
+    COMP_MATRIX_DIM = 5
+    COMP_STEPS = 4
+    COMP_P = 0.5
+    COMP_SHIFT = 1
+
+    # ARCHITECTURE = "rnn_residual"
+    # LAYERS = 2
+    # STACK_LAYERS = 4           # recurrent steps (== composition depth is natural)
+
+    # Shuffled-experiment schedule (also settable standalone in Default).
+    SHUFFLE_N_TRAIN = 12
+    SHUFFLE_N_HOLDOUT = 4
+    SHUFFLE_TASKS_PER_STEP = 8
+    SHUFFLE_STEPS = 800
+    SHUFFLE_EVAL_EVERY = 200
+    SHUFFLE_EVAL_BATCHES = 1
+
+    # Intermediate (single-operator) training: off by default (train on the
+    # length-COMP_STEPS compositions). Set True to instead train the recurrent
+    # cell directly on the primitive operators; eval stays on compositions.
+    COMPOSE_INTERMEDIATE = False
+    COMPOSE_INTERMEDIATE_STEPS = 1
+    COMPOSE_INTERMEDIATE_N_TASKS = 3
+
+    T = 512
+
+
+class ComposeShuffleLoRA(LoRARNN, ComposeShuffle):
+    """run_compose.py on the LoRA-RNN backbone (RNNLoRA): the recurrent weight
+    matrix is a low-rank atom bank, a distinct mask selected per step. Inherits
+    the compose task + shuffled schedule from ComposeShuffle and the LoRA/RNN
+    knobs from LoRARNN (ARCHITECTURE='lorarnn')."""
+    RECONFIG_STEPS = 30
+    STACK_LAYERS = 4
+    LORA_LAYERS = 2
+    TRAIN_LR = 1e-4
+    RECONFIG_STEPS = 30
+    SHUFFLE_EVAL_RECONFIG_STEPS = 360
+    FTNLORA_IO = "ftn"       # "fixed" | "ftn"
+
+class SmokeShuffle(Default):
+    """Size-only mixin for a fast run_compose.py sanity check. Sets small
+    backbone/schedule sizes but NOT ARCHITECTURE or TASK, so compose it AFTER a
+    compose config to shrink it, e.g. --config ComposeShuffle SmokeShuffle or
+    --config ComposeShuffleLoRA SmokeShuffle."""
+    SQUARE_DIM = 8
+    K = 8
+    LAYERS = 1
+    STACK_LAYERS = 3
+    RECONFIG_STEPS = 4
+    T = 64
+    SHUFFLE_N_TRAIN = 4
+    SHUFFLE_N_HOLDOUT = 2
+    SHUFFLE_TASKS_PER_STEP = 3
+    SHUFFLE_STEPS = 12
+    SHUFFLE_EVAL_EVERY = 5
+    SHUFFLE_EVAL_BATCHES = 2
+
+
+class Intermediate(Default):
+    """Mixin: enable run_compose.py intermediate (single-operator) training.
+    Compose AFTER a compose config, e.g. --config ComposeShuffle Intermediate or
+    --config ComposeShuffleLoRA Intermediate. Trains the recurrent cell on the
+    primitive operators (COMPOSE_INTERMEDIATE_STEPS-length data, short unroll)
+    while eval stays on the full-length compositions."""
+    COMPOSE_INTERMEDIATE = True
+
 
 class Base(Default):
     ARCHITECTURE="base"
+
+
+class Quad(Default):
+    """Base FTN with the per-unit MLP backbone replaced by an einsum-vectorized
+    per-unit quadratic MLP (ParallelQuadMLP): every maskable unit is a private
+    stack of Quad0-style blocks (linear + pairwise-product features). LAYERS /
+    INNER_DIM select the depth/width exactly as for the MLP backbone; QUAD_DIM
+    sets each unit's quad feature width. Mask / reconfiguration are unchanged."""
+    ARCHITECTURE="quad"
+    QUAD_DIM = 4
+    INNER_DIM = 8
+    LAYERS = 2
+    RECONFIG_STEPS=15
 
 
 class Stack(Default):
@@ -1143,10 +1551,10 @@ class NoiseProbe_Uniform(NoiseProbe):
     NOISE_PROBE_SCALE = 1.0
 
 
-class Hopfield0(Default):
+class Hopfield_F0(Default):
     RECONFIG_MATCH_STORED = True
     RECONFIG_MATCH_STORED_AFTER = 3
-    RECONFIG_MATCH_STORED_TOPK = 3
+    RECONFIG_MATCH_STORED_TOPK = 5
     RECONFIG_MATCH_TIE_STEPS = True
 
     RECONFIG_ALGORITHM = "fast"
@@ -1154,18 +1562,8 @@ class Hopfield0(Default):
     RECONFIG_LR = 0.3
     RECONFIG_NOISE_SCALE=0.0
 
-class Hopfield1(Default):
-    RECONFIG_MATCH_STORED = True
-    RECONFIG_MATCH_STORED_AFTER = 10
-    RECONFIG_MATCH_STORED_TOPK = 5
-    RECONFIG_MATCH_TIE_STEPS = True
 
-    RECONFIG_ALGORITHM = "annealste"
-    RECONFIG_STEPS = 30
-    RECONFIG_LR = 0.1
-    RECONFIG_NOISE_SCALE=0.01
-
-class Hopfield2(Default):
+class Hopfield_F1(Default):
     RECONFIG_MATCH_STORED = True
     RECONFIG_MATCH_STORED_AFTER = 30
     RECONFIG_MATCH_STORED_TOPK = 5
@@ -1176,17 +1574,49 @@ class Hopfield2(Default):
     RECONFIG_LR = 0.3
     RECONFIG_NOISE_SCALE=0.0
 
-class Hopfield3(Default):
+class Hopfield_F2(Default):
     RECONFIG_MATCH_STORED = True
-    RECONFIG_MATCH_STORED_AFTER = 30
-    RECONFIG_MATCH_STORED_TOPK = 10000
+    RECONFIG_MATCH_STORED_AFTER = 60
+    RECONFIG_MATCH_STORED_TOPK = 5
+    RECONFIG_MATCH_TIE_STEPS = False
+
+    RECONFIG_ALGORITHM = "fast"
+    RECONFIG_STEPS = 65
+    RECONFIG_LR = 0.3
+    RECONFIG_NOISE_SCALE=0.0
+
+class Hopfield_A0(Default):
+    RECONFIG_MATCH_STORED = True
+    RECONFIG_MATCH_STORED_AFTER = 10
+    RECONFIG_MATCH_STORED_TOPK = 5
     RECONFIG_MATCH_TIE_STEPS = True
 
     RECONFIG_ALGORITHM = "annealste"
-    RECONFIG_STEPS = 40
+    RECONFIG_STEPS = 30
     RECONFIG_LR = 0.1
     RECONFIG_NOISE_SCALE=0.01
 
+class Hopfield_A1(Default):
+    RECONFIG_MATCH_STORED = True
+    RECONFIG_MATCH_STORED_AFTER = 30
+    RECONFIG_MATCH_STORED_TOPK = 5
+    RECONFIG_MATCH_TIE_STEPS = True
+
+    RECONFIG_ALGORITHM = "annealste"
+    RECONFIG_STEPS = 60
+    RECONFIG_LR = 0.3
+    RECONFIG_NOISE_SCALE=0.1
+
+class Hopfield_A1U(Default):
+    RECONFIG_MATCH_STORED = True
+    RECONFIG_MATCH_STORED_AFTER = 55
+    RECONFIG_MATCH_STORED_TOPK = 5
+    RECONFIG_MATCH_TIE_STEPS = False
+
+    RECONFIG_ALGORITHM = "annealste"
+    RECONFIG_STEPS = 60
+    RECONFIG_LR = 0.3
+    RECONFIG_NOISE_SCALE=0.1
 
 class Hopfield_Flash(Default):
     RECONFIG_MATCH_STORED = True
@@ -1238,3 +1668,63 @@ class HML_Flat(Default):
     HML_MAX_ORDER = 2
     STACK_DETACH_MASK_DEEP_PATH=False
 
+
+class Wave(Default):
+    """Six processing steps; shared FTN neurons and a fixed wave reservoir."""
+    ARCHITECTURE = "wave"
+    STACK_LAYERS = 6
+
+
+class WaveSharedMask(Default):
+    """Mixin: reuse a single task mask at every wave processing step."""
+    WAVE_STEP_MASKS = False
+
+
+class WaveDetach(Default):
+    """Mixin: search only the final mask use, treating history as fixed."""
+    WAVE_RECONFIG_BPTT = False
+
+
+class WaveSmoke(Wave):
+    """Small end-to-end integration run, including replay and held-out eval."""
+    SQUARE_DIM = 8
+    K = 4
+    LAYERS = 1
+    INNER_DIM = 4
+    T = 16
+    N_TASK = 2
+    CORRELATED_TASKS = False
+    RECONFIG_STEPS = 3
+    RECONFIG_SAMPLE_SIZE = 16
+    TRAIN_DURATION = 3
+    N_RETRO_EVAL_BATCHES = 1
+    RENDER_STEPS = False
+
+
+class WaveDemo(Wave):
+    """Readable 32x32 mask/ripple animation, with eight wave substeps per mask."""
+    SQUARE_DIM = 32
+    K = 16
+    LAYERS = 1
+    INNER_DIM = 4
+    T = 32
+    WAVE_SUBSTEPS = 8
+    RECONFIG_STEPS = 12
+
+class Wave2(Wave):
+        # Wave reservoir recurrence (ARCHITECTURE == "wave")
+    ARCHITECTURE = "wave"
+    STACK_LAYERS = 6
+    LAYERS=8
+    K=64
+    WAVE_STEP_MASKS = True
+    WAVE_RECONFIG_BPTT = False
+    WAVE_RHO = 0.975
+    WAVE_C = 0.75 #.65
+    WAVE_OMEGA = 0.15 #.15
+    WAVE_PADDING = "circular"
+    WAVE_SUBSTEPS = 16
+    WAVE_INPUT_SCALE = 0.5
+    WAVE_INPUT_THRESHOLD = 0.1
+    WAVE_INPUT_FIRST_STEP_ONLY = True
+    WAVE_INPUT_KERNEL_SIZE = 9

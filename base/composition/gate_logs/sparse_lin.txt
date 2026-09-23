@@ -1,0 +1,18 @@
+GF(2) primitive gate: d=25 (N=5), n_ops=3, m_density=0.15, nonlinear=False (sbox_bits=4)
+Fitting primitive f0 for 2500 steps at per-operator layer budgets n=[1, 3, 4] (FTN: k=1 recurrent step, n-deep cell).
+
+Actual M density: [0.15, 0.155, 0.152]
+  FTN[lorarnn] n= 1 params=  88128: per_cell=0.803 exact=0.001
+  MLP         n= 1 params=  13081: per_cell=0.820 exact=0.002
+  MultiStepRNN n=1 params=  23065: per_cell=0.820 exact=0.001
+  FTN[lorarnn] n= 3 params= 161856: per_cell=0.786 exact=0.000
+  MLP         n= 3 params= 144665: per_cell=0.827 exact=0.003
+  MultiStepRNN n=3 params=  23065: per_cell=0.782 exact=0.000
+  FTN[lorarnn] n= 4 params= 198720: per_cell=0.777 exact=0.001
+  MLP         n= 4 params= 210457: per_cell=0.821 exact=0.001
+  MultiStepRNN n=4 params=  23065: per_cell=0.759 exact=0.000
+
+Gate target per-cell acc = 0.99; best reached = 0.827 => FAIL
+  -> difficulty too high for this architecture. Lower --m-density, --sbox-bits, --matrix-dim, or --no-nonlinear.
+
+Saved artifacts/gate_sparse_lin/gate_results.txt and gate_results.png

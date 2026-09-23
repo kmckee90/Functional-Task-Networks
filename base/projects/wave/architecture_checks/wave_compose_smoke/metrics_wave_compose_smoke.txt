@@ -1,0 +1,20 @@
+# FTN run metrics (parseable: KEY = value; NA = unavailable)
+run_name = wave_compose_smoke
+config = Wave+ComposeShuffle+SmokeShuffle
+seed = 123
+n_params_trainable = 48256
+n_params_total = 48265
+avg_mask_overlap_pct = 8.78095
+architecture = wave
+n_train_tasks = 4
+n_holdout_tasks = 2
+tasks_per_step = 3
+n_steps = 2
+intermediate = False
+intermediate_steps = NA
+train_acc_final = 0.502969
+train_loss_final = 0.694185
+holdout_acc_final = 0.512187
+holdout_loss_final = 0.69396
+chance_loss = 0.693147
+wall_time_train_s = 1.94956

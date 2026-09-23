@@ -8,8 +8,9 @@ and for each numeric metric:
 
   - a bar chart comparing all conditions side by side (one colored bar per
     condition, legend = condition names) with error bars over seeds, and
-  - Welch's two-sided t-tests between every pair of conditions, with significant
-    pairs annotated on the chart (* p<0.05, ** p<0.01, *** p<0.001).
+  - Welch's two-sided t-tests between every pair of conditions (always written
+    to results.txt; optionally annotated on the charts as significance brackets
+    with --sig-brackets, off by default since the bracket count is O(C^2)).
 
 Everything is written under <sweep>/figs/:
   - bar_<metric>.png            one chart per metric
@@ -58,6 +59,16 @@ _LOWER_IS_BETTER = {
     "wall_time_forward_ms", "wall_time_reconfig_ms", "avg_task_block_wall_s",
 }
 _NEUTRAL = {"avg_mask_overlap_pct"}
+
+# Accuracy metrics: their charts start the y-axis at the chance/null value 0.5
+# (bars show accuracy above chance). NOT the forward-transfer *change* metric
+# (a delta that can be negative) or any non-accuracy metric.
+_ACCURACY_METRICS = {
+    "avg_recall_eval_acc",
+    "avg_forward_transfer_eval_acc",
+    "avg_train_acc_current_block",
+    "avg_eval_acc_current_task",
+}
 
 # Preferred metric order (matches metrics.py); extras are appended, sorted.
 _METRIC_ORDER = [
@@ -251,12 +262,14 @@ def _pretty(metric):
 
 
 def _draw_bar(ax, metric, conditions, stats_by_cond, pairs, colors,
-              errorbar_kind, legend=True, compact=False):
+              errorbar_kind, legend=True, compact=False, annotate_sig=False):
     """Draw one metric's comparison onto `ax`: side-by-side colored bars with
-    error bars, value labels, and significance brackets. Returns the bar
-    container so a caller can build a shared legend. legend=False skips the
-    per-axes legend (used by the grid, which adds one figure-level legend);
-    compact shrinks fonts/labels for grid cells."""
+    error bars and value labels. Returns the bar container so a caller can build
+    a shared legend. legend=False skips the per-axes legend (used by the grid,
+    which adds one figure-level legend); compact shrinks fonts/labels for grid
+    cells; annotate_sig draws a bracket + stars for each significant pair (off by
+    default - it is O(C^2) brackets with many conditions; the pairwise t-tests
+    are always in results.txt regardless)."""
     means = [stats_by_cond[c]["mean"] for c in conditions]
     errs = [errorbar_value(stats_by_cond[c], errorbar_kind) for c in conditions]
     x = np.arange(len(conditions))
@@ -290,23 +303,28 @@ def _draw_bar(ax, metric, conditions, stats_by_cond, pairs, colors,
     ax.margins(x=0.05)
     ax.tick_params(labelsize=8 if compact else 10)
 
-    _annotate_significance(ax, x, means, errs, conditions, pairs)
+    if annotate_sig:
+        _annotate_significance(ax, x, means, errs, conditions, pairs)
+    # Accuracy charts: origin at the chance baseline 0.5 (preserves the top,
+    # which autoscale / significance brackets may have set).
+    if metric in _ACCURACY_METRICS:
+        ax.set_ylim(bottom=0.5)
     return bars
 
 
 def bar_chart(metric, conditions, stats_by_cond, pairs, colors, errorbar_kind,
-              path):
+              path, annotate_sig=False):
     """Standalone one-metric bar chart saved to `path`."""
     fig, ax = plt.subplots(figsize=(max(5.0, 1.7 * len(conditions) + 2.0), 5.2))
     _draw_bar(ax, metric, conditions, stats_by_cond, pairs, colors,
-              errorbar_kind, legend=True, compact=False)
+              errorbar_kind, legend=True, compact=False, annotate_sig=annotate_sig)
     fig.tight_layout()
     fig.savefig(path, dpi=130)
     plt.close(fig)
 
 
 def grid_pdf(metrics, per_metric, conditions, colors, errorbar_kind, path,
-             ncols=4):
+             ncols=4, annotate_sig=False):
     """All metrics as one grid of bar charts (default 4 columns -> 3 rows for
     the 12 metrics) written to a single PDF, with one shared condition legend.
 
@@ -321,22 +339,40 @@ def grid_pdf(metrics, per_metric, conditions, colors, errorbar_kind, path,
     for ax, metric in zip(flat, metrics):
         stats_by_cond, pairs = per_metric[metric]
         bars = _draw_bar(ax, metric, conditions, stats_by_cond, pairs, colors,
-                         errorbar_kind, legend=False, compact=True)
+                         errorbar_kind, legend=False, compact=True,
+                         annotate_sig=annotate_sig)
     for ax in flat[n:]:  # hide any unused cells
         ax.set_visible(False)
 
     err_label = {"ci": "95% CI", "std": "std dev", "sem": "SEM"}[errorbar_kind]
+    # Shared legend: use as many columns as fit across the figure width so the
+    # legend stays SHORT (fewer rows = less vertical space taken from the
+    # charts), and never let a column hold more than MAX_PER_COL entries.
+    MAX_PER_COL = 10
+    legend_rows = 0
     if bars is not None:
-        fig.legend(bars, conditions, title="condition", ncol=len(conditions),
-                   loc="lower center", fontsize=10, title_fontsize=10,
-                   framealpha=0.9, bbox_to_anchor=(0.5, 0.0))
+        maxlen = max(len(c) for c in conditions)
+        fig_w = 4.6 * ncols  # figure width (inches)
+        entry_w = 0.45 + 0.062 * maxlen  # marker + label + padding, inches
+        fit_cols = max(1, int(fig_w / entry_w))
+        # >= ceil(n / MAX_PER_COL) columns caps each column at MAX_PER_COL rows;
+        # more columns than that (up to what fits) only makes it shorter.
+        min_cols = math.ceil(len(conditions) / MAX_PER_COL)
+        legend_ncol = min(len(conditions), max(min_cols, fit_cols))
+        legend_rows = math.ceil(len(conditions) / legend_ncol)
+        fig.legend(bars, conditions, title="condition", ncol=legend_ncol,
+                   loc="lower center", fontsize=9, title_fontsize=10,
+                   framealpha=0.9, bbox_to_anchor=(0.5, 0.005))
+    sig_note = ";  * p<0.05  ** p<0.01  *** p<0.001" if annotate_sig else ""
     fig.suptitle(
-        f"Sweep metrics by condition  (error bars = {err_label};  "
-        "* p<0.05  ** p<0.01  *** p<0.001)",
+        f"Sweep metrics by condition  (error bars = {err_label}{sig_note})",
         fontsize=14, fontweight="bold",
     )
-    # Leave room for the suptitle (top) and the shared legend (bottom).
-    fig.tight_layout(rect=(0, 0.04, 1, 0.97))
+    # Leave room for the suptitle (top) and the wrapped legend (bottom): a title
+    # line plus one line per legend row, as a fraction of the figure height.
+    fig_h = 4.0 * nrows
+    bottom = min(0.4, (0.35 + 0.26 * legend_rows) / fig_h)
+    fig.tight_layout(rect=(0, bottom, 1, 0.97))
     fig.savefig(path)
     plt.close(fig)
 
@@ -536,6 +572,13 @@ def main():
         "t-tests are always over the raw seed values.",
     )
     parser.add_argument(
+        "--sig-brackets", action="store_true",
+        help="Draw significance brackets (horizontal bracket + * / ** / ***) "
+        "over each significantly different pair on the bar charts. Off by "
+        "default - the count grows combinatorially with conditions. The pairwise "
+        "t-tests are always written to results.txt regardless.",
+    )
+    parser.add_argument(
         "--out", default=None,
         help="Output directory (default <sweep>/figs).",
     )
@@ -571,11 +614,12 @@ def main():
         per_metric[metric] = (stats_by_cond, pairs)
         png = os.path.join(out_dir, f"bar_{metric}.png")
         bar_chart(metric, conditions, stats_by_cond, pairs, colors,
-                  args.errorbar, png)
+                  args.errorbar, png, annotate_sig=args.sig_brackets)
         print(f"  wrote {png}")
 
     grid = os.path.join(out_dir, "grid.pdf")
-    grid_pdf(metrics, per_metric, conditions, colors, args.errorbar, grid)
+    grid_pdf(metrics, per_metric, conditions, colors, args.errorbar, grid,
+             annotate_sig=args.sig_brackets)
     print(f"  wrote {grid}")
 
     rankings = os.path.join(out_dir, "rankings.pdf")

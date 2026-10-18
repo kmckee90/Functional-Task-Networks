@@ -1,0 +1,41 @@
+Training mask overlap regularization
+
+Config overrides (available to basic FTN, LoRAFTN, BayesFTN and all shared
+BayesMaskReconfig backbones, including the IC experiment configs):
+
+    RECONFIG_OVERLAP_MODE = "bump"     # or "gated"
+    RECONFIG_OVERLAP_LAMBDA = 0.0      # disabled by default
+    RECONFIG_OVERLAP_THRESHOLD = 0.5
+    RECONFIG_OVERLAP_TEMPERATURE = 0.2
+
+Direct constructors accept overlap_mode, overlap_lambda, overlap_threshold,
+overlap_temperature. Existing config parameter bundles include these options.
+
+o = sum(candidate * reference) / sum(reference)
+bump:  lambda * o * (1-o)
+gated: lambda * o * sigmoid((threshold-o)/temperature)
+
+The reference is self.m at entry to each training search, detached and cloned
+once. A zero/uninitialized mask skips the penalty. The reference never follows
+optimizer steps. Ordinary and changepoint searches both use it; the next call
+takes a new snapshot. No implicit archive or task labels are introduced.
+Recurrent masks normalize by total activity across blocks, not per-block K.
+
+Hard searches use the existing straight-through gradient; soft/fast searches
+use their sigmoid masks. Lambda zero bypasses objective modification and does
+not change random-number consumption. Backbone weights remain detached.
+Candidate selection uses task loss + overlap cost. Bayes optimization retains
+its additional existing KL term; its take-best ranking historically excludes
+KL and continues to do so. Bayes last_reconfig_stats includes overlap_penalty.
+
+Cold evaluation is unchanged and uses no reference penalty, preserving its
+independence from the last training task. Warm training searches do use it.
+No aggregation across archived masks is implemented in this first version.
+
+The gated penalty approaches zero at high overlap but is not exactly zero at
+o=1 for finite T. Threshold is the sigmoid midpoint, not the exact derivative
+sign-change point. With broad T the transition and residual are intentional.
+These penalties influence selection, not protection of shared weights during
+subsequent training. They do not establish that a changepoint is false.
+
+Pod validation: python test_overlap_regularizer.py

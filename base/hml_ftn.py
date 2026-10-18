@@ -60,6 +60,7 @@ task's mask carries over unchanged.
 import math
 
 import torch
+from reconfig_optimizer import make_reconfig_optimizer, validate_reconfig_optimizer
 import torch.nn as nn
 import torch.nn.functional as F
 
@@ -149,7 +150,10 @@ class HMLCell(nn.Module):
         return torch.relu(h)
 
 
-class HMLFTN(nn.Module):
+from overlap_regularizer import OverlapRegularizer
+
+
+class HMLFTN(OverlapRegularizer, nn.Module):
     """Recurrent multilinear FTN with a per-level kWTA mask.
 
     Interface mirrors ftn.FTN / stack_ftn.StackFTN: forward(x) predicts under
@@ -202,6 +206,7 @@ class HMLFTN(nn.Module):
         k: int = 128,
         reconfig_steps: int = 30,
         reconfig_lr: float = 0.3,
+        reconfig_optimizer: str = "Adam",
         reconfig_sample_size: int = 2048,
         reconfig_algorithm: str = "annealste",   # "annealste" or "fast"
         reconfig_init_sd: float = 1e-5,
@@ -215,8 +220,15 @@ class HMLFTN(nn.Module):
         mask_lateral_polyak: float = 0.0,
         mask_lateral_noise_sd: float = 0.0,
         torus: bool = False,
+        overlap_mode: str = "seen_logits",
+        overlap_lambda: float = 0.0,
+        overlap_threshold: float = 0.5,
+        overlap_temperature: float = 0.2,
+        reconfig_entropy_coef: float = 0.0,
     ):
         super().__init__()
+        self.configure_overlap(overlap_mode, overlap_lambda, overlap_threshold, overlap_temperature)
+        self.configure_entropy(reconfig_entropy_coef)
         assert hidden_size == square_dim**2, (
             f"hidden_size (units per population) {hidden_size} must equal "
             f"square_dim**2 {square_dim**2} so each level's mask shares the FTN "
@@ -236,6 +248,7 @@ class HMLFTN(nn.Module):
         self.k = k
         self.reconfig_steps = reconfig_steps
         self.reconfig_lr = reconfig_lr
+        self.reconfig_optimizer = validate_reconfig_optimizer(reconfig_optimizer)
         self.reconfig_sample_size = reconfig_sample_size
         self.reconfig_algorithm = reconfig_algorithm
         self.reconfig_init_sd = reconfig_init_sd
@@ -354,6 +367,7 @@ class HMLFTN(nn.Module):
     @torch.enable_grad()
     def _search_simultaneous(self, x, y, anneal: bool) -> list:
         """Jointly optimize all depth+1 levels' logits against the final loss."""
+        reference = self._overlap_reference()
         n = min(self.reconfig_sample_size, x.shape[0])
         x, y = x[:n], y[:n]
 
@@ -363,7 +377,7 @@ class HMLFTN(nn.Module):
             .requires_grad_(True)
             for _ in range(self.n_stack)
         ]
-        opt = torch.optim.Adam(logits, lr=self.reconfig_lr)
+        opt = make_reconfig_optimizer(logits, lr=self.reconfig_lr, name=self.reconfig_optimizer)
 
         # Match-stored option (annealste only): after match_stored_after steps,
         # snap the running best per-level masks to the closest previous-task mask
@@ -378,21 +392,22 @@ class HMLFTN(nn.Module):
 
         def _cand_loss(cand: torch.Tensor) -> float:
             with torch.no_grad():
-                return self.loss(
+                return self._with_overlap(self._reconfig_task_loss(
                     self._forward_stack(x, self._split(cand), detach=True), y
-                ).item()
+                ), torch.cat(logits), reference).item()
 
         best, best_loss = None, math.inf
         for i in range(self.reconfig_steps):
             masks = [self._step_mask(lg, i, anneal) for lg in logits]
-            loss = self.loss(self._forward_stack(x, masks, detach=True), y)
+            loss = self._with_overlap(self._reconfig_task_loss(self._forward_stack(x, masks, detach=True), y), torch.cat(logits), reference)
+            scored = [m.detach().clone() for m in masks] if self._regularized_search(reference) and anneal else None
             opt.zero_grad()
             loss.backward()
             opt.step()
             with torch.no_grad():
                 if loss.item() < best_loss:
                     best_loss = loss.item()
-                    best = [kwta(lg.detach(), self.k) for lg in logits]
+                    best = scored if scored is not None else [kwta(lg.detach(), self.k) for lg in logits]
                 if do_match and not swapped and (i + 1) >= self.match_stored_after:
                     ref = torch.cat(
                         best if best is not None

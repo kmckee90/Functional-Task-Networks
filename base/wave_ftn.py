@@ -23,6 +23,7 @@ Weight training always uses the full recurrence graph in either mode.
 import math
 
 import torch
+from reconfig_optimizer import make_reconfig_optimizer, validate_reconfig_optimizer
 from torch import nn
 from torch.nn import functional as F
 
@@ -31,7 +32,10 @@ from stack_ftn import StackFTN
 from projects.wave.wave_tanh import WaveTanh
 
 
-class WaveFTN(nn.Module):
+from overlap_regularizer import OverlapRegularizer
+
+
+class WaveFTN(OverlapRegularizer, nn.Module):
     def __init__(self, input_size, output_size, hidden_size, square_dim,
                  classification=False, binary=False, n_stack=6,
                  step_masks=True, reconfig_bptt=True,
@@ -41,12 +45,17 @@ class WaveFTN(nn.Module):
                  wave_input_kernel_size=3,
                  layers=8, inner_size=8, dropout_p=0., k=128,
                  reconfig_steps=30, reconfig_lr=.3, reconfig_sample_size=2048,
+                 reconfig_optimizer="Adam",
                  reconfig_algorithm="annealste", reconfig_init_sd=1e-5,
                  reconfig_noise_scale=1., match_stored=False,
                  match_stored_after=0, match_stored_topk=1, match_tie_steps=True,
                  mask_kernel_size=3, mask_lateral_steps=0,
-                 mask_lateral_polyak=0., mask_lateral_noise_sd=0., torus=False):
+                 mask_lateral_polyak=0., mask_lateral_noise_sd=0., torus=False,
+                 overlap_mode="seen_logits", overlap_lambda=0.,
+                 overlap_threshold=.5, overlap_temperature=.2, reconfig_entropy_coef=0.):
         super().__init__()
+        self.configure_overlap(overlap_mode, overlap_lambda, overlap_threshold, overlap_temperature)
+        self.configure_entropy(reconfig_entropy_coef)
         if hidden_size != square_dim**2 or square_dim < 2:
             raise ValueError("hidden_size must equal square_dim², with square_dim >= 2")
         if n_stack < 1 or wave_substeps < 1 or not 1 <= k <= hidden_size:
@@ -83,6 +92,7 @@ class WaveFTN(nn.Module):
         self.wave_padding = wave_padding
         self.k, self.reconfig_steps = k, reconfig_steps
         self.reconfig_lr, self.reconfig_sample_size = reconfig_lr, reconfig_sample_size
+        self.reconfig_optimizer = validate_reconfig_optimizer(reconfig_optimizer)
         self.reconfig_algorithm, self.reconfig_init_sd = reconfig_algorithm, reconfig_init_sd
         self.reconfig_noise_scale = reconfig_noise_scale
         self.match_stored, self.match_stored_after = match_stored, match_stored_after
@@ -202,6 +212,7 @@ class WaveFTN(nn.Module):
         n = min(self.reconfig_sample_size, len(x))
         x, y = x[:n].detach(), y[:n].detach()
         count = steps if self.step_masks else 1
+        reference = self._overlap_reference(count * self.layer_size)
         # Detach-last cannot learn prefix masks; preserve the currently held
         # prefix rather than randomly resampling it on every reconfiguration.
         fixed = [m.detach().clone() for m in self._split(self.m)[:steps]]
@@ -210,7 +221,7 @@ class WaveFTN(nn.Module):
         search_indices = list(range(count)) if self.reconfig_bptt or not self.step_masks else [steps-1]
         logits = [(torch.randn(self.layer_size, device=x.device, dtype=x.dtype)*self.reconfig_init_sd)
                   .requires_grad_() for _ in search_indices]
-        opt = torch.optim.Adam(logits, lr=self.reconfig_lr)
+        opt = make_reconfig_optimizer(logits, lr=self.reconfig_lr, name=self.reconfig_optimizer)
 
         def expand(values):
             if not self.step_masks:
@@ -223,8 +234,17 @@ class WaveFTN(nn.Module):
         def hard_masks():
             return expand([kwta(lg.detach(), self.k) for lg in logits])
 
+        def packed_logits():
+            if not self.step_masks:
+                return logits[0]
+            values = [torch.zeros_like(fixed[0]) for _ in range(steps)]
+            for index, value in zip(search_indices, logits):
+                values[index] = value
+            return torch.cat(values)
+
         def score(masks):
-            return self.loss(self._forward_stack(x, masks, detach=True), y).item()
+            packed = packed_logits()
+            return self._with_overlap(self._reconfig_task_loss(self._forward_stack(x, masks, detach=True), y), packed, reference).item()
 
         do_match = (self.match_stored and steps == self.n_stack
                     and self._stored_masks_ref is not None and len(self._stored_masks_ref)>0)
@@ -260,7 +280,8 @@ class WaveFTN(nn.Module):
         swapped = False
         for iteration in range(self.reconfig_steps):
             masks = expand([self._step_mask(lg, iteration, anneal) for lg in logits])
-            loss = self.loss(self._forward_stack(x, masks, detach=True), y)
+            packed = packed_logits()
+            loss = self._with_overlap(self._reconfig_task_loss(self._forward_stack(x, masks, detach=True), y), packed, reference)
             opt.zero_grad(set_to_none=True)
             loss.backward()
             opt.step()

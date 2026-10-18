@@ -147,6 +147,33 @@ def accuracy(pred, y):
     return max(0.0, 1.0 - mse / max(var, 1e-8))
 
 
+def eval_reconfigure(ftn, x, y):
+    """Search an evaluation mask using at most the configured support rows.
+
+    Temporarily replace the model's training sample cap as well, so evaluation
+    can use either fewer or more rows than training. Restore it after search.
+    """
+    sample_size = Config.EVAL_RECONFIG_SAMPLE_SIZE
+    if sample_size is None:
+        return ftn._reconfig(x, y)
+    if sample_size < 1:
+        raise ValueError("EVAL_RECONFIG_SAMPLE_SIZE must be positive or None")
+    saved = []
+    for obj, attr in (
+        (ftn, "reconfig_sample_size"),
+        (getattr(ftn, "spec1", None), "sample_size"),
+        (getattr(ftn, "spec2", None), "sample_size"),
+    ):
+        if obj is not None and hasattr(obj, attr):
+            saved.append((obj, attr, getattr(obj, attr)))
+            setattr(obj, attr, sample_size)
+    try:
+        return ftn._reconfig(x[:sample_size], y[:sample_size])
+    finally:
+        for obj, attr, value in saved:
+            setattr(obj, attr, value)
+
+
 def evaluate_tasks(ftn, data_gen, task_indices):
     """Quick loss evaluation over multiple batches. Returns {task_idx: mean_loss}.
 
@@ -160,7 +187,7 @@ def evaluate_tasks(ftn, data_gen, task_indices):
         losses = []
         for _ in range(Config.N_EVAL_EPOCHS):
             x, y = data_gen(task_idx)
-            ftn._reconfig(x, y)
+            eval_reconfigure(ftn, x, y)
             with torch.no_grad():
                 losses.append(ftn.loss(ftn(x), y).item())
         results[task_idx] = np.mean(losses)
@@ -173,8 +200,9 @@ def evaluate_backwards(ftn, data_gen, task_indices):
 
     Reconfigures per batch (or once per task when RECONFIG_EVERY == 0,
     matching base/'s CONFIGURE_PER_BATCH=False), then evaluates on a fresh
-    holdout batch. EVAL_RECONFIG_STEPS overrides the training search length
-    for both backwards and prospective tasks when set.
+    holdout batch. EVAL_RECONFIG_STEPS overrides the training search length;
+    EVAL_RECONFIG_SAMPLE_SIZE independently caps the support rows used for
+    mask search. Both apply to backwards and prospective tasks.
     Restores the training mask on exit so eval never leaks state into
     training (reconfigure() mutates ftn.m in place; without this, reactive
     mode would train under the last-evaluated task's support mask).
@@ -194,10 +222,10 @@ def evaluate_backwards(ftn, data_gen, task_indices):
         for task_idx in task_indices:
             losses, accs = [], []
             if Config.RECONFIG_EVERY == 0:
-                ftn._reconfig(*data_gen(task_idx))
+                eval_reconfigure(ftn, *data_gen(task_idx))
             for _ in range(Config.N_RETRO_EVAL_BATCHES):
                 if Config.RECONFIG_EVERY != 0:
-                    ftn._reconfig(*data_gen(task_idx))
+                    eval_reconfigure(ftn, *data_gen(task_idx))
                 # Eval on a fresh holdout batch — not the one used to reconfigure.
                 x, y = data_gen(task_idx)
                 with torch.no_grad():
@@ -258,7 +286,7 @@ def entropy_tests(ftn, data_gen, task_indices, suffix, out_dir="artifacts"):
         # Recover a fresh mask per task from a new reconfiguration batch.
         masks = []
         for ti in tasks_l:
-            ftn._reconfig(*data_gen(ti))
+            eval_reconfigure(ftn, *data_gen(ti))
             masks.append(ftn.m.clone())
         # Fresh task-j data drawn once per task this trial (reused across the
         # mask tasks i so a column shares one input batch within the trial).
@@ -450,6 +478,17 @@ def train(
             gif_save_epoch=min(Config.GIF_SAVE_EPOCH, n_epochs) or 1,
             out_dir=out_dir,
             ema_scale=getattr(Config, "GIF_EMA_SCALE", 1.0),
+            bw_frame_skip=Config.BW_FRAME_SKIP,
+            spatial_permute=getattr(Config, "SPATIAL_PERMUTE", False),
+            spatial_options={
+                "roundness": Config.SPATIAL_PERMUTE_ROUNDNESS,
+                "center": Config.SPATIAL_PERMUTE_CENTER,
+                "radius": Config.SPATIAL_PERMUTE_RADIUS,
+                "sweeps": Config.SPATIAL_PERMUTE_SWEEPS,
+                "temperature": Config.SPATIAL_PERMUTE_TEMPERATURE,
+                "initialization": Config.SPATIAL_PERMUTE_INIT,
+                "seed": Config.SPATIAL_PERMUTE_SEED,
+            },
         )
 
     # Reactive reconfiguration (RECONFIG_REACTIVE): reconfigure once on the
@@ -543,6 +582,9 @@ def train(
                 if Config.NOISE_PROBE:
                     noise_probe_step(ftn, probe_buffer)
                 optimizer.step()
+                # Independent of replay admission/capacity and of lambda.
+                # Searches and evaluation must never add candidate masks.
+                ftn.record_training_mask()
                 if animator:
                     animator.record_step(ftn.m, snapshot=snapshot)
 

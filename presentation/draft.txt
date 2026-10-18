@@ -1,0 +1,126 @@
+10/12/2026
+
+Brain-Inspired Autonomous Exploration and Learning for Self-Improving AGI  
+
+# Summary
+    Real, self-scaling Artificial General Intelligence requires a fundamental shift in approach that starts with autonomous learning.
+    Mastery of an environment requires deeply exploring the scope and mechanics of that environment and translating them into robustly retained knowledge and skills.
+    Here, I will propose, design, and even demonstrate such an autonomous agent with emergent, native capabilities arising from a rich first-person experience.
+    I will demonstrate techniques for highly efficient, naturalistic exploration and neocortex-inspired continual learning, both developed here at the Astera Institute to
+    specifically target this vision of AGI.
+    Together, thes techniques will form the fundamental ingredients of a self-improving agent.    
+
+# General problems with ML and RL
+    Current state of the art AI relies on artifical neural networks (ANNs), and hence suffer from unsolved problems with ANNs generally.
+    ANNs provide general learning from data, but cannot retain their solutions unless the data distribution is always the same throughout training.
+    Reinforcement learning provides a general method of long-range credit assignment and planning, but only when a reward function is well defined and easily observed.
+    Robust AGI can expect none of these luxuries: the world constantly changes, and reward functions are just an experimental way that we inject our own knowledge.
+    To effectively leverage ANNs for autonomous AGI, a method of continual learning is needed that can automatically make the numerous decisions involved in neural resource allocation, protection, and updating.
+    To exploit the generality of RL, the reward fuction must be internally generated to drive an intrinsic self-improvement loop.
+
+# Problem with current AI
+    Agentic Large Language Models (LLMs) are not truly autonomous.
+    Updating their network weights at-scale costs tens to hundreds of millions of dollars in data and computation.
+    The data are invariably human artifacts ranging from web scraping to remote teleoperations.
+    LLM training is therefore limited to these artifacts and to learning a flattened projection of the real intelligence that led to their creation.
+    
+# Inadequacy of continual learning methods
+    Existing continual learning methods do not have the required autonomy or generality for AGI.
+    The most well known, general-purpose continual learning algorithms only target domain shift, require task labels, and involve other manual interventions. [link: read more]
+    Furthermore, they do not reflect or exploit what is known about cortical organization, which offers deep hints into the preservation of memories and skills over a lifetime. [link: read more]
+
+# Inadequacy in exploration methods
+    Exploration methods similarly all target specific aspects training and leave major domains unaddressed. [link: read more]
+    No one has found a combination of exploration drives and architectures that results in reliable self-improvement over arbitrary problem domains.
+    Most methods predictably fail when deployed to randomized or noisy environments. 
+    Most also reduce to some structured placement of random actions instead of allowing the agent to learn more intelligent ways to explore over time.
+    Natural, human-like exploration is a progression of increasingly sophisticated exploitations of environmental and control regularities,
+    culminating in hypothesis testing and scientific reasoning.
+
+# Solutions for AGI
+    At Astera, I have found novel solutions to both of these problems: (1) a meta-learning-based exploration (M2E) and (2) cortex-inspired continual learning, called functional task networks (FTN), 
+    specifically to target Astera's goals for naturalistic, brain-like AGI.    
+
+    M2E introduces a concise princple with far-reaching implications for intelligence: 
+    Learn behavior that maximizes novelty by remembering and reasoning about past behavior and past novelty.
+    When the environment is random or intractable, M2E leverages its internal compasses to make immediate progress.
+    [link: read more]
+
+    To solve continual learning, FTN uses insights about cortical connectivity, cellular complexity, population firing statistics, and evidence for meta-stable attractor dynamics. 
+    How does the brain perform continual learning so effortlessly, and what if we shaped our neural networks like cortical tissue?
+    What if each cell were a complex, trainable unit, and populations of such cells rapidly self-organized to meet the needs of each situation? 
+    FTN uses a single optimization inner-loop to drive the autonomous recombination of units into subnetworks that implement previously trained skills and representations,
+    and also to synthesize new networks on new task domains. 
+    [link: read more]
+
+    Both M2E and FTN were designed to be assumption-free and and "hands off": in M2E, the environment may be predictable or random, continuous or discrete, repetitious or not.
+    With FTN, new tasks can flow through the network without any identifying labels, may represent contradictory solutions, or may represent complementary solutions over disjoint spaces.
+    There are also no constraints on how either method is applied to ANNs generally.
+    Generative modeling -- transformers, diffusion, all state-of-the-art techniques are applicable.
+
+# Plan for AGI
+    I will deploy a prototype AGI with exploration and continual learning ability to naturalistic, open-world environments (Globo, Minecraft, real robots).
+    The agents will run for long lifetimes and accumulate knowledge and innovations as a result of their own internal drive toward discovery.
+    The central innovation of this project will be perfecting the feedback loop between exploration and learning that causes flexible representation and reasoning to naturally emerge.
+    The agent will tentatively use state-of-the-art world modeling, planning, and reasoning where applicable, but will avoid becoming bottlenecked on the specific limitations
+    of those existing techniques in favor of emergent, autonomous, and brain-like neural solutions.
+    [link: read more]
+
+    A detailed plan and timeline is given here: [link: read more]
+
+# Contributions to Technology
+    This proposal concerns a form of intelligent, self-improving autonomy that is simply not present in current technology. 
+    Successful demonstration of this AGI approach itself will represent a leap in capabilities and opportunities.
+    If the agent can master natural open-world environments, then it can be extended to robotics, eventually eliminating the need for massive, 
+    contrived human datasets to every possible motor skill.  
+    We can also revise the role of LLMs in broader agentic systems, grounding language representation in multimodal first-person experience,
+    motor control, and self-modeling.
+
+    Besides the innovation itself, an autonomous AGI of this type can grow to participate in, contribute to, and change society in ways that humans cannot alone.
+    The agent will be capable of pursuing its own intrinsic scientific goals, invent technologies, and propose theories that are not just
+    statistical interpolations of existing literature.
+    Rather, science and engineering are the natural extensions of its fundamental exploration and learning design.
+    
+
+# Contributions to Neuroscience
+    Besides its centrality to this AGI design, FTN is based closely on several brain mechanisms and serves as a testable theory
+    of continual learning in the neocortex. 
+    FTN provides a principle for network self-assembly at the levels of dendrites, neurons, and cortical columns.
+    The FTN-LoRA architecture in particular resembles dendritic redundancy and selection.
+    Spatial consolidation in FTN results in "mesoscale functional units" or even cortical columns, strongly resembling those seen
+    in mammals corresponding to different skilled motor behaviors.
+  
+    M2E stands to contribute to our theories of human curiosity and exploration by demonstrating extremely fast
+    exploration progress and the open-ended learning of exploration skills.
+    When humans do not know what to do in novel situations, we do not begin taking random actions and we do not probe 
+    for every possible uninteresting fact. 
+    Rather, we take routes that provide the most useful information that allows us to learn the fastest.
+    This is the general intuition behind M2E: not just training the network to do the next novel thing,
+    but training it to skillfullly seek out the most efficient routes to the largest discoveries.
+
+
+# Safety
+    Any AGI design presents major safety concerns for society that we must plan for as far in advance as possible.
+    Most failures of AI safety are already being speedily pioneered by the frontier labs. 
+    This version of AGI, if successful, would have both pros and cons with respect to the usual issues:
+    
+    For instance, grounding in first-person experience with well-understood internal drives will create a more interpretable,
+    trustworthy system than current LLMs, which anarchically imitate contradictory projections of human values and behavior.
+    Application of a grounded AGI would also be less subject to the incomplete, post-hoc bridging of modalities and control systems currently
+    characteristic of LLM agents.
+    Rather, our agent would be fully responsible for its own capabilities and exist in a perpetual self-perfection loop that will take
+    their reliability beyond what we can do by intervening.
+    
+    However, alignment issues remain a standard problem for autonomously self-trained agents. 
+    This program will abide by better standards of experimental design than currently exhibited by frontier labs
+    by keeping the agent in closed environments where its capabilities are strictly circumscribed.
+    Experiments will use intensive, active monitoring and pausing to detect and prevent concerning outcomes.
+    For the foreseeable future, hardware will remain an obvious limitation on agent scope and capabilities, and so
+    we will design experiments with strict, finite computing resources. 
+
+    Further safety issues must be anticipated and addressed concretely as the prototyping progresses.
+    The current phase of development leaves them largely speculative.
+    I will elaborate on safety strategies in later proposals for the continuation of the research long-term.
+ 
+
+

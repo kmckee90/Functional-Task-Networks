@@ -1,0 +1,28 @@
+{
+  "bounds": [
+    -256,
+    256,
+    -192,
+    320
+  ],
+  "cell_size": 4,
+  "terrain_resolution": 2,
+  "max_visits": 13650,
+  "tiles_ready": 64,
+  "tiles_requested": 64,
+  "orientation": "north (+z) up",
+  "steps": {
+    "phase3_m2e_r1_s19": 46931,
+    "phase3_conv_r1_s19": 43620,
+    "phase3_m2e_r2_s19": 51560,
+    "phase3_conv_r2_s19": 45510,
+    "phase3_m2e_r3_s19": 53470,
+    "phase3_conv_r3_s19": 41740,
+    "phase3_m2e_r4_s19": 46170,
+    "phase3_conv_r4_s19": 42740,
+    "phase3_m2e_r5_s19": 58630,
+    "phase3_conv_r5_s19": 65290,
+    "phase3_m2e_r6_s19": 62320,
+    "phase3_conv_r6_s19": 51730
+  }
+}

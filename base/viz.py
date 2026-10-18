@@ -7,11 +7,14 @@ All plotting/animation lives here, deliberately outside the FTN class:
   - save_forgetting_matrix: retro/prospective accuracy matrix
 """
 
+import colorsys
+
 import numpy as np
 import torch
 from PIL import Image
 
-from ftn import mask_to_grid, normalize_mask
+from ftn import mask_to_grid
+from spatial_permute import spatial_permutation
 
 
 def tag(suffix):
@@ -19,23 +22,39 @@ def tag(suffix):
     return f"_{suffix}" if suffix else ""
 
 
+def task_color(task):
+    """Stable categorical color; golden-angle hues separate neighboring tasks."""
+    hue = (0.60 + task * 0.6180339887498949) % 1.0
+    return tuple(round(255 * c) for c in colorsys.hsv_to_rgb(hue, 0.8, 1.0))
+
+
 class MaskAnimator:
     """
     Tracks mask activity during a training phase and writes GIF/PNG rasters.
 
     - record_step(m): update the EMA raster each training step; optionally
-      snapshot it as a GIF frame.
-    - record_task(task, m): update the per-task RGB raster at end of task
-      (task % 3 -> blue/red/green channel); optionally snapshot + save PNG.
+      snapshot it as a GIF frame every bw_frame_skip steps.
+    - record_task(task, m): retain each task's latest mask, color it with a
+      distinct categorical hue, and blend colors where task masks overlap.
     - maybe_save_gifs(epoch, suffix): flush GIFs every gif_save_epoch epochs.
     """
 
     def __init__(self, hidden_size, block_dim, gif_duration, gif_save_epoch,
-                 out_dir="artifacts", ema_scale=1.0):
+                 out_dir="artifacts", ema_scale=1.0, bw_frame_skip=1,
+                 spatial_permute=False, spatial_options=None):
+        if bw_frame_skip < 1:
+            raise ValueError("bw_frame_skip must be at least 1")
         self.block_dim = block_dim
         self.gif_duration = gif_duration
         self.gif_save_epoch = gif_save_epoch
         self.out_dir = out_dir
+        self.bw_frame_skip = bw_frame_skip
+        self._step_count = 0
+        self.task_masks = {}
+        self.spatial_permute = spatial_permute
+        self.spatial_options = dict(spatial_options or {})
+        self.permutation = np.arange(hidden_size)
+        self._spatial_initialized = False
 
         # Trail decay of the bw_*.gif EMA channels. Green decays fast (bright
         # head of the trail); red + blue persist, giving the purple mid-trail
@@ -48,13 +67,24 @@ class MaskAnimator:
         n_blocks = hidden_size // (block_dim**2)
         gh, gw = block_dim, n_blocks * block_dim
         self.m_ema = torch.zeros(gh, gw, 3)
-        self.red_net = torch.zeros(hidden_size)
-        self.green_net = torch.zeros(hidden_size)
-        self.blue_net = torch.zeros(hidden_size)
 
         blank = Image.fromarray(np.zeros((gh, gw, 3), dtype=np.uint8), mode="RGB")
         self.frames = [blank.copy() for _ in range(2)]
         self.rgb_frames = [blank.copy() for _ in range(10)]
+
+    def _display(self, raster):
+        """Gather spatial axes only; EMA and archived masks keep neuron IDs."""
+        if not self.spatial_permute:
+            return raster
+        shape = raster.shape
+        indices = torch.as_tensor(self.permutation, device=raster.device)
+        return raster.reshape(-1, *shape[2:])[indices].reshape(shape)
+
+    def _bw_frame(self):
+        return Image.fromarray(
+            (self._display(self.m_ema).cpu().numpy() * 255).astype(np.uint8),
+            mode="RGB",
+        )
 
     def record_step(self, m, snapshot=True):
         """Per-step EMA update of mask activity; snapshot appends a GIF frame."""
@@ -62,34 +92,43 @@ class MaskAnimator:
         for c, decay in enumerate(self.decay):
             self.m_ema[:, :, c] = torch.max(decay * self.m_ema[:, :, c], m_2d)
 
-        if snapshot:
-            frame = Image.fromarray(
-                (self.m_ema.cpu().numpy() * 255).astype(np.uint8), mode="RGB"
-            )
-            self.frames.append(frame)
+        self._step_count += 1
+        if snapshot and self._step_count % self.bw_frame_skip == 0:
+            self.frames.append(self._bw_frame())
 
     def record_task(self, task, m, suffix, snapshot=True):
-        """End-of-task RGB channel assignment: task%3 -> 0:blue, 1:red, 2:green."""
-        ch = task % 3
-        if ch == 0:
-            self.blue_net = m.clone()
-        elif ch == 1:
-            self.red_net = m.clone()
-        else:
-            self.green_net = m.clone()
+        """Save the latest mask of each task, including tasks beyond the first three."""
+        self.task_masks[task] = m.detach().clone()
+
+        if self.spatial_permute:
+            grids = np.stack([
+                mask_to_grid(self.task_masks[t], self.block_dim).cpu().numpy().ravel()
+                for t in sorted(self.task_masks)
+            ])
+            self.permutation = spatial_permutation(
+                grids, tuple(self.m_ema.shape[:2]),
+                self.permutation if self._spatial_initialized else None,
+                **self.spatial_options,
+            )
+            self._spatial_initialized = True
+            # Show the updated layout even at the final block of a run. Older
+            # frames retain the layout in effect when they were recorded.
+            if snapshot:
+                self.frames.append(self._bw_frame())
 
         if snapshot:
-            rgb = torch.stack(
-                [
-                    mask_to_grid(c, self.block_dim)
-                    for c in [self.red_net, self.green_net, self.blue_net]
-                ]
-            )
-            rgb = normalize_mask(rgb) * 255
-            rgb = rgb.permute(1, 2, 0)
-            self.rgb_frames.append(
-                Image.fromarray(rgb.detach().cpu().numpy().astype(np.uint8))
-            )
+            tasks = sorted(self.task_masks)
+            masks = torch.stack([mask_to_grid(self.task_masks[t], self.block_dim)
+                                 for t in tasks]).float()
+            colors = torch.tensor([task_color(t) for t in tasks],
+                                  device=masks.device, dtype=masks.dtype)
+            # A neuron shared by tasks displays their mean color. Inactive
+            # neurons remain black; no task disappears when another is added.
+            weights = masks.unsqueeze(-1)
+            rgb = (weights * colors[:, None, None, :]).sum(0)
+            rgb = rgb / weights.sum(0).clamp_min(1)
+            raster = self._display(rgb).clamp(0, 255).byte().cpu().numpy()
+            self.rgb_frames.append(Image.fromarray(raster, mode="RGB"))
             self.rgb_frames[-1].save(f"{self.out_dir}/rgb{tag(suffix)}.png")
 
     def maybe_save_gifs(self, epoch, suffix):

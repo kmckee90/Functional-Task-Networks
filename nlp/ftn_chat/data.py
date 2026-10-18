@@ -5,10 +5,10 @@ concatenate the matching files, tokenize, cut into non-overlapping windows of
 `chunk_tokens`, cap at the per-task token ceiling, and split into
 train / support / heldout.
 
-Chunks are the SOURCE for context distillation, not training data themselves:
-qa_synth.py turns each chunk into (question, answer, context) triples, and
-train.py distills the teacher-with-context onto the closed-book student. Raw
-chunks are still used for reconfiguration support and routing_check.
+Chunks supply context for distillation: qa_synth.py turns them into (question,
+answer, context) triples, and train.py distills the teacher-with-context onto
+the closed-book student. Optional source CE also trains on train-split chunks.
+Raw chunks serve reconfiguration support and routing_check.
 
 `build_task` builds ONE task (so adding a dataset doesn't rebuild the others);
 `build_tasks` builds several. Run standalone to see per-task counts:
@@ -214,8 +214,7 @@ def build_examples(cfg: Config, tokenizer, key: str, data: DomainData):
     """Build the training pools for one task block.
 
     Returns dict with:
-      qa       - list of distillation examples (see format_distill); the ONLY
-                 pool the student trains on (no raw-text LM training)
+      qa       - list of distillation examples (see format_distill)
       support  - raw support chunks as {recfg} for reference-mask building
     """
     qa = []

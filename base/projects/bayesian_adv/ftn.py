@@ -32,6 +32,7 @@ import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from overlap_regularizer import OverlapRegularizer
 
 
 # =============================================================================
@@ -133,7 +134,7 @@ def task_loss(pred, y, classification: bool = True):
 # =============================================================================
 
 
-class FTN(nn.Module):
+class FTN(OverlapRegularizer, nn.Module):
     """Plain-kWTA masked backbone + task mask + reconfiguration.
 
     forward(x) predicts with the current mask; forward(x, y) reconfigures the
@@ -168,8 +169,13 @@ class FTN(nn.Module):
         reconfig_sample_size: int = 2048,
         reconfig_algorithm: str = "annealste",
         reconfig_noise_scale: float = 1.0,
+        overlap_mode: str = "bump",
+        overlap_lambda: float = 0.0,
+        overlap_threshold: float = 0.5,
+        overlap_temperature: float = 0.2,
     ):
         super().__init__()
+        self.configure_overlap(overlap_mode, overlap_lambda, overlap_threshold, overlap_temperature)
         self.hidden_size = hidden_size
         self.square_dim = square_dim
         self.classification = classification
@@ -316,14 +322,16 @@ class FTN(nn.Module):
         opt = torch.optim.Adam([logits], lr=self.reconfig_lr)
 
         best, best_loss = None, torch.inf
+        reference = self._overlap_reference()
         for i in range(self.reconfig_steps):
             sm = torch.sigmoid(logits)
             tau = logits.detach().std() * math.exp(-i / (self.reconfig_steps / 4))
             noise = torch.randn_like(logits) * tau * self.reconfig_noise_scale
             mask = kwta(logits + noise, self.k) + sm - sm.detach()  # kWTA + STE
+            # mask = kwta(logits + noise, self.k) + logits - logits.detach()  # kWTA + STE
 
             pred = F.linear(z * mask, w)
-            loss = self.loss(pred, y)
+            loss = self._with_overlap(self.loss(pred, y), mask, reference)
             opt.zero_grad()
             loss.backward()
             opt.step()
@@ -348,9 +356,11 @@ class FTN(nn.Module):
 
         logits = nn.Parameter(torch.randn_like(self.m) * 1e-5)
         opt = torch.optim.RMSprop([logits], lr=self.reconfig_lr)
+        reference = self._overlap_reference()
         for _ in range(self.reconfig_steps):
-            pred = F.linear(z * torch.sigmoid(logits), w)
-            loss = self.loss(pred, y)
+            mask = torch.sigmoid(logits)
+            pred = F.linear(z * mask, w)
+            loss = self._with_overlap(self.loss(pred, y), mask, reference)
             opt.zero_grad()
             loss.backward()
             opt.step()
@@ -496,12 +506,15 @@ class BayesFTN(FTN):
 
         # Diffusion toward zero logits is optional; rho=1 is strict persistence.
         prior_logits = (prior_decay * self.mask_logits).detach().clone()
+        reference = self._overlap_reference()
         logits = nn.Parameter(prior_logits.clone())
         opt = torch.optim.Adam([logits], lr=lr)
 
         task_value = kl_value = objective_value = float("nan")
         best_loss, best_mask, best_logits = float("inf"), None, None
         best_kl = best_objective = float("nan")
+        best_selection = float("inf")
+        overlap_value = best_overlap = 0.0
         for i in range(steps):
 
             if self.sample_type == "annealste":
@@ -509,6 +522,7 @@ class BayesFTN(FTN):
                 tau = logits.detach().std() * math.exp(-i / (self.reconfig_steps / 4))
                 noise = temperature*torch.randn_like(logits) * tau * self.reconfig_noise_scale
                 mask = kwta(logits + noise, self.k) + sm - sm.detach()  # kWTA + STE
+                # mask = kwta(logits + noise, self.k) + logits - logits.detach()  # kWTA + STE
             else:
                 soft = torch.sigmoid(logits / temperature)
                 anneal = math.exp(-i/max((steps-1)/3, 10))
@@ -519,8 +533,13 @@ class BayesFTN(FTN):
             task = self.loss(pred, y)
             kl = self._kl_to_prior(logits, prior_logits, temperature)
             objective = task + kl_weight * kl
+            penalty = self._overlap_penalty(mask, reference)
+            objective = self._with_overlap(objective, mask, reference)
+            selection = self._with_overlap(task, mask, reference)
 
-            if self.bayes_reconfig_take_best and task.item() < best_loss:
+            if self.bayes_reconfig_take_best and selection.item() < best_selection:
+                best_selection = selection.item()
+                best_overlap = penalty.detach().item()
                 best_loss = task.item()
                 best_mask = mask.detach().clone()
                 best_logits = logits.detach().clone()
@@ -533,6 +552,7 @@ class BayesFTN(FTN):
             task_value = task.detach().item()
             kl_value = kl.detach().item()
             objective_value = objective.detach().item()
+            overlap_value = penalty.detach().item()
 
         if self.bayes_reconfig_take_best:
             self.mask_logits.copy_(best_logits)
@@ -540,6 +560,7 @@ class BayesFTN(FTN):
             task_value = best_loss
             kl_value = best_kl
             objective_value = best_objective
+            overlap_value = best_overlap
         else:
             self.mask_logits.copy_(logits.detach())
             self.m.copy_(
@@ -550,6 +571,7 @@ class BayesFTN(FTN):
             "task_loss": task_value,
             "kl": kl_value,
             "objective": objective_value,
+            "overlap_penalty": overlap_value,
             "prior_decay": prior_decay,
             "steps": steps,
         }

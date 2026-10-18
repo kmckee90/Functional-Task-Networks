@@ -1,0 +1,112 @@
+{
+  "reviewer": "Assistant qualitative review against cached reference and source; not an independent or blinded judge",
+  "rubric": {
+    "correct": "Answers the requested factual content without a material contradiction",
+    "partial": "Some requested facts correct, but an important omission or factual error remains",
+    "incorrect": "Wrong key fact, hallucination, or failure to answer an answerable question",
+    "unscorable": "Reference/source insufficient or ambiguous; excluded from correctness denominator"
+  },
+  "topics": {
+    "base_ftn": {
+      "questions": 10,
+      "correct_routes": 10,
+      "routing_misses": 0,
+      "methods": {
+        "base": {
+          "correct": 1,
+          "partial": 3,
+          "incorrect": 6,
+          "unscorable": 0,
+          "scored": 10,
+          "fully_correct_fraction": 0.1
+        },
+        "ic": {
+          "correct": 1,
+          "partial": 3,
+          "incorrect": 6,
+          "unscorable": 0,
+          "scored": 10,
+          "fully_correct_fraction": 0.1
+        },
+        "oracle": {
+          "correct": 1,
+          "partial": 3,
+          "incorrect": 6,
+          "unscorable": 0,
+          "scored": 10,
+          "fully_correct_fraction": 0.1
+        }
+      }
+    },
+    "explorer": {
+      "questions": 10,
+      "correct_routes": 9,
+      "routing_misses": 1,
+      "methods": {
+        "base": {
+          "correct": 4,
+          "partial": 2,
+          "incorrect": 3,
+          "unscorable": 1,
+          "scored": 9,
+          "fully_correct_fraction": 0.4444444444444444
+        },
+        "ic": {
+          "correct": 4,
+          "partial": 2,
+          "incorrect": 3,
+          "unscorable": 1,
+          "scored": 9,
+          "fully_correct_fraction": 0.4444444444444444
+        },
+        "oracle": {
+          "correct": 4,
+          "partial": 3,
+          "incorrect": 2,
+          "unscorable": 1,
+          "scored": 9,
+          "fully_correct_fraction": 0.4444444444444444
+        }
+      }
+    },
+    "rl_mt10": {
+      "questions": 10,
+      "correct_routes": 7,
+      "routing_misses": 0,
+      "methods": {
+        "base": {
+          "correct": 1,
+          "partial": 2,
+          "incorrect": 5,
+          "unscorable": 2,
+          "scored": 8,
+          "fully_correct_fraction": 0.125
+        },
+        "ic": {
+          "correct": 4,
+          "partial": 1,
+          "incorrect": 3,
+          "unscorable": 2,
+          "scored": 8,
+          "fully_correct_fraction": 0.5
+        },
+        "oracle": {
+          "correct": 3,
+          "partial": 2,
+          "incorrect": 3,
+          "unscorable": 2,
+          "scored": 8,
+          "fully_correct_fraction": 0.375
+        }
+      }
+    }
+  },
+  "limitations": [
+    "30 cached training questions, not held-out generalization.",
+    "Assistant review is not blinded or independently verified.",
+    "Three questions excluded for defective or insufficient reference/source.",
+    "Greedy generation, thinking disabled as in current app, 384-token cap. Outputs that hit the cap are explicitly marked.",
+    "Oracle uses the topic label for diagnosis only.",
+    "A separate four-question probe used the training open-think prefix; all four exhausted 384 tokens without a final answer. It is not included in correctness scores and does not settle whether a larger thinking budget would help."
+  ]
+}

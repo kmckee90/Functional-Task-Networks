@@ -36,7 +36,7 @@ import torch
 from config import CFG
 from data import build_examples, build_task
 from model import build, load_bank
-from perplexity_configurer import PerplexityConfigurer
+from bayes_configurer import BayesianPerplexityConfigurer, ReactiveState
 
 
 def overlap(a, b, k):
@@ -51,8 +51,8 @@ def parse_args():
                    help="number of Q&A questions reconfigured per task, sampled "
                         "WITH replacement (so it may exceed the pool size); "
                         "defaults to the per-task training step budget")
-    p.add_argument("--steps", type=int, default=CFG.train_reconfig_steps,
-                   help="reconfig inner steps per chunk (default: training value)")
+    p.add_argument("--steps", type=int, default=CFG.bayes_reconfig_steps,
+                   help="stable posterior steps per question")
     p.add_argument("--out", default="refs_usage.pt", help="filename under ckpt_dir")
     return p.parse_args()
 
@@ -76,15 +76,25 @@ def main():
     model.config.use_cache = False          # reconfig keeps its own small graph
     model.eval()
     dev = next(model.parameters()).device
-    cfgr = PerplexityConfigurer(CFG, ctrl)
+    state = json.loads(state_p.read_text())
+    detector = state.get("reactive") if state.get("detector_objective") == "prompt_nll" else None
+    cfgr = BayesianPerplexityConfigurer(CFG, ctrl, detector)
+    posterior_p = CFG.ckpt_dir / "posterior.pt"
+    if posterior_p.exists():
+        cfgr.load_state_dict(torch.load(posterior_p, map_location="cpu", weights_only=True))
+    initial_posterior = cfgr.state_dict()
 
     refs = {}
     t0 = time.time()
     for ti, key in enumerate(keys):
+        # Each domain starts from the same trained posterior, so the display
+        # weights do not depend on which domain was processed first.
+        cfgr.load_state_dict(initial_posterior)
+        cfgr.detector = ReactiveState(detector)
         data = build_task(CFG, tok, key)
         pool = build_examples(CFG, tok, key, data)["qa"]
         if not pool:
-            print(f"  ! {key}: no Q&A pairs (data_cache/qa/{key}.json) -- skipped",
+            print(f"  ! {key}: no Q&A pairs ({CFG.data_cache / 'qa' / (key + '.json')}) -- skipped",
                   flush=True)
             continue
         n = args.per_task

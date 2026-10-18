@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="utf-8"/><meta content="width=device-width,initial-scale=1" name="viewport"/>
+<meta content="An intelligence that develops through its own experience. A research proposal connecting autonomous exploration, retained abilities, and cumulative learning." name="description"/>
+<meta content="#080a0d" name="theme-color"/>
+<title>Proposal — Nascent AGI</title>
+<link href="media/641b73161956-favicon.svg" rel="icon" type="image/svg+xml"/><link href="media/125c6ae3e0c0-style.css" rel="stylesheet"/>
+
+<link href="media/0ec7807c8fac-proposal.css" rel="stylesheet"/>
+
+
+<link href="media/12262c8ea880-projects.css" rel="stylesheet"/>
+
+<script defer="True" src="offline.js"></script></head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header><a aria-label="Nascent AGI home" class="wordmark" href="index.html"> Nascent <b>AGI</b></a><button aria-controls="nav" aria-expanded="false" class="menu-toggle" id="menu-toggle">Menu <span>＋</span></button><nav aria-label="Main navigation" id="nav"><a aria-current="page" class="active" href="index.html">Proposal</a><a href="projects.html">Results</a></nav><span class="header-note"><i></i> Research in progress</span></header>
+<main class="fade-in" id="main" tabindex="-1"><div class="wrap"><article class="proposal-paper"><!-- This is the live proposal source. Edit prose/headings normally. Move each <figure>...</figure> block to move its media and caption. The short editing guide is in PROPOSAL_EDITING.txt. -->
+<h1>Nascent: Autonomous Self-Improving Intelligence</h1>
+<p>Brain-inspired continual learning | Deeper, smarter exploration | Flexible neural representation</p>
+<figure class="proposal-film">
+<video aria-label="FTN–M2E exploration in Globo" controls="" playsinline="" poster="media/08302f007cee-ftn-m2e-montage.jpg" preload="metadata" src="media/0e72655e4faa-ftn-m2e-montage-smooth-climbing-preview.mp4"></video>
+<figcaption>The primordial AGI: self-improving exploration with brain-like learning, representation, and planning.</figcaption>
+</figure>
+<div aria-label="Annotated moments from Nascent's exploration" class="annotation-thumbnails">
+<a href="media/c9c96ef9a6cd-01_observation_goal_and_ftn.png" rel="noopener" target="_blank"><img alt="Explanation of the observation, remembered goal, and active FTN neurons" loading="lazy" src="media/c9c96ef9a6cd-01_observation_goal_and_ftn.png"/><span>Observation, goal &amp; FTN</span></a>
+<a href="media/b2b35c44cda4-02_punched_wolf.png" rel="noopener" target="_blank"><img alt="Agent punches a wolf" loading="lazy" src="media/b2b35c44cda4-02_punched_wolf.png"/><span>Punched wolf</span></a>
+<a href="media/48a837a988f2-03_goal_and_brain_state_change.png" rel="noopener" target="_blank"><img alt="Before and after: changing exploration goal and neural state" loading="lazy" src="media/48a837a988f2-03_goal_and_brain_state_change.png"/><span>Changing goal &amp; brain state</span></a>
+<a href="media/1b032d9ea8af-04_jump_off_wolf.png" rel="noopener" target="_blank"><img alt="Agent climbing near a wolf: learns to jump off the wolf?" loading="lazy" src="media/1b032d9ea8af-04_jump_off_wolf.png"/><span>Jumping off a wolf?</span></a>
+<a href="media/4827423b59f7-05_collecting_nuts.png" rel="noopener" target="_blank"><img alt="Gathering health-regenerating nuts from a tree" loading="lazy" src="media/4827423b59f7-05_collecting_nuts.png"/><span>Gathering nuts</span></a>
+</div>
+<figure class="result-figure">
+<a href="media/2c4a8345e93e-globo-ftn-seed19.png" rel="noopener" target="_blank"><img alt="Spatial discoveries for FTN+Metalearn2Explore, Metalearn2Explore, Plan2Explore, and Dreamer" loading="lazy" src="media/2c4a8345e93e-globo-ftn-seed19.png"/></a>
+<figcaption>Cumulative spatial discovery at matched observation counts.</figcaption>
+</figure>
+<p>Watch above the <a href="projects-globo.html">first prototype of Nascent</a>: Using exploration to feed continual learning, and continual learning to make exploration smarter.
+Nascent explored the open world of Globo 6x faster and further than DreamerV3 and Plan2Explore.</p>
+<p><a href="projects-globo.html">Exploring the world of Globo: results and demonstrations ↗</a></p>
+<h2>Summary</h2>
+<p>Real, self-scaling Artificial General Intelligence requires a fundamental shift in approach that starts with autonomous learning.
+Mastery of an environment requires deeply exploring the scope and mechanics of that environment and translating them into robustly retained knowledge and skills.
+Here, I will propose, design, and even demonstrate such an autonomous agent with emergent, native capabilities arising from a rich first-person experience.
+I will demonstrate techniques for highly efficient, naturalistic exploration and neocortex-inspired continual learning, both developed here at the Astera Institute to
+specifically target this vision of AGI.
+Together, these techniques will form the fundamental ingredients of a self-improving agent.</p>
+<p>Watch above as a prototype of Nascent navigates Globo, our open world survival benchmark.</p>
+<p>For full details, check out the papers:</p>
+<p><a href="https://arxiv.org/pdf/2503.02831">Meta-Learning to Explore via Memory Density Feedback ↗</a></p>
+<p><a href="media/a582f92cfbe0-FTN.pdf">Fully Autonomous Continual Learning and Knowledge Transfer via Cortex-Inspired Neural Assemblies ↗</a></p>
+<h2>Problem with current AI</h2>
+<p>Current state of the art AI relies on Artificial Neural Networks (ANN).
+ANNs provide general learning from data, but cannot retain their solutions unless the data distribution is well represented throughout training.
+Reinforcement learning provides a general method of long-range credit assignment and planning, but only when a reward function is well defined and easily observed.
+Robust AGI can expect none of these luxuries: the world constantly changes, and reward functions are just an experimental way that we inject our own knowledge.
+To effectively leverage ANNs, a method of continual learning is needed that can automatically make the numerous decisions involved in neural resource allocation, protection, and updating.
+To exploit the generality of RL, the reward function must be internally generated to drive an intrinsic self-improvement loop.</p>
+<p>While Large Language Model (LLM) based Agents have become extremely capable, they are not truly autonomous.
+Updating their network weights at-scale is a manual engineering endeavor that costs tens to hundreds of millions of dollars in data and computation.
+The data are invariably human artifacts ranging from web scraping to remote teleoperations.
+LLM training is therefore limited to these artifacts and to learning a flattened projection of the real experiences and intelligence that led to their creation.</p>
+<h4>Inadequacy of continual learning methods</h4>
+<p>Existing continual learning methods do not have the required autonomy or generality for AGI.
+The most well known, general-purpose continual learning algorithms only target domain shift, require task labels, and involve other manual interventions.
+Furthermore, they do not reflect or exploit what is known about cortical organization, which offers deep hints into the preservation of memories and skills over a lifetime.</p>
+<h4>Inadequacy in exploration methods</h4>
+<p>Exploration methods similarly all target specific aspects of training and leave major domains unaddressed.
+No one has found a combination of exploration drives and architectures that results in reliable self-improvement over arbitrary problem domains.
+Most methods predictably fail when deployed to randomized or noisy environments.
+Most also reduce to some structured placement of random actions instead of allowing the agent to learn more intelligent ways to explore over time.
+Natural, human-like exploration is a progression of increasingly sophisticated exploitations of environmental and control regularities,
+culminating in hypothesis testing and scientific reasoning.</p>
+<h2>Solutions for AGI</h2>
+<p>At Astera, I have found novel solutions to both of these problems: (1) a meta-learning-based exploration (M2E) and (2) cortex-inspired continual learning, called functional task networks (FTN).
+When investigating these new ideas, I specifically targeted Astera's goals for naturalistic, brain-like AGI, while aiming to introduce new capabilities, not just incremental performance gains.</p>
+<h3>Metalearning to Explore (M2E)</h3>
+<p>M2E introduces a concise principle with far-reaching implications for intelligence:
+Maximize discovery by learning the environmental regularities and behaviors that maximize novelty in real-time.
+When the environment is unpredictable, M2E leverages its internal compasses to make immediate progress.</p>
+<p>M2E uses internal, real-time feedback about what is new to adjust its exploration strategy and goals.
+It remembers many different frontiers of its search paths and plans offline ways to return to them.
+This combination of tactics and planning means that M2E explores faster as it makes progress.</p>
+<h4>Blind mazes: An unrealistically hard challenge</h4>
+<p>Watch below as M2E completely explores blind mazes in continuous action space, reaching nearly 100% coverage in under 100,000 steps.
+This environment was designed to be a strict, challenging exploration problem.
+In each maze, the agent only recieves its own coordinates, so it has to infer the presence of each wall.
+In the fixed maze, each episode is 100 steps and starts in the center.
+Its online, running sense of familiarity with each coordinate allows it to make progress rapidly in this test.
+It also handles variations of the maze designed to thwart other exploration algorithms, including randomized walls and large mazes with no reset point.</p>
+<figure class="proposal-film">
+<video aria-label="Blind Maze Exploration" controls="" playsinline="" poster="media/9c4c290f9600-maze-m2e.jpg" preload="metadata" src="media/ffe9c6ec86e9-maze-m2e.mp4"></video>
+<figcaption><strong>Blind Maze Exploration</strong></figcaption>
+</figure>
+<p>These experiments establish that M2E is radically more efficient than Go-Explore and other state of the art algorithms, and it is applicable to far more environments and problem classes.</p>
+<p><a href="https://arxiv.org/pdf/2503.02831">M2E paper ↗</a></p>
+<p><a href="projects-maze.html">Maze exploration ↗</a></p>
+<h4>Globo: An open world</h4>
+<p>In Globo, M2E beats DreamerV3 with novelty rewards and its more advanced Plan2Explore (P2E) spinoff.
+Dreamer and P2E rely on model-based rewards, so their initial progress is blocked by model training, and they are prone to becoming addicted to noise and other uninteresting sources of randomness (the "Noisy TV" problem).</p>
+<div class="result-grid">
+<figure class="result-figure">
+<a href="media/cc7704af7863-globo-seed-19.png" rel="noopener" target="_blank"><img alt="M2E, Dreamer and Plan2Explore spatial coverage" loading="lazy" src="media/cc7704af7863-globo-seed-19.png"/></a>
+<figcaption>At 223,000 observations: M2E visits 1,102 distinct ground cells, Dreamer 185, and Plan2Explore 410.</figcaption>
+</figure>
+<figure class="result-figure">
+<a href="media/a02a1d2848f7-globo-seed-101.png" rel="noopener" target="_blank"><img alt="M2E, Dreamer and Plan2Explore spatial coverage in the second world" loading="lazy" src="media/a02a1d2848f7-globo-seed-101.png"/></a>
+<figcaption>At 446,000 observations: M2E visits 1,556 distinct ground cells, Dreamer 1,015, and Plan2Explore 651.</figcaption>
+</figure>
+</div>
+<p>These gains come from two major sources: exploring earlier and learning to explore smarter along the way.
+This is possible because M2E uses memory density as a model-free novelty metric.
+As such, it is entirely compatible with additional model-based novelty metrics, including Dreamer's,
+so the methods compared here are complementary, potentially offering different benefits at different stages of development.</p>
+<h3>Functional Task Networks (FTN)</h3>
+<p>To solve continual learning, FTN uses insights about cortical connectivity, cellular complexity, population firing statistics, and attractor dynamics.
+How does the brain perform continual learning so effortlessly, and what if we designed our neural networks more like cortical tissue?
+What if each cell were a complex, trainable unit, and populations of such cells rapidly self-organized to meet the needs of each situation?</p>
+<p>FTN represents different learned functions through distributed, overlapping neural assemblies.
+These assemblies retain distinct resources while also sharing transferable components.
+FTN therefore allows a network to represent multiple, conflicting models or hypotheses of the data, each observed separately in time.</p>
+<p>FTN uses an optimization outer-loop to autonomously recruit neural assembllies.
+When the data are familiar, it recruits previous, well-trained solutions.
+In unfamiliar situations, it recombines and adapts learned components to develop new solutions while protecting previous learning from interference.
+This flexibility comes from representing each task across overlapping neural assemblies that can be preserved, reactivated, and recombined- a design inspired by the brain’s distributed organization.</p>
+<p>Watch a real-time visualization of FTN training on 3 classification tasks, separated in time, without forgetting: </p>
+<figure class="proposal-film">
+<video aria-label="Learning and recall of classifiers" controls="" playsinline="" poster="media/57e83c266de2-ftn-classification.jpg" preload="metadata" src="media/1dd09e136bae-ftn-classification.mp4"></video>
+<figcaption><strong>Learning and recall of classifiers</strong>Three classification functions are trained into one network in sequence. Each is then recalled and trained further, without additional loss from interference with the other functions.</figcaption>
+</figure>
+<p>In the above clip, the left shows the data-generating function. The center shows the data samples superimposed on the network's learned solution. The right shows which "neurons" are active in the network, reconfiguring into distinct, trainable populations for each task.</p>
+<p><a href="media/a582f92cfbe0-FTN.pdf">FTN manuscript ↗</a></p>
+<p><a href="projects-classification.html">Solving continual learning ↗</a></p>
+<h4>Retaining earlier solutions and preparing for new ones</h4>
+<p>To better demonstrate the benefit of FTN, I trained a standard neural network on 16 tasks in sequence.
+Plotting the accuracy of each task over time (left panel, below), as each new task is introduced, shows that nothing is retained (lower triangle of the matrix), and nothing generalizes to unseen tasks (upper triangle).
+When FTN is used (right panel), previously seen tasks are retained without loss and unseen tasks gradually become easier to approximate with the available neurons.
+The task-boundary detection, retention, recall, and forward transfer are all handled by the self-organizing behavior of the neural population.
+There is no comparable set of mechanisms in standard ANNs, and no comparable autonomy to other available continual learning strategies.</p>
+<div class="result-grid">
+<figure class="result-figure">
+<h3>Ordinary sequential learning</h3>
+<a href="media/fb642ab36e48-ftn-unmasked.png" rel="noopener" target="_blank"><img alt="Ordinary network accuracy across 16 sequential classification tasks" loading="lazy" src="media/fb642ab36e48-ftn-unmasked.png"/></a>
+<figcaption>Earlier solutions are overwritten.</figcaption>
+</figure>
+<figure class="result-figure">
+<h3>Functional Task Networks</h3>
+<a href="media/56f827a41cdd-ftn-assemblies.png" rel="noopener" target="_blank"><img alt="FTN accuracy across the same 16 sequential classification tasks" loading="lazy" src="media/56f827a41cdd-ftn-assemblies.png"/></a>
+<figcaption>Earlier solutions are retained; performance on untrained tasks improves. Original manuscript figures. White means higher accuracy. Below the diagonal: performance on tasks already learned. Above the diagonal: performance on tasks not yet trained.
+</figcaption>
+</figure>
+</div>
+<h4>Baseline comparisons</h4>
+<p>Most continual learning methods are not fairly comparable to FTN because they either or all of (1) fail to implement any autonomy (2) address concept shift, i.e., changing output mappings over time (3) do not perform forward and/or backward knowledge transfer, (4) require task labels or other human-provided information or control.
+I compared FTN against the closest popular methods from the literature: Supermasks in Superposition (SupSup), Progressive Nets, and the standard replay buffer.
+FTN can perform the same roles of each of these at least as well, but each fails on some criterion that FTN was designed to meet.</p>
+<figure class="result-figure">
+<a href="media/507621c8277d-baselines_table.png" rel="noopener" target="_blank"><img alt="Comparison of continual-learning capabilities" loading="lazy" src="media/507621c8277d-baselines_table.png"/></a>
+<figcaption>FTN was designed around missing capabilities for AGI, not for incremental improvements</figcaption>
+</figure>
+<p>SupSup is similar but only allows selection of fixed random features, so its training depth and expressivity are limited, and there is no learning that could be transferred forward or backward.
+Progressive nets provides forward, but not backward transfer, and require task labels or manual control at task boundaries.
+Replay buffers remain a simple and autonomous but expensive option, and they offer no way to handle concept shift.
+If more than one mutually exclusive solution (i.e., competing theories, hypotheses) are learnable from the data, their gradients will cancel out and the agent will learn neither.
+FTN was made to supply these <strong>missing capabilities</strong>, not for incremental improvement.</p>
+<div class="result-grid">
+<figure class="result-figure">
+<a href="media/1165a25d802c-ftn-accuracy.png" rel="noopener" target="_blank"><img alt="FTN and baseline retained classification accuracy" loading="lazy" src="media/1165a25d802c-ftn-accuracy.png"/></a>
+<figcaption>Retained accuracy on shared-shuffle MNIST.</figcaption>
+</figure>
+<figure class="result-figure">
+<a href="media/34190c5b6317-ftn-headstart.png" rel="noopener" target="_blank"><img alt="FTN and baseline new-task starting loss" loading="lazy" src="media/34190c5b6317-ftn-headstart.png"/></a>
+<figcaption>New-task starting loss, before weight training. Lower is better. Means over five seeds, redrawn from the FTN manuscript’s comparison table.</figcaption>
+</figure>
+</div>
+<p>Backward transfer asks whether learning later tasks helps or harms earlier ones. In a six-task language-model experiment, FTN-LoRA improves earlier-task accuracy by an average of 19 percentage points. Ordinary sequential LoRA loses 47 points, and LoRA with replay loses 9. The network can use later experience to improve what it learned before.</p>
+<figure class="result-figure">
+<a href="media/c489cf23acd4-ftn-backward-transfer.png" rel="noopener" target="_blank"><img alt="Backward transfer: sequential LoRA minus 47, LoRA with replay minus 9, and FTN-LoRA plus 19 percentage points" loading="lazy" src="media/c489cf23acd4-ftn-backward-transfer.png"/></a>
+<figcaption>Six-task Qwen2.5 classification stream; means over five seeds, redrawn from the FTN manuscript. Positive values mean earlier abilities improved after learning later tasks.</figcaption>
+</figure>
+<p>Both M2E and FTN were designed to be assumption-free and "hands off": in M2E, the environment may be predictable or random, continuous or discrete, repetitious or not.
+With FTN, new tasks can flow through the network without any identifying labels, may represent contradictory solutions, or may represent complementary solutions over disjoint spaces.</p>
+<h4>Scalability: FTN-LoRA for Diffusion Transformers and LLMs.</h4>
+<p>There are no constraints on how either M2E or FTN can be applied to ANNs generally.
+Generative modeling - <a href="projects-chatftn.html">transformers</a>, <a href="projects-diffusion.html">diffusion</a>, all state-of-the-art techniques are applicable.
+By making each neuron in FTN a Low Rank Adapter (LoRA), any weight matrices from any model can be turned into an autonomously recombinant population.
+I demonstrate this in two cases: continual pre-and-post-training of LLMs and continual post-training of a generative image Diffusion Transformer.</p>
+<p>To test continual LLM pretraining, I compared Transformer+FTN against a standard Transformer, Transformer+TTT, and Transformer MoE over 5,000 WikiText updates followed by 5,000 CodeParrot updates.
+The MoE and FTN models were parameter matched on both active and total parameters.
+The FTN curve shows the replay-free run evaluated with its repaired input-conditioned mask.
+As with the other application domains, forgetting is nearly eliminated here.
+FTN also shows a better head-start than the Transformer or MoE, similar in effect to TTT's adaptation, prior to training codeparrot.</p>
+<figure class="result-figure">
+<a href="media/d4b94f740537-continual_pretraining_nlp_moe.png" rel="noopener" target="_blank"><img alt="Continual pretraining: Transformer, Transformer+TTT, Transformer MoE in blue, and Transformer+FTN in red" loading="lazy" src="media/d4b94f740537-continual_pretraining_nlp_moe.png"/></a>
+<figcaption>Validation loss during 5k WikiText / 5k CodeParrot sequential training. Transformer+FTN is the original replay-free run; the corrected-optimizer rerun is still in progress.</figcaption>
+</figure>
+<p>The results in image generation with Diffusion Transformers are also very encouraging.
+<a href="projects-diffusion.html">FTN-LoRA remembers 11 new, niche image domains trained sequentially with only 5% of their data retained</a>.
+The image domains include several faces, distinct objects, and image filters, testing various levels of routing difficulty.
+Faces propose a challenging problem: the differentiating signals are minor facial features, set against uninformative backgrounds and clothing.
+In this case, the 5% data budget was sufficient to repair generative solutions at the overlap between populations.
+An alternative version with no replay whatsoever also performed well.</p>
+<h2>Nascent: Early Results</h2>
+<p>The first Nascent prototype combines M2E's drive to explore with FTN's ability to retain and reuse what it learns. In Globo, these agents receive no external rewards or destinations. Across six runs per model, M2E and FTN-M2E explore far more widely than Plan2Explore (P2E). FTN-M2E pulls ahead of M2E later in spatial exploration and discovers more distinct achievements, suggesting that continual learning becomes increasingly useful as experience accumulates.</p>
+<div class="result-grid">
+<figure class="result-figure"><a href="media/bb6348fc37e3-replicates-total_cells.svg" rel="noopener" target="_blank"><img alt="Mean spatial exploration and full range across repeated Globo runs" loading="lazy" src="media/bb6348fc37e3-replicates-total_cells.svg"/></a><figcaption>Spatial exploration across repeated runs.</figcaption></figure>
+<figure class="result-figure"><a href="media/91f64c4fb767-replicates-achievements.svg" rel="noopener" target="_blank"><img alt="Mean unique achievements and full range across repeated Globo runs" loading="lazy" src="media/91f64c4fb767-replicates-achievements.svg"/></a><figcaption>Distinct achievements and discoveries across repeated runs.</figcaption></figure>
+</div>
+<p class="result-source">Lines show means; shading shows the full range. Six matched learner seeds per model, all in world 19: Phase 4 M2E and FTN-M2E, and Phase 5 P2E runs 1–6. Each curve ends at its model's shortest run, so the number of contributing runs stays fixed.</p>
+<p>The difference is visible in where the agents go. In the long-run maps below, DreamerV3 and P2E often remain near trenches or follow narrow paths across the landscape. M2E and FTN-M2E spread through a much broader area, finding routes into the dense forest and returning to explore beyond familiar ground. These are early results, but they show the intended relationship between exploration and learning: retained experience helps the agent discover more. <a href="projects-globo.html">See the Globo results in detail</a>.</p>
+<div class="globo-map-grid">
+<figure class="result-figure"><a href="media/d0a3b886d057-phase2_dreamer_s19.png" rel="noopener" target="_blank"><img alt="DreamerV3 exploration map in world 19" loading="lazy" src="media/d0a3b886d057-phase2_dreamer_s19.png"/></a><figcaption><strong>DreamerV3</strong>545,060 observations</figcaption></figure>
+<figure class="result-figure"><a href="media/b2bf1dac26c0-phase2_p2e_s19.png" rel="noopener" target="_blank"><img alt="Plan2Explore exploration map in world 19" loading="lazy" src="media/b2bf1dac26c0-phase2_p2e_s19.png"/></a><figcaption><strong>Plan2Explore (P2E)</strong>475,650 observations</figcaption></figure>
+<figure class="result-figure"><a href="media/6ea79c4cde2a-phase2_m2e_s19.png" rel="noopener" target="_blank"><img alt="M2E exploration map in world 19" loading="lazy" src="media/6ea79c4cde2a-phase2_m2e_s19.png"/></a><figcaption><strong>M2E</strong>359,520 observations</figcaption></figure>
+<figure class="result-figure"><a href="media/a43f575925de-phase2_conv_s19.png" rel="noopener" target="_blank"><img alt="FTN-M2E exploration map in world 19" loading="lazy" src="media/a43f575925de-phase2_conv_s19.png"/></a><figcaption><strong>FTN-M2E</strong>297,409 observations</figcaption></figure>
+</div>
+<p class="result-source">These example runs have different lengths: M2E and FTN-M2E explored farther despite taking substantially fewer steps—FTN-M2E used only a little over half as many as DreamerV3. All maps show world 19 on the same terrain and scale, with observation counts labeled above. Yellow–red indicates repeated visits. Click any figure to enlarge.</p>
+<h2>Plan</h2>
+<p>I will develop Nascent, an agent with exploration and continual learning ability, and deploy it to naturalistic, open-world environments (Globo, Minecraft, real robots).
+The agents will run for long lifetimes and accumulate knowledge and innovations as a result of their own internal drive toward discovery.
+The central goal of this project is to perfect the feedback loop between exploration and learning that causes flexible representation and reasoning to naturally emerge.
+Nascent will be compatible with state-of-the-art foundation models, planning, and reasoning systems where applicable and necessary, but it will avoid becoming bottlenecked on the specific limitations of those existing techniques in favor of emergent, autonomous, and brain-like neural solutions.</p>
+<p>I aim to demonstrate emergent scientific behavior and reasoning in an autonomous, embodied agent by 2028.
+In 2027, I will focus on the development flywheel, pushing capabilities forward while building a team.
+By then, I will have established the autonomous foundations: an agent that trains and scales itself.
+Q1 will focus on accelerating the prototype by including complementary novelty rewards and interfacing foundation models.
+Q2 will focus on obtaining achievements on Globo, bridging success to other domains, and charting a path toward emergent science.
+Q3 aims to further hasten its technological discoveries, including introducing multi-agent cooperation.
+Q4 will focus on demonstrating primitive reasoning behaviors like hypothesis testing and rule induction.</p>
+<p>In short, the agent's self-improvement loop is the foundational framework.
+Subsequent work just makes its job easier and faster, including improvements to its ability to represent, plan, and even communicate with other agents and humans.</p>
+<h3>Previously</h3>
+<ol aria-label="Research timeline" class="research-timeline">
+<li class="timeline-complete">
+<div class="timeline-date">Summer 2024</div>
+<div class="timeline-content"><p>Released M2E paper with maze experiments showing it beats Go-Explore.</p></div>
+</li>
+<li class="timeline-complete">
+<div class="timeline-date">September 2025</div>
+<div class="timeline-content"><p>First positive findings on early FTN prototypes.</p></div>
+</li>
+<li class="timeline-complete">
+<div class="timeline-date">June 2026</div>
+<div class="timeline-content"><p>Presented complete FTN results with continual learning in:</p><ul><li>Classification</li><li>Reinforcement learning</li><li>Behavior cloning (robotics)</li><li>Simple NLP challenges</li></ul></div>
+</li>
+<li class="timeline-present">
+<div class="timeline-date">October 2026 <span>Present</span></div>
+<div class="timeline-content"><p>Milestones:</p><ul><li>Scalable variational-Bayes FTN formulation: Image Diffusion, LLMs</li><li>M2E beats Plan2Explore on Globo</li><li>FTN beats TTT on continual learning</li></ul></div>
+</li>
+</ol>
+<ol aria-label="Foundations" class="research-timeline">
+<li class="timeline-planned">
+<div class="timeline-date">December 2026 <span>Foundations</span></div>
+<div class="timeline-content"><p>First set of complete FTN-M2E prototypes on Globo demonstrating reliable improvement over M2E due to FTN.</p><ul><li>Simple policy-FTN architectures (current)</li><li>Model-free planning via a latent environment graph and options</li><li>Incorporating DreamerV3 model’s novelty signal</li></ul><p>Establish consistent Globo benchmarks and scoreboard: achievements, spatial coverage, survival times.</p><p class="timeline-hiring">Hiring</p></div>
+</li>
+</ol>
+<h3>2027: The capabilities flywheel</h3>
+<ol aria-label="2027 capabilities flywheel" class="research-timeline">
+<li class="timeline-planned">
+<div class="timeline-date">March 2027 <span>Q1 · Acceleration</span></div>
+<div class="timeline-content"><p>Milestones:</p><ul><li>Clear utilization of multiple novelty signals: Density, prediction error, reconstruction error</li><li>Integration of external rewards</li><li>Efficient world-model training<ul><li>ViT / video DiT integration</li></ul></li><li>VLM-assisted exploration—using embeddings for context and novelty</li></ul><p class="timeline-hiring">Hiring</p></div>
+</li>
+<li class="timeline-planned">
+<div class="timeline-date">June 2027 <span>Q2 · Achievements</span></div>
+<div class="timeline-content"><p>Milestones:</p><ul><li>Advanced skills: tool usage, block construction</li><li>Advanced survival: egg laying</li><li>Improved survival times</li></ul><p>Outline paths to higher novelty: more abstract novel achievements.</p><p>Outline path to emergent science.</p><p class="timeline-hiring">Hiring</p></div>
+</li>
+<li class="timeline-planned">
+<div class="timeline-date">September 2027 <span>Q3 · COOPERATION</span></div>
+<div class="timeline-content"><p>Milestones:</p><ul><li>First steps executing on path to higher forms of novelty and emergent science</li><li>Multi-agent experiments: cultural evolution, social learning</li><li>Speed up tech discovery via multiple interacting agents</li><li>Inter-agent communication: Native vs LLM-assisted</li></ul></div>
+</li>
+<li class="timeline-planned">
+<div class="timeline-date">December 2027 <span>Q4 · SCIENCE</span></div>
+<div class="timeline-content"><p>Milestones:</p><ul><li>Advanced agent testing hypotheses, learning rules and theories of its open world</li></ul></div>
+</li>
+<li class="timeline-planned">
+<div class="timeline-date">2028 and beyond <span>Expansion and safety</span></div>
+<div class="timeline-content"><ul><li>Expand applications</li><li>Plans for managing safety</li><li>Interpretability</li></ul></div>
+</li>
+</ol>
+<h3>Resources and Personnel</h3>
+<h5>Hardware</h5>
+<p>This project will require a sizable compute and token budget. Self-development and continual learning means agents will eventually run continuously for weeks to months. Exploration is also inherently a highly variable process. To reliably establish an improvement to performance, we will need to perform several long runs of competing models over many seeds (e.g., <a href="projects-globo.html">6 seeds reveal reliable improvement of FTN-M2E over M2E</a>). For a point of reference, the experiments done for this proposal used no more than 12 GPUs at any point.</p>
+<h5>Personnel</h5>
+<p>AI coding has been indispensable for moving quickly and incorporating modules.
+Interfacing the original Dreamer code with a new environment used to take days.
+Now it takes 5 minutes.
+The role of humans has therefore moved away from coding and toward the insightful thinking that AI coders still cannot do.</p>
+<p>My priorities for building a team thus include researchers that can overcome theoretical obstacles, thinking broadly but practically about the core uncertainties of the project. In particular, FTN is based on a broad picture of how many cortical motifs likely interact, translated into machine learning.
+That is the level of translation that I will look for in candidates. Second, I may need engineers with specific industry domain experience, e.g., post-training language and video models.
+Bleeding-edge areas of machine learning in the industry still require human expertise over agentic coding.
+In 2027, I aim to hire a minimum of 2, maximum of 6 people.
+A team of 3 or 4 can move very quickly and coordinate tightly, with a couple extra spots for headroom as the project expands in its first year.</p>
+<h2>Contributions to Technology</h2>
+<p>This proposal concerns a form of intelligent, self-improving autonomy that is simply not present in current technology.
+As an autonomous AGI, Nascent can grow to participate in, contribute to, and change society in ways that humans cannot alone.
+The agent will be capable of pursuing its own intrinsic scientific goals, invent technologies, and propose theories that are not just
+statistical interpolations of existing literature.
+Rather, science and engineering are the natural extensions of its fundamental exploration and learning design.</p>
+<p>Successful demonstration of this AGI approach itself will represent a leap in capabilities and opportunities.
+If the agent can master natural open-world environments, then it can be extended to robotics, eventually eliminating the need for massive, contrived human datasets to every possible motor skill.
+We can also revise the role of LLMs in broader agentic systems, grounding language representation in multimodal first-person experience,
+motor control, and self-modeling.</p>
+<h2>Contributions to Neuroscience</h2>
+<p>FTN is based closely on several brain mechanisms and serves as a testable theory of continual learning and distributed representation in the neocortex.
+FTN provides a principle for network self-assembly at the levels of dendrites, neurons, and cortical columns.
+The FTN-LoRA architecture in particular resembles dendritic redundancy and selection.
+Spatial consolidation in FTN results in "mesoscale functional units" or even cortical columns, strongly resembling those seen
+in mammals corresponding to different skilled motor behaviors.</p>
+<p>M2E stands to contribute to our theories of human curiosity and exploration by demonstrating extremely fast
+exploration progress and the open-ended learning of exploration skills.
+When humans do not know what to do in novel situations, we do not begin taking random actions and we do not probe
+for every possible uninteresting fact.
+Rather, we take routes that provide the most useful information that allows us to learn the fastest.
+This is the general intuition behind M2E: not just training the network to do the next novel thing,
+but training it to skillfully seek out the most efficient routes to the largest discoveries.</p>
+<h2>Safety and experimental control</h2>
+<p>Any successful AGI program must anticipate the consequences of increasingly autonomous learning and action.
+Grounding an agent in first-person experience does not necessarily make it more trustworthy.
+Specified intrinsic drives do not guarantee that its behavior will serve human goals.
+The relationship between what we reward, what the agent learns, and what it actually does must remain an explicit object of study.</p>
+<p>Current experiments take place in simulated worlds with a limited set of available actions.
+Runs are monitored, their behavior and progress are logged, and checkpoints allow learning to be paused and resumed.
+I will keep expansion into external tools, broader environments, or physical systems subject to separate capability and safety evaluations.</p>
+<p>As the agent acquires new capabilities, the program must develop more specific tests for unwanted behavior and more specific conditions for intervention.
+Resource limits and human oversight are useful controls, but neither is a complete safety argument.
+Further stages of the research will require correspondingly stronger evidence and safeguards.</p>
+<p><a href="projects.html">Browse results ↗</a></p>
+</article></div></main>
+<footer><a class="wordmark" href="index.html">Nascent <b>AGI</b></a><span>Naturalistic autonomy, emergent capabilities.</span><span>Independent research · 2026</span></footer>
+<dialog aria-label="Image viewer" id="lightbox"><button aria-label="Close image" class="close">×</button><img alt=""/><div class="lightbox-navigation" hidden=""><button aria-label="Previous image" class="previous" type="button">←</button><span aria-live="polite" class="image-count"></span><button aria-label="Next image" class="next" type="button">→</button></div><p></p></dialog>
+</body></html>

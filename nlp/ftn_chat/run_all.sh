@@ -6,13 +6,15 @@
 # when finished so completion is visible at a glance.
 set -u
 cd "$(dirname "$0")"
+export FTN_CKPT_DIR="${FTN_CKPT_DIR:-$HOME/ftn_chat_state/checkpoints_bayes}"
 
 echo "[chain] waiting for qa_synth.py (if running)..."
 while pgrep -f "python3? qa_synth.py" >/dev/null 2>&1; do sleep 60; done
 
-for t in base_ftn explorer globo rl_mt10; do
-  if [ ! -s "data_cache/qa/$t.json" ]; then
-    echo "[chain] ABORT: data_cache/qa/$t.json missing or empty — synthesis incomplete"
+qa_cache_dir="${FTN_DATA_CACHE_DIR:-$HOME/ftn_chat_state/data_cache}/qa"
+for t in base_ftn explorer rl_mt10; do
+  if [ ! -s "$qa_cache_dir/$t.json" ]; then
+    echo "[chain] ABORT: $qa_cache_dir/$t.json missing or empty — synthesis incomplete"
     exit 1
   fi
 done

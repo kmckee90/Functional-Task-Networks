@@ -18,7 +18,7 @@ torch.set_default_device("cuda" if torch.cuda.is_available() else "cpu")
 from config import CFG
 from data import build_task, format_distill
 from model import build, lora_params
-from perplexity_configurer import PerplexityConfigurer
+from bayes_configurer import BayesianPerplexityConfigurer
 from train import _collate, distill_loss, teacher_answer_logits
 
 print(f"visible GPUs: {torch.cuda.device_count()}")
@@ -31,7 +31,7 @@ print(f"  build done in {time.time()-t0:.0f}s")
 for p in lora_params(wrappers):
     p.requires_grad = True
 opt = torch.optim.Adam(lora_params(wrappers), lr=CFG.lr, foreach=False)
-cfgr = PerplexityConfigurer(CFG, ctrl)
+cfgr = BayesianPerplexityConfigurer(CFG, ctrl)
 
 # One real source chunk as distillation context (no qa cache needed).
 data = build_task(CFG, tok, "base_ftn")
@@ -48,7 +48,8 @@ dev = torch.device("cuda")
 pad_id = tok.pad_token_id if tok.pad_token_id is not None else tok.eos_token_id
 model.train()
 for step in range(2):
-    m, _, _ = cfgr(model, ex["recfg"].to(dev).unsqueeze(0), steps=3)
+    m, _, _ = cfgr(model, ex["recfg"].to(dev).unsqueeze(0),
+                    steps=2, changepoint_steps=3)
     s_batch = _collate([(ex["ids"], ex["lbl"])], pad_id, dev)
     t_batch = _collate([(ex["t_ids"], ex["t_lbl"])], pad_id, dev)
     t_sel = teacher_answer_logits(model, ctrl, t_batch)

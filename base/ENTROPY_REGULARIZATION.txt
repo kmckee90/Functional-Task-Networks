@@ -1,0 +1,22 @@
+Output entropy regularization for reconfiguration
+
+Default: RECONFIG_ENTROPY_COEF = 0.0
+Preset at bottom of config.py: class Entropy(Default), coefficient0.1.
+Append Entropy to the existing --config list, optionally alongside Overlap.
+Direct model constructors accept reconfig_entropy_coef=0.0.
+
+For multiclass classification:
+    task_loss + coefficient * mean_examples[-sum_classes(p * log(p))]
+    p = softmax(output_logits)
+Entropy is in nats, not normalized by log(number of classes). Positive coefficients
+favor confident predictions; negative coefficients favor higher entropy.
+Independent binary outputs use mean Bernoulli entropy across examples/cells.
+Regression bypasses this regularizer. Coefficient0 bypasses entropy computation.
+
+Applied only to reconfiguration optimization and candidate ranking, including
+match-stored candidate scoring. Weight-training loss is unchanged. Existing
+overlap costs add independently. All root model variants and both search
+algorithms are covered. Root evaluation uses the same reconfiguration paths,
+so the term also applies there. No new training runs are launched by this change.
+
+Pod checks: .venv/bin/python test_entropy_regularizer.py -v

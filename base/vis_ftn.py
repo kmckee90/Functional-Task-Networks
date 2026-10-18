@@ -45,6 +45,7 @@ import models
 import numpy as np
 import tasks
 import torch
+from reconfig_optimizer import make_reconfig_optimizer
 import torch.nn as nn
 import torch.nn.functional as F
 from masks import PolyakKWTAFast, kwta, mask_to_grid
@@ -63,6 +64,7 @@ class VisConfig:
 
     # --- Experiment scope (kept small; this is a demo, not a benchmark) ---
     SEED = 123
+    RECONFIG_OPTIMIZER = "Adam"
     N_TASK = 3
     N_EPOCHS = 3
 
@@ -141,6 +143,7 @@ class VisConfig:
             "torus": self.TORUS,
             "reconfig_steps": 60,
             "reconfig_lr": 0.3,
+            "reconfig_optimizer": self.RECONFIG_OPTIMIZER,
             "reconfig_sample_size": 256,
         }
 
@@ -175,7 +178,7 @@ class RecordingPolyakKWTAFast(PolyakKWTAFast):
             self.recorded = []
 
         m = nn.Parameter(torch.randn_like(m) * 0.0001)
-        optimizer = torch.optim.Adam([m], lr=self.reconfig_lr)
+        optimizer = make_reconfig_optimizer([m], lr=self.reconfig_lr, name=self.reconfig_optimizer)
 
         z = model.parallel(x[:n]).detach()
         lowest_loss = torch.inf

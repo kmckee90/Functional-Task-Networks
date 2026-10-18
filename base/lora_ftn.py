@@ -31,6 +31,7 @@ Only the atom bank is trained; the backbone weights stay at their random init
 import math
 
 import torch
+from reconfig_optimizer import make_reconfig_optimizer, validate_reconfig_optimizer
 import torch.nn as nn
 import torch.nn.functional as F
 
@@ -143,7 +144,10 @@ class LoRALinear(nn.Module):
         return out
 
 
-class LoRAFTN(nn.Module):
+from overlap_regularizer import OverlapRegularizer
+
+
+class LoRAFTN(OverlapRegularizer, nn.Module):
     """Frozen random MLP + trainable LoRA atom bank + task mask.
 
     Interface mirrors ftn.FTN: forward(x) predicts under the current mask,
@@ -172,6 +176,7 @@ class LoRAFTN(nn.Module):
         k: int = 64,
         reconfig_steps: int = 30,
         reconfig_lr: float = 0.3,
+        reconfig_optimizer: str = "Adam",
         reconfig_sample_size: int = 2048,
         reconfig_algorithm: str = "annealste",   # "annealste" or "fast"
         reconfig_init_sd: float = 1e-5,
@@ -185,8 +190,15 @@ class LoRAFTN(nn.Module):
         mask_lateral_polyak: float = 0.0,
         mask_lateral_noise_sd: float = 0.0,
         torus: bool = False,
+        overlap_mode: str = "seen_logits",
+        overlap_lambda: float = 0.0,
+        overlap_threshold: float = 0.5,
+        overlap_temperature: float = 0.2,
+        reconfig_entropy_coef: float = 0.0,
     ):
         super().__init__()
+        self.configure_overlap(overlap_mode, overlap_lambda, overlap_threshold, overlap_temperature)
+        self.configure_entropy(reconfig_entropy_coef)
         assert hidden_size == square_dim**2, (
             f"hidden_size (atom count) {hidden_size} must equal square_dim**2 "
             f"{square_dim**2} so the mask shares the FTN grid / visualization."
@@ -198,6 +210,7 @@ class LoRAFTN(nn.Module):
         self.k = k
         self.reconfig_steps = reconfig_steps
         self.reconfig_lr = reconfig_lr
+        self.reconfig_optimizer = validate_reconfig_optimizer(reconfig_optimizer)
         self.reconfig_sample_size = reconfig_sample_size
         self.reconfig_init_sd = reconfig_init_sd
         self.reconfig_noise_scale = reconfig_noise_scale
@@ -283,6 +296,7 @@ class LoRAFTN(nn.Module):
                         single kWTA at the end.
         The atoms are detached, so only the logits move here.
         """
+        reference = self._overlap_reference()
         n = min(self.reconfig_sample_size, x.shape[0])
         x, y = x[:n], y[:n]
 
@@ -290,7 +304,7 @@ class LoRAFTN(nn.Module):
         # logits = (torch.randn(self.hidden_size) * self.reconfig_init_sd)
 
         logits = logits.detach().requires_grad_(True)
-        opt = torch.optim.Adam([logits], lr=self.reconfig_lr)
+        opt = make_reconfig_optimizer([logits], lr=self.reconfig_lr, name=self.reconfig_optimizer)
 
         # Match-stored option (annealste only): after match_stored_after steps,
         # snap the running best to the closest previous-task mask in the buffer,
@@ -307,7 +321,7 @@ class LoRAFTN(nn.Module):
         def _cand_loss(cand: torch.Tensor) -> float:
             with torch.no_grad():
                 self.controller.set_mask(cand)
-                return self.loss(self._backbone(x), y).item()
+                return self._with_overlap(self._reconfig_task_loss(self._backbone(x), y), logits, reference).item()
 
         self.controller.detach_atoms = True
         best, best_loss = None, math.inf
@@ -326,7 +340,8 @@ class LoRAFTN(nn.Module):
                     mask = torch.sigmoid(logits)
                 self.controller.set_mask(mask)
 
-                loss = self.loss(self._backbone(x), y)
+                loss = self._with_overlap(self._reconfig_task_loss(self._backbone(x), y), logits, reference)
+                scored = mask.detach().clone() if self._regularized_search(reference) and anneal else None
                 opt.zero_grad()
                 loss.backward()
                 # breakpoint()
@@ -335,7 +350,7 @@ class LoRAFTN(nn.Module):
                 with torch.no_grad():
                     if loss.item() < best_loss:
                         best_loss = loss.item()
-                        best = kwta(logits.detach(), self.k)
+                        best = scored if scored is not None else kwta(logits.detach(), self.k)
                     if do_match and not swapped and (i + 1) >= self.match_stored_after:
                         ref = best if best is not None else kwta(logits.detach(), self.k)
                         m_stored = best_stored(ref, stored, self.match_stored_topk, _cand_loss)

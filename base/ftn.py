@@ -26,6 +26,7 @@ import math
 from types import SimpleNamespace
 
 import torch
+from reconfig_optimizer import make_reconfig_optimizer, validate_reconfig_optimizer
 import torch.nn as nn
 import torch.nn.functional as F
 
@@ -116,6 +117,59 @@ def _uniform_conv(kernel_size: int, fill: float, torus: bool) -> nn.Conv2d:
     ).requires_grad_(False)
     conv.weight.data.fill_(fill)
     return conv
+
+
+def _local_conn(
+    kernel_size: int, torus: bool, input_shape: tuple[int, int],
+    init_scale: float = 1.0,
+) -> nn.Module:
+    """Single-channel local connection with an independent kernel at each patch.
+
+    ``input_shape`` is required because, unlike a convolution, the number of
+    trainable kernels depends on the spatial grid. Padding and stride match
+    ``_uniform_conv``. Each weight starts uniformly in
+    [-init_scale / kernel_size, init_scale / kernel_size], matching the usual
+    single-channel Conv2d initialization when init_scale is one.
+    """
+    return _LocalConn2d(kernel_size, torus, input_shape, init_scale)
+
+
+class _LocalConn2d(nn.Module):
+    def __init__(self, kernel_size, torus, input_shape, init_scale):
+        super().__init__()
+        if kernel_size < 1:
+            raise ValueError("kernel_size must be positive")
+        if init_scale <= 0:
+            raise ValueError("init_scale must be positive")
+        if len(input_shape) != 2 or min(input_shape) < 1:
+            raise ValueError("input_shape must contain positive height and width")
+        self.kernel_size = int(kernel_size)
+        self.torus = bool(torus)
+        self.input_shape = tuple(input_shape)
+        self.padding = self.kernel_size // 2
+        height, width = self.input_shape
+        out_height = height + 2 * self.padding - self.kernel_size + 1
+        out_width = width + 2 * self.padding - self.kernel_size + 1
+        self.output_shape = (out_height, out_width)
+        self.weight = nn.Parameter(torch.empty(
+            out_height, out_width, self.kernel_size**2
+        ))
+        bound = init_scale / self.kernel_size
+        nn.init.uniform_(self.weight, -bound, bound)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        if x.ndim != 4 or x.shape[1] != 1 or x.shape[-2:] != self.input_shape:
+            raise ValueError("expected input with shape (batch, 1, *input_shape)")
+        if self.torus:
+            padded = F.pad(x, (self.padding,) * 4, mode="circular")
+            patches = F.unfold(padded, self.kernel_size)
+        else:
+            patches = F.unfold(x, self.kernel_size, padding=self.padding)
+        out_height, out_width = self.output_shape
+        patches = patches.reshape(x.shape[0], self.kernel_size**2,
+                                  out_height, out_width)
+        y = torch.einsum("bkhw,hwk->bhw", patches, self.weight)
+        return y.unsqueeze(1)
 
 
 # =============================================================================
@@ -288,7 +342,10 @@ def task_loss(pred, y, classification: bool = False, binary: bool = False):
 # =============================================================================
 
 
-class FTN(nn.Module):
+from overlap_regularizer import OverlapRegularizer
+
+
+class FTN(OverlapRegularizer, nn.Module):
     """
     Functional Task Network: masked backbone + task mask + reconfiguration.
 
@@ -353,6 +410,7 @@ class FTN(nn.Module):
         k: int = 128,
         reconfig_steps: int = 30,
         reconfig_lr: float = 0.3,
+        reconfig_optimizer: str = "Adam",
         reconfig_sample_size: int = 2048,
         reconfig_algorithm = "annealste", #annealste (default) or fast
         reconfig_noise_scale: float = 1.0,
@@ -377,8 +435,15 @@ class FTN(nn.Module):
         mask_lateral_polyak2: float = 0.0,
         mask_lateral_noise_sd2: float = 0.0,
         torus2: bool = False,
+        overlap_mode: str = "seen_logits",
+        overlap_lambda: float = 0.0,
+        overlap_threshold: float = 0.5,
+        overlap_temperature: float = 0.2,
+        reconfig_entropy_coef: float = 0.0,
     ):
         super().__init__()
+        self.configure_overlap(overlap_mode, overlap_lambda, overlap_threshold, overlap_temperature)
+        self.configure_entropy(reconfig_entropy_coef)
         self.hidden_size = hidden_size
         self.square_dim = square_dim
         self.classification = classification
@@ -388,6 +453,7 @@ class FTN(nn.Module):
         self.k = k
         self.reconfig_steps = reconfig_steps
         self.reconfig_lr = reconfig_lr
+        self.reconfig_optimizer = validate_reconfig_optimizer(reconfig_optimizer)
         self.reconfig_sample_size = reconfig_sample_size
         self.reconfig_noise_scale = reconfig_noise_scale
         self.mask_lateral_steps = mask_lateral_steps
@@ -419,13 +485,27 @@ class FTN(nn.Module):
         self.linear = nn.Linear(hidden_size, output_size, bias=False)
         self.dropout = nn.Dropout(p=dropout_p)
         # Feature smoothing (averaging kernel); no-op when lateral_steps == 0
-        self.lateral = _uniform_conv(
-            lateral_kernel_size, 1 / lateral_kernel_size**2, torus
-        )
+        # self.lateral = _uniform_conv(
+        #     lateral_kernel_size, 
+        #     1 / lateral_kernel_size**2, 
+        #     torus,
+        # )
+        self.lateral = _local_conn(mask_kernel_size, 
+                                          torus,
+                                          (square_dim, square_dim),
+                                          0.1)
         # Mask smoothing (summing kernel) for SmoothKWTA lateral dynamics.
         # One conv per mask so each mask has its own kernel size / torus.
-        self.mask_lateral = _uniform_conv(mask_kernel_size, 1.0, torus)
-        self.mask_lateral2 = _uniform_conv(mask_kernel_size2, 1.0, torus2)
+        # self.mask_lateral = _uniform_conv(mask_kernel_size, 
+        #                                   1 / lateral_kernel_size**2, 
+        #                                   torus)
+        self.mask_lateral = _local_conn(mask_kernel_size, 
+                                          torus,
+                                          (square_dim, square_dim),
+                                          0.1)
+        self.mask_lateral2 = _uniform_conv(mask_kernel_size2, 
+                                           1 / lateral_kernel_size**2, 
+                                           torus2)
 
         # Current effective task mask (mask1*mask2 in dual mode, else mask1),
         # plus the two component masks (m2 stays zero in single-mask mode).
@@ -467,6 +547,9 @@ class FTN(nn.Module):
 
         # Kept for expand(): everything needed to rebuild this FTN
         self._config = dict(
+            reconfig_entropy_coef=reconfig_entropy_coef,
+            overlap_mode=overlap_mode, overlap_lambda=overlap_lambda,
+            overlap_threshold=overlap_threshold, overlap_temperature=overlap_temperature,
             input_size=input_size,
             output_size=output_size,
             hidden_size=hidden_size,
@@ -484,6 +567,7 @@ class FTN(nn.Module):
             k=k,
             reconfig_steps=reconfig_steps,
             reconfig_lr=reconfig_lr,
+            reconfig_optimizer=reconfig_optimizer,
             reconfig_sample_size=reconfig_sample_size,
             reconfig_algorithm=reconfig_algorithm,
             reconfig_noise_scale=reconfig_noise_scale,
@@ -544,7 +628,7 @@ class FTN(nn.Module):
             m = self.m
         m = m.reshape(1, -1)
         z = self.features(x)
-        # z = self._step_feature_lateral(z*m)*m # This is kind of useless.
+        z = self._step_feature_lateral(z*m)*m # This is kind of useless.
         return self.linear(z*m)
 
     def loss(self, pred: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
@@ -579,17 +663,18 @@ class FTN(nn.Module):
         """
         Annealed straight-through KWTA reconfiguration for one mask.
 
-        Optimize a real-valued mask logit with Adam, where the forward mask is
+        Optimize real-valued mask logits with the configured optimizer; the forward mask is
         kwta(logits + noise) with an annealed noise temperature and a sigmoid
         STE for gradients. Keeps the best mask by loss, then (optionally)
         applies lateral smoothing + re-sparsifies. All weights are detached:
         gradients flow only into the mask logits. Returns the kWTA mask.
         """
         n = min(spec.sample_size, x.shape[0])
+        reference = self._overlap_reference()
         x, y = x[:n], y[:n]
 
         m = nn.Parameter(torch.randn_like(self.m) * 0.00001)
-        optimizer = torch.optim.Adam([m], lr=spec.lr)
+        optimizer = make_reconfig_optimizer([m], lr=spec.lr, name=self.reconfig_optimizer)
 
         z = self.parallel(x).detach()
         w = self.linear.weight.detach()
@@ -611,18 +696,26 @@ class FTN(nn.Module):
 
         def _cand_loss(cand: torch.Tensor) -> float:
             with torch.no_grad():
-                return self.loss(F.linear(z * cand.reshape(1, -1), w), y).item()
+                effective = m if gate is None else m * gate
+                return self._with_overlap(self._reconfig_task_loss(F.linear(z * cand.reshape(1, -1), w), y), effective, reference).item()
 
         lowest_loss = torch.inf
         best = None
         for i in range(spec.steps):
-            sm = torch.sigmoid(m)
-            tau = m.detach().std() * math.exp(-i / (spec.steps / 4))
-            noise = torch.randn_like(m) * tau * self.reconfig_noise_scale
-            mask = kwta(m + noise, k=spec.k) + sm - sm.detach()
+            M = [m]
+            if spec.polyak < 1.0:
+                for _ in range(spec.lateral_steps):
+                    m_lat = self._step_mask_lateral(M[-1], spec.lateral_conv, spec.noise_sd)
+                    M.append(spec.polyak * M[-1] + (1 - spec.polyak) * m_lat)
+
+            mf = M[-1]
+            sm = torch.sigmoid(mf)
+            tau = mf.detach().std() * math.exp(-i / (spec.steps / 4))
+            noise = torch.randn_like(mf) * tau * self.reconfig_noise_scale
+            mask = kwta(mf + noise, k=spec.k) + sm - sm.detach()
 
             y_pred = F.linear(z * mask, w)
-            loss = self.loss(y_pred, y)
+            loss = self._with_overlap(self._reconfig_task_loss(y_pred, y), m if gate is None else m * gate, reference)
 
             optimizer.zero_grad()
             loss.backward()
@@ -649,11 +742,11 @@ class FTN(nn.Module):
 
         # Lateral dynamics (spatial smoothing) + re-sparsification.
         # With lateral_steps == 0 this leaves the KWTA mask unchanged.
-        if spec.polyak < 1.0:
-            for _ in range(spec.lateral_steps):
-                m_lat = self._step_mask_lateral(best, spec.lateral_conv, spec.noise_sd)
-                best = spec.polyak * best + (1 - spec.polyak) * m_lat
-            best = kwta(best, k=spec.k)
+        # if spec.polyak < 1.0:
+        #     for _ in range(spec.lateral_steps):
+        #         m_lat = self._step_mask_lateral(best, spec.lateral_conv, spec.noise_sd)
+        #         best = spec.polyak * best + (1 - spec.polyak) * m_lat
+        #     best = kwta(best, k=spec.k)
 
         return best
 
@@ -666,16 +759,19 @@ class FTN(nn.Module):
         gate: torch.Tensor = None,
     ) -> torch.Tensor:
         """
-        Fast (RMSprop, no annealing/STE) reconfiguration for one mask.
+        Fast (no annealing/STE) reconfiguration for one mask.
 
         All weights are detached: gradients flow only into the mask logits.
         Returns the kWTA mask.
         """
+        reference = self._overlap_reference()
         n = min(spec.sample_size, x.shape[0])
         x, y = x[:n], y[:n]
 
         m = nn.Parameter(torch.randn_like(self.m) * 0.00001)
-        optimizer = torch.optim.RMSprop([m], lr=spec.lr)
+        optimizer = make_reconfig_optimizer([{"params": m, "lr": spec.lr},
+                                      {"params": self.mask_lateral.parameters(), "lr": 1e-3}],
+                                        lr=spec.lr, name=self.reconfig_optimizer)
 
         z = self.parallel(x).detach()
         w = self.linear.weight.detach()
@@ -683,20 +779,29 @@ class FTN(nn.Module):
             z = z * gate.reshape(1, -1)
 
         for i in range(spec.steps):
-            y_pred = F.linear(z * torch.sigmoid(m), w)
-            loss = self.loss(y_pred, y)
+            M = [m]
+            if spec.polyak < 1.0:
+                for _ in range(spec.lateral_steps):
+                    m_lat = self._step_mask_lateral(M[-1], spec.lateral_conv, spec.noise_sd)
+                    M.append(spec.polyak * M[-1] + (1 - spec.polyak) * m_lat)
+
+            mf = M[-1]
+            sm = torch.sigmoid(mf)
+
+            y_pred = F.linear(z * sm, w)
+            loss = self._with_overlap(self._reconfig_task_loss(y_pred, y), m if gate is None else m * gate, reference)
 
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
 
-        with torch.no_grad():
-            # Lateral dynamics (spatial smoothing) + re-sparsification.
-            # With lateral_steps == 0 this leaves the KWTA mask unchanged.
-            if spec.polyak < 1.0:
-                for _ in range(spec.lateral_steps):
-                    m_lat = self._step_mask_lateral(m, spec.lateral_conv, spec.noise_sd)
-                    m = spec.polyak * m + (1 - spec.polyak) * m_lat
+        # with torch.no_grad():
+        #     # Lateral dynamics (spatial smoothing) + re-sparsification.
+        #     # With lateral_steps == 0 this leaves the KWTA mask unchanged.
+        #     if spec.polyak < 1.0:
+        #         for _ in range(spec.lateral_steps):
+        #             m_lat = self._step_mask_lateral(m, spec.lateral_conv, spec.noise_sd)
+        #             m = spec.polyak * m + (1 - spec.polyak) * m_lat
 
         return kwta(m, k=spec.k)
 
@@ -752,6 +857,7 @@ class FTN(nn.Module):
                 b_new[: b_old.shape[0]] = b_old
             new.linear.weight[:, : self.hidden_size] = self.linear.weight
             new.m[: self.hidden_size] = self.m
+            new.copy_overlap_archive_from(self)
         return new
 
     # ----------------------------------------------------------------- lateral

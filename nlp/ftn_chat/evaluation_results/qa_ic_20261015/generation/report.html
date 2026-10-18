@@ -1,0 +1,2623 @@
+<!doctype html><meta charset="utf-8"><title>FTN-Chat recall audit</title><style>body{max-width:1100px;margin:40px auto;font:16px/1.5 system-ui;padding:0 20px}table{border-collapse:collapse}td,th{padding:8px 15px;border:1px solid #ccc}pre{white-space:pre-wrap;font:14px/1.5 system-ui}article{border-top:2px solid #ddd;margin-top:30px}.answers{display:grid;grid-template-columns:1fr 1fr;gap:30px}@media(max-width:700px){.answers{display:block}}</style><h1>FTN-Chat closed-book recall audit</h1>
+<p>Assistant qualitative review against cached reference and source; not an independent or blinded judge. 30 cached training questions, not held-out generalization. Assistant review is not blinded or independently verified. Three questions excluded for defective or insufficient reference/source. Greedy generation, thinking disabled as in current app, 384-token cap. Outputs that hit the cap are explicitly marked. Oracle uses the topic label for diagnosis only. A separate four-question probe used the training open-think prefix; all four exhausted 384 tokens without a final answer. It is not included in correctness scores and does not settle whether a larger thinking budget would help.</p>
+<table><tr><th>Topic</th><th>Scored</th><th>Base correct</th><th>IC correct</th><th>IC partial</th><th>IC incorrect</th></tr>
+<tr><td>base_ftn</td><td>10</td><td>1</td><td>1</td><td>3</td><td>6</td></tr>
+<tr><td>explorer</td><td>9</td><td>4</td><td>4</td><td>2</td><td>3</td></tr>
+<tr><td>rl_mt10</td><td>8</td><td>1</td><td>4</td><td>1</td><td>3</td></tr>
+</table>
+<article><h2>base_ftn / 365</h2><p><b>What are the three specific scheduling options available for reconfiguration in the v2 base_rf configuration?</b></p><p>Expected periodic/per-block/reactive; base invents CPU scheduler choices and IC abstains.</p><div class="answers">
+<section><h3>base — incorrect</h3><pre>In the v2 `base_rf` configuration (typically associated with NVIDIA Jetson platforms and the Tegra Audio Framework), the three specific scheduling options available for reconfiguration are:
+
+1. **`SCHED_FIFO`** (First-In, First-Out real-time scheduling)
+2. **`SCHED_RR`** (Round-Robin real-time scheduling)
+3. **`SCHED_OTHER`** (Standard time-sharing scheduling, also known as CFS)
+
+These options control the CPU scheduling policy for the audio processing threads, impacting latency and real-time performance.</pre></section>
+<section><h3>ic — incorrect</h3><pre>Based on the provided source material, there is no mention of a &quot;v2 base_rf configuration&quot; or its specific scheduling options for reconfiguration. The text only describes a `reconfig_every` parameter with a default value of 0, which applies to the current configuration (implied to be v1 or the default version).
+
+Therefore, the three specific scheduling options for the v2 base_rf configuration cannot be determined from the given text.</pre></section>
+</div><details><summary>Reference and source excerpt</summary><pre>Based on the source material provided, the three specific scheduling options available for reconfiguration in the v2 configuration are:
+
+1.  **Periodic**
+2.  **Per-block**
+3.  **Reactive**
+
+This is explicitly stated in the line: `v2 = base_rf + domain-shift options, reconfiguration scheduling (periodic / per-block / reactive), and the SmoothKWTA mask parameters.`</pre><pre>_ON_REPLAY    (replay always subsamples REPLAY_BATCH_SIZE rows once
+                          at store time)
+  - PHASES               (the experiment is exactly the old phase 1:
+                          multi-task learning over the task stream)
+
+v2 = base_rf + domain-shift options, reconfiguration scheduling (periodic /
+per-block / reactive), and the SmoothKWTA mask parameters. Replay stays
+available (N_REPLAY_SAMPLES=0 disables it). No weight freezing.
+
+Parameter glossary
+==================
+
+Experiment
+----------
+SEED                 Base RNG seed; local torch.Generators are seeded off it.
+N_TASK               Number of distinct tasks in the task stream.
+
+Data generator (tasks.DataGenSine)
+----------------------------------
+CLASSIFICATION       One-hot classification target vs scalar regression.
+X_DIM, Y_DIM         Input / output dimensions.
+TASK_SIZE            Hidden dims allocated per task (controls task overlap).
+FREQUENCY            Sine frequency; higher = harder targets.
+T                    Samples per generated batch.
+DATA_TEMP            Label-sampling softmax temperature (classification).
+CORRELATED_TASKS     Tasks share hidden dims via pairwise combinations.
+CONCEPT_SHIFT        Each task uses a different hidden subset.
+DOMAIN_SHIFT_FACTOR  Per-task input mean shift; 0 = shared input distribution.
+DOMAIN_SHIFT         Dimensional domain shift: widen the input vector so each
+                     task&#x27;s X_DIM values occupy their own slice (total width
+                     (N_TASK-1)*DOMAIN_SHIFT_STRIDE + X_DIM, zeros elsewhere).
+                     The task function itself is unchanged; the model input
+                     size follows the widened vector automatically.
+DOMAIN_SHIFT_STRIDE  Element-index shift between consecutive tasks&#x27; slices.
+                     0 = concept shift (all tasks share the same elements);
+                     &gt;= X_DIM = fully disjoint (orthogonal) input supports.
+DOMAIN_DENSE_PROJECTION
+                     Apply a fixed random orthogonal projection (same width)
+                     to the final input vector: the sparse domain-shifted
+                     inputs become dense (no zero elements, so no trivially
+                     zero-gradient input weights) while preserving their
+                     information — a rotation of the domain.
+DOMAIN_PER_TASK_PROJECTION
+                     If True, N_TASK distinct projections (one per task);
+                     if False, a single shared projection for all tasks.
+
+FTN backbone
+------------
+SQUARE_DIM           Mask-grid side length; HIDDEN_SIZE = SQUARE_DIM**2.
+LAYERS               ParallelMLP depth.
+INNER_DIM            ParallelMLP inner width.
+DROPOUT              Dropout on backbone features.
+LATERAL_B           </pre></details></article>
+<article><h2>base_ftn / 908</h2><p><b>What is the significance of the &#x27;square_dim&#x27; parameter in defining the spatial structure of the hidden representation?</b></p><p>Both explain the square grid and H=square_dim^2.</p><div class="answers">
+<section><h3>base — correct</h3><pre>The `square_dim` parameter is significant because it explicitly enforces a **2D grid topology** on the hidden representation, transforming a flat vector into a structured spatial map.
+
+Its key impacts are:
+
+1.  **Spatial Inductive Bias**: It allows the model to apply 2D operations (like convolutions or attention) that respect local spatial relationships, which is critical for tasks like image processing or grid-based reasoning.
+2.  **Dimensional Constraint**: It dictates that the hidden dimension $H$ must be a perfect square ($H = \text{square\_dim}^2$), ensuring the vector can be reshaped into a square matrix without data loss or padding.
+3.  **Resolution Control**: It determines the spatial resolution of the representation. A larger `square_dim` provides finer-grained spatial detail but increases computational cost quadratically.</pre></section>
+<section><h3>ic — correct</h3><pre>The `square_dim` parameter defines the side length of a 2D grid used to reshape the hidden representation vector. Its significance lies in:
+
+1. **Spatial Structure**: It transforms a flat vector of size $N$ into a 2D matrix of shape $(\text{square\_dim}, \text{square\_dim})$, where $N = \text{square\_dim}^2$. This imposes a spatial topology on the data.
+2. **Local Connectivity**: It enables operations that rely on spatial locality, such as 2D convolutions or spatial attention, allowing the model to capture local patterns and spatial relationships between elements.
+3. **Dimensionality Constraint**: It requires the hidden size to be a perfect square, ensuring the vector can be evenly partitioned into a square grid without padding or truncation.
+
+In essence, `square_dim` dictates the resolution of the spatial layout, influencing how the model perceives and processes structural information within the hidden representation.</pre></section>
+</div><details><summary>Reference and source excerpt</summary><pre>Based on the provided source material, the significance of the `square_dim` parameter is that it defines the **spatial dimensions** of the hidden representation, which is structured as a square grid.
+
+This is evidenced by the `HIDDEN_SIZE` property:
+
+```python
+@property
+def HIDDEN_SIZE(self):
+    return self.SQUARE_DIM**2
+```
+
+Here, `HIDDEN_SIZE` (the total number of hidden units) is calculated as the square of `SQUARE_DIM`. This implies that the hidden layer is organized into a 2D spatial structure of size `SQUARE_DIM x SQUARE_DIM`, rather than a flat 1D vector. This spatial arrangement is likely important for operations that rely on locality or grid-based processing, such as the lateral connections and mask operations mentioned in the `FTN_PARS` dictionary (e.g., `lateral_kernel_size`, `mask_kernel_size`).</pre><pre> = 1
+
+    RECONFIG_REACTIVE = False
+    RECONFIG_REACTIVE_SD = 5.0
+    RECONFIG_REACTIVE_EMA = 0.95
+
+    MASK_KERNEL_SIZE = 3
+    MASK_LATERAL_STEPS = 0  # 0 = plain KWTA; &gt;0 = SmoothKWTA
+    MASK_LATERAL_POLYAK = 0.0
+    MASK_LATERAL_NOISE_SD = 0.0
+
+    # Data sizes
+    TRAIN_DURATION = 2500
+    N_EPOCHS = 1
+    N_EVAL_EPOCHS = 1
+
+    N_SAMPLE_PER_TASK = 10
+    N_REPLAY_SAMPLES = 1
+    REPLAY_BATCH_SIZE = 256
+
+    # Backwards eval (forgetting monitor)
+    EVAL_BACKWARDS = True
+    EVAL_PROSPECTIVE = True
+    N_RETRO_EVAL_BATCHES = 10
+
+    # Training hyperpars
+    TRAIN_LR = 3e-4
+
+    # Plotting
+    RENDER_STEPS = False
+    LOSS_EMA_SMOOTHING = 0.8
+    PLOT_EVERY = 1
+    GIF_DURATION = 20
+    GIF_SAVE_EPOCH = 1
+
+    @property
+    def HIDDEN_SIZE(self):
+        return self.SQUARE_DIM**2
+
+    @property
+    def REPLAY_MAXLEN(self):
+        return self.N_SAMPLE_PER_TASK * self.N_TASK
+
+    @property
+    def FTN_PARS(self):
+        &quot;&quot;&quot;Everything the FTN class takes besides input/output/hidden sizes.&quot;&quot;&quot;
+        return {
+            &quot;square_dim&quot;: self.SQUARE_DIM,
+            &quot;classification&quot;: self.CLASSIFICATION,
+            # backbone
+            &quot;layers&quot;: self.LAYERS,
+            &quot;inner_size&quot;: self.INNER_DIM,
+            &quot;dropout_p&quot;: self.DROPOUT,
+            &quot;lateral_b&quot;: self.LATERAL_B,
+            &quot;lateral_steps&quot;: self.LATERAL_STEPS,
+            &quot;lateral_kernel_size&quot;: self.KERNEL_SIZE,
+            # mask / reconfiguration
+            &quot;k&quot;: self.K,
+            &quot;reconfig_steps&quot;: self.RECONFIG_STEPS,
+            &quot;reconfig_lr&quot;: self.RECONFIG_LR,
+            &quot;reconfig_sample_size&quot;: self.RECONFIG_SAMPLE_SIZE,
+            &quot;reconfig_algorithm&quot;: self.RECONFIG_ALGORITHM,
+            &quot;mask_kernel_size&quot;: self.MASK_KERNEL_SIZE,
+            &quot;mask_lateral_steps</pre></details></article>
+<article><h2>base_ftn / 276</h2><p><b>How many reconfiguration steps does the PolyakSmooth configuration specify?</b></p><p>Expected 30 reconfiguration steps; base says 1 and IC says 0.</p><div class="answers">
+<section><h3>base — incorrect</h3><pre>The `PolyakSmooth` configuration specifies **1** reconfiguration step.
+
+In the context of the Polyak smoothing algorithm (often used in optimization or signal processing), the &quot;reconfiguration&quot; typically refers to the single step where the smoothing parameter (or step size) is updated or applied to generate the smoothed version of the function or signal. Unlike iterative methods that may have multiple reconfiguration phases, Polyak smoothing is generally characterized by a single smoothing operation defined by its parameter.</pre></section>
+<section><h3>ic — incorrect</h3><pre>The `PolyakSmooth` configuration specifies **0** reconfiguration steps.
+
+In the provided source material, the value for `reconfig_steps` is explicitly set to `0`.</pre></section>
+</div><details><summary>Reference and source excerpt</summary><pre>Based on the `PolyakSmooth` class definition in the provided source material, the configuration specifies **30** reconfiguration steps.
+
+This is defined by the line:
+```python
+RECONFIG_STEPS = 30
+```</pre><pre>&quot;: self.MASK_LATERAL_STEPS,
+            &quot;mask_lateral_polyak&quot;: self.MASK_LATERAL_POLYAK,
+            &quot;mask_lateral_noise_sd&quot;: self.MASK_LATERAL_NOISE_SD,
+            &quot;torus&quot;: self.TORUS,
+        }
+
+
+class Smoke(Default):
+    &quot;&quot;&quot;Tiny end-to-end configuration for fast sanity checks.&quot;&quot;&quot;
+    N_TASK = 3
+    SQUARE_DIM = 8
+    LAYERS = 2
+    K = 16
+    RECONFIG_STEPS = 5
+    T = 64
+    TRAIN_DURATION = 5
+    N_SAMPLE_PER_TASK = 2
+    N_RETRO_EVAL_BATCHES = 2
+
+
+class DomainShift(Default):
+    DOMAIN_SHIFT_FACTOR = 0
+    DOMAIN_SHIFT = True
+    DOMAIN_SHIFT_STRIDE = 1
+    DOMAIN_DENSE_PROJECTION = True
+    DOMAIN_PER_TASK_PROJECTION = True
+
+class Replay(Default):
+    N_SAMPLE_PER_TASK = 10
+    N_REPLAY_SAMPLES = 1
+    REPLAY_BATCH_SIZE = 256
+
+class NoReplay(Default):
+    N_SAMPLE_PER_TASK = 0
+    N_REPLAY_SAMPLES = 0
+    REPLAY_BATCH_SIZE = 0
+
+class Reactive_Low(Default):
+    RECONFIG_EVERY = 0
+    RECONFIG_REACTIVE = True
+    RECONFIG_REACTIVE_SD = 5.0
+    RECONFIG_REACTIVE_EMA = 0.9
+
+class Reactive_Med(Default):
+    RECONFIG_EVERY = 0
+    RECONFIG_REACTIVE = True
+    RECONFIG_REACTIVE_SD = 3.0
+    RECONFIG_REACTIVE_EMA = 0.9
+
+class Reactive_High(Default):
+    RECONFIG_EVERY = 0
+    RECONFIG_REACTIVE = True
+    RECONFIG_REACTIVE_SD = 1.0
+    RECONFIG_REACTIVE_EMA = 0.9
+
+
+class PerTask(Default):
+    RECONFIG_EVERY = 0
+    RECONFIG_REACTIVE = False
+
+class PolyakSmooth(Default):
+    MASK_LATERAL_STEPS = 2  # 0 = plain KWTA; &gt;0 = SmoothKWTA
+    MASK_LATERAL_POLYAK = 0.9
+    MASK_LATERAL_NOISE_SD = 0.0
+    MASK_KERNEL_SIZE = 5
+    RECONFIG_STEPS = 30
+    RECONFIG_LR = 0.3</pre></details></article>
+<article><h2>base_ftn / 580</h2><p><b>What is the default behavior of the FTN `reconfigure` method if `mask_lateral_polyak` is set to 1.0?</b></p><p>Expected bypass of lateral smoothing at polyak=1; base confuses FTN with FastText and IC claims maximal smoothing.</p><div class="answers">
+<section><h3>base — incorrect</h3><p>Token limit reached.</p><pre>In the context of the **FTN (Fast Text Network)** or similar NLP libraries (specifically referring to implementations like those in `gensim` or custom PyTorch/TensorFlow wrappers for FastText), the `reconfigure` method is typically used to adjust hyperparameters or internal states of the model.
+
+However, **`mask_lateral_polyak`** is **not a standard parameter** in the original Facebook FastText implementation or the widely used `gensim` FastText wrapper. This suggests one of two scenarios:
+
+1.  **Typo or Misremembered Parameter:** You may be referring to a different parameter, such as:
+    *   `lr` (learning rate)
+    *   `dim` (dimension of word vectors)
+    *   `ws` (window size)
+    *   `minCount`
+    *   `neg` (number of negative samples)
+    *   `loss` (loss function type)
+
+2.  **Custom/Research Implementation:** If this is from a specific research codebase or a custom library (e.g., a variant using Polyak averaging with lateral masking), the behavior would be defined by that specific code. In such contexts, setting a mask to `1.0` often implies **no masking** (i.e., the mask is fully active or fully transparent, depending on whether it&#x27;s a multiplicative or additive mask).
+
+### Most Likely Interpretation (Standard FastText)
+If you are using **standard FastText** (via `gensim` or the original C++/Python bindings), the `reconfigure` method **does not exist** as a public API with a `mask_lateral_polyak` parameter. FastText models are typically static after training; you cannot &quot;reconfigure&quot; them with new hyperparameters without retraining.
+
+### If This Is</pre></section>
+<section><h3>ic — incorrect</h3><pre>Based on the provided source material, there is no mention of an FTN class, a `reconfigure` method, or a parameter named `mask_lateral_polyak`. Therefore, the default behavior cannot be determined from the given text.
+
+However, in the context of **PyTorch** (where `FTN` might refer to a specific module or a typo for a standard module like `ParallelMLP` or a custom network), and specifically regarding **Polyak averaging** (often used in momentum updates or exponential moving averages):
+
+If `mask_lateral_polyak` is set to **1.0**, it typically implies that **Polyak averaging is fully applied** (or &quot;on&quot;) to the lateral connections/masks. A value of 1.0 usually represents the maximum weight given to the exponential moving average (Polyak) update, meaning the current step&#x27;s gradient is weighted heavily towards the historical average, or that the lateral smoothing is maximized.
+
+*Note: Without the specific source code or documentation for the &quot;FTN&quot; module in question, this is an inference based on standard machine learning conventions for Polyak averaging parameters.*</pre></section>
+</div><details><summary>Reference and source excerpt</summary><pre>Based on the provided source material, if `mask_lateral_polyak` is set to `1.0`, the default behavior of the `reconfigure` method regarding the lateral dynamics step is that **it leaves the KWTA mask unchanged**.
+
+This is explicitly stated in the comment within the code:
+```python
+# Lateral dynamics (spatial smoothing) + re-sparsification.
+# With mask_lateral_polyak == 0 this leaves the KWTA mask unchanged.
+```
+*(Note: There appears to be a typo in the source comment provided in the prompt, which says `mask_lateral_polyak == 0` leaves it unchanged, but the logic below contradicts this. Let&#x27;s analyze the logic to be precise.)*
+
+Looking at the logic:
+```python
+if self.mask_lateral_polyak &lt; 1.0:
+    for _ in range(self.mask_lateral_steps):
+        m_lat = self._step_mask_lateral(best)
+        best = (
+            self.mask_lateral_polyak * best
+            + (1 - self.mask_lateral_polyak) * m_lat
+        )
+```
+
+The block of code that performs lateral smoothing and re-sparsification is **only executed** if `self.mask_lateral_polyak &lt; 1.0`.
+
+Therefore, if `mask_lateral_polyak` is set to `1.0`:
+1. The condition `self.mask_lateral_polyak &lt; 1.0` evaluates to `False`.
+2. The `if` block is skipped entirely.
+3. The variable `best` (which holds the best mask found during the KWTA optimization loop) is **not modified** by lateral dynamics or re-sparsification.
+4. The method returns the mask `best` as it was selected during the optimization loop (the one with the lowest loss).
+
+**Conclusion:** If `mask_lateral_polyak` is `1.0`, the lateral smoothing and re-sparsification steps are skipped, and the method returns the best mask found during the Adam optimization loop without further modification.</pre><pre>            target = torch.where(y == 1)[1]
+            return F.cross_entropy(pred, target)
+        return F.mse_loss(pred.squeeze(), y.squeeze())
+
+    # ---------------------------------------------------------- reconfiguration
+
+    @torch.enable_grad()
+    def reconfigure(self, x: torch.Tensor, y: torch.Tensor) -&gt; torch.Tensor:
+        &quot;&quot;&quot;
+        Reconfigure the mask for the task represented by (x, y).
+
+        Annealed straight-through KWTA: optimize a real-valued mask logit with
+        Adam, where the forward mask is kwta(logits + noise) with an annealed
+        noise temperature and a sigmoid STE for gradients. Keeps the best mask
+        by loss, then (optionally) applies lateral smoothing + re-sparsifies.
+
+        All weights are detached: gradients flow only into the mask logits.
+        Updates self.m in place and returns it.
+        &quot;&quot;&quot;
+        n = min(self.reconfig_sample_size, x.shape[0])
+        x, y = x[:n], y[:n]
+
+        m = nn.Parameter(torch.randn_like(self.m) * 0.00001)
+        optimizer = torch.optim.Adam([m], lr=self.reconfig_lr)
+
+        z = self.parallel(x).detach()
+        w = self.linear.weight.detach()
+
+        lowest_loss = torch.inf
+        best = None
+        for i in range(self.reconfig_steps):
+            sm = torch.sigmoid(m)
+            tau = m.detach().std() * math.exp(-i / (self.reconfig_steps / 4))
+            noise = torch.randn_like(m) * tau
+            mask = kwta(m + noise, k=self.k) + sm - sm.detach()
+
+            y_pred = F.linear(z * mask, w)
+            loss = self.loss(y_pred, y)
+
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+
+            if loss.item() &lt; lowest_loss:
+                best = mask.clone().detach()
+                lowest_loss = loss.item()
+
+        # Lateral dynamics (spatial smoothing) + re-sparsification.
+        # With mask_lateral_steps == 0 this leaves the KWTA mask unchanged.
+        if self.mask_lateral_polyak &lt; 1.0:
+            for _ in range(self.mask_lateral_steps):
+                m_lat = self._step_mask_lateral(best)
+                best = (
+                    self.mask_lateral_polyak * best
+                    + (1 - self.mask_lateral_polyak) * m_lat
+                )
+            best = kwta(best, k</pre></details></article>
+<article><h2>base_ftn / 367</h2><p><b>What is the effect of setting DATA_TEMP on label sampling when CLASSIFICATION is enabled?</b></p><p>Correct temperature direction, but both conflate sampling one-hot labels with training on soft labels and add unsupported objectives.</p><div class="answers">
+<section><h3>base — partial</h3><pre>Setting `DATA_TEMP` (data temperature) when `CLASSIFICATION` is enabled typically **softens the label distribution** used for training, effectively implementing **label smoothing** or **soft-label sampling**.
+
+### Effect:
+1. **Softens One-Hot Labels**: Instead of using hard one-hot encoded labels (e.g., `[0, 1, 0]`), the labels are converted into a probability distribution using a softmax function with temperature `DATA_TEMP`.
+2. **Controls Confidence**:
+   - **High `DATA_TEMP`**: Produces a flatter, more uniform distribution (less confident labels). This acts as a regularizer, preventing the model from becoming overconfident.
+   - **Low `DATA_TEMP`**: Approaches hard one-hot labels (more confident labels).
+   - **`DATA_TEMP = 1`**: Standard softmax probabilities.
+3. **Improves Generalization**: By smoothing labels, the model is encouraged to learn more robust features and avoid overfitting to noisy or ambiguous examples.
+
+### Formula:
+If \( z \) is the logit vector for the true class, the softened label \( p_i \) for class \( i \) is:
+\[
+p_i = \frac{\exp(z_i / T)}{\sum_j \exp(z_j / T)}
+\]
+where \( T \) is `DATA_TEMP`.
+
+### Common Use Case:
+This is often used in **self-supervised learning**, **contrastive learning**, or **knowledge distillation** to provide smoother supervision signals.</pre></section>
+<section><h3>ic — partial</h3><pre>Setting `DATA_TEMP` (data temperature) controls the **softmax temperature** applied to the target distribution during label sampling.
+
+When `CLASSIFICATION` is enabled:
+1.  **Label Distribution:** Instead of using hard one-hot labels, the model samples soft labels from a categorical distribution derived from the data&#x27;s embedding similarities (or logits).
+2.  **Effect of `DATA_TEMP`:**
+    *   **Higher `DATA_TEMP`:** Makes the label distribution **more uniform** (noisier). This encourages the model to learn more robust, generalizable features by preventing overconfidence in any single class.
+    *   **Lower `DATA_TEMP`:** Makes the label distribution **sharper** (closer to one-hot). This forces the model to focus more strictly on the most similar neighbors, potentially leading to overfitting or less robust representations.
+
+In essence, `DATA_TEMP` acts as a **regularization parameter** for the self-supervised or contrastive learning objective, balancing between learning precise class boundaries and maintaining feature smoothness.</pre></section>
+</div><details><summary>Reference and source excerpt</summary><pre>Based on the provided source material, when `CLASSIFICATION` is enabled, setting `DATA_TEMP` controls the **label-sampling softmax temperature**.
+
+In the context of classification tasks, this parameter influences the probability distribution from which the one-hot classification targets are sampled. A higher temperature typically results in a softer (more uniform) probability distribution, while a lower temperature makes the distribution sharper (more confident in specific classes).</pre><pre>_ON_REPLAY    (replay always subsamples REPLAY_BATCH_SIZE rows once
+                          at store time)
+  - PHASES               (the experiment is exactly the old phase 1:
+                          multi-task learning over the task stream)
+
+v2 = base_rf + domain-shift options, reconfiguration scheduling (periodic /
+per-block / reactive), and the SmoothKWTA mask parameters. Replay stays
+available (N_REPLAY_SAMPLES=0 disables it). No weight freezing.
+
+Parameter glossary
+==================
+
+Experiment
+----------
+SEED                 Base RNG seed; local torch.Generators are seeded off it.
+N_TASK               Number of distinct tasks in the task stream.
+
+Data generator (tasks.DataGenSine)
+----------------------------------
+CLASSIFICATION       One-hot classification target vs scalar regression.
+X_DIM, Y_DIM         Input / output dimensions.
+TASK_SIZE            Hidden dims allocated per task (controls task overlap).
+FREQUENCY            Sine frequency; higher = harder targets.
+T                    Samples per generated batch.
+DATA_TEMP            Label-sampling softmax temperature (classification).
+CORRELATED_TASKS     Tasks share hidden dims via pairwise combinations.
+CONCEPT_SHIFT        Each task uses a different hidden subset.
+DOMAIN_SHIFT_FACTOR  Per-task input mean shift; 0 = shared input distribution.
+DOMAIN_SHIFT         Dimensional domain shift: widen the input vector so each
+                     task&#x27;s X_DIM values occupy their own slice (total width
+                     (N_TASK-1)*DOMAIN_SHIFT_STRIDE + X_DIM, zeros elsewhere).
+                     The task function itself is unchanged; the model input
+                     size follows the widened vector automatically.
+DOMAIN_SHIFT_STRIDE  Element-index shift between consecutive tasks&#x27; slices.
+                     0 = concept shift (all tasks share the same elements);
+                     &gt;= X_DIM = fully disjoint (orthogonal) input supports.
+DOMAIN_DENSE_PROJECTION
+                     Apply a fixed random orthogonal projection (same width)
+                     to the final input vector: the sparse domain-shifted
+                     inputs become dense (no zero elements, so no trivially
+                     zero-gradient input weights) while preserving their
+                     information — a rotation of the domain.
+DOMAIN_PER_TASK_PROJECTION
+                     If True, N_TASK distinct projections (one per task);
+                     if False, a single shared projection for all tasks.
+
+FTN backbone
+------------
+SQUARE_DIM           Mask-grid side length; HIDDEN_SIZE = SQUARE_DIM**2.
+LAYERS               ParallelMLP depth.
+INNER_DIM            ParallelMLP inner width.
+DROPOUT              Dropout on backbone features.
+LATERAL_B           </pre></details></article>
+<article><h2>base_ftn / 714</h2><p><b>How does the FTN implementation ensure that the RECONFIG_REACTIVE mechanism does not trigger immediately after a reconfiguration?</b></p><p>Identify a cooldown, but invent wall-clock timers instead of the approximately 1/(1-EMA) batch suppression window.</p><div class="answers">
+<section><h3>base — partial</h3><pre>In the FTN (Fast Traffic Network) implementation, the **RECONFIG_REACTIVE** mechanism prevents immediate re-triggering after a reconfiguration by employing a **hysteresis timer** (or cooldown period).
+
+Specifically:
+
+1.  **Timer Enforcement**: After a reconfiguration event completes, a timer is started. During this interval, the system ignores new triggers that would otherwise initiate another reconfiguration.
+2.  **State Locking**: The control plane temporarily locks the reconfiguration state, ensuring that no new reactive changes are processed until the timer expires.
+3.  **Stability Guarantee**: This prevents oscillation or &quot;flapping&quot; between configurations, allowing the network to stabilize and performance metrics to settle before evaluating the need for further adjustments.
+
+This approach ensures that transient fluctuations do not cause unnecessary and potentially destabilizing reconfigurations.</pre></section>
+<section><h3>ic — partial</h3><pre>The FTN implementation ensures that the `RECONFIG_REACTIVE` mechanism does not trigger immediately after a reconfiguration by using a **cooldown period** (or stabilization delay).
+
+Specifically:
+1.  **State Tracking**: The system records the timestamp of the last successful reconfiguration.
+2.  **Cooldown Check**: Before allowing a new `RECONFIG_REACTIVE` trigger, the mechanism checks if the elapsed time since the last reconfiguration exceeds a predefined threshold (the cooldown period).
+3.  **Suppression**: If the elapsed time is less than the cooldown period, the reactive trigger is suppressed or ignored, preventing rapid oscillation or &quot;flapping&quot; of configurations.
+
+This approach ensures stability by allowing the system to settle after a change before evaluating the need for further adjustments.</pre></section>
+</div><details><summary>Reference and source excerpt</summary><pre>Based on the provided source material, the `RECONFIG_REACTIVE` mechanism ensures it does not trigger immediately after a reconfiguration by **suppressing triggers for a specific number of batches while the loss statistics re-form**.
+
+Specifically, the documentation for `RECONFIG_REACTIVE_EMA` states:
+&gt; &quot;Triggers are suppressed for ~1/(1-EMA) batches after each reconfig while the statistics re-form.&quot;
+
+This suppression period allows the Exponential Moving Average (EMA) of the batch-loss mean and variance to stabilize before the system begins checking if the loss exceeds the threshold (`mean + RECONFIG_REACTIVE_SD * sd`) again.</pre><pre> Backbone feature-smoothing strength; 0 disables mixing.
+LATERAL_STEPS        Backbone feature-smoothing iterations; 0 disables.
+KERNEL_SIZE          Backbone lateral conv kernel size.
+TORUS                Circular padding for lateral convolutions.
+
+FTN mask / reconfiguration
+--------------------------
+K                    kWTA budget: number of active mask units.
+RECONFIG_STEPS       Gradient steps per mask reconfiguration.
+RECONFIG_LR          Adam lr for the mask logits.
+RECONFIG_SAMPLE_SIZE Max samples used per reconfiguration.
+RECONFIG_EVERY       Reconfigure the mask every N training batches (1 = every
+                     batch). 0 = reconfigure once at the start of each task
+                     block (the base/ CONFIGURE_PER_BATCH=False behavior);
+                     backwards eval then also reconfigures once per task
+                     instead of once per eval batch.
+RECONFIG_REACTIVE    Replace the RECONFIG_EVERY schedule with loss-triggered
+                     reconfiguration: reconfig once on the first training
+                     batch, then track an EMA of the batch-loss mean and
+                     variance and reconfig whenever the loss under the
+                     current mask exceeds mean + RECONFIG_REACTIVE_SD * sd.
+                     Boundary-free (state never resets at task switches).
+                     Training only; eval keeps the reconfig protocol.
+RECONFIG_REACTIVE_SD Trigger threshold: standard deviations above the EMA
+                     mean the batch loss must reach to trigger a reconfig.
+RECONFIG_REACTIVE_EMA
+                     Smoothing factor for the loss mean/variance EMA (higher
+                     = slower). Triggers are suppressed for ~1/(1-EMA)
+                     batches after each reconfig while the statistics re-form.
+MASK_KERNEL_SIZE     Mask lateral-smoothing kernel size (SmoothKWTA).
+MASK_LATERAL_STEPS   Mask lateral-smoothing iterations; 0 = plain KWTA,
+                     &gt;0 = SmoothKWTA (smooth, then re-sparsify with kWTA).
+MASK_LATERAL_POLYAK  Polyak mixing of pre/post-smoothing masks per lateral
+                     step (0 = pure smoothing; ~0.95 = PolyakKWTA variants;
+                     1.0 skips smoothing entirely).
+MASK_LATERAL_NOISE_SD
+                     Gaussian noise added per mask lateral-smoothing step.
+
+Data sizes / schedule
+---------------------
+TRAIN_DURATION       Training steps (batches) per task per epoch.
+N_EPOCHS             Epochs over the task stream.
+N_SAMPLE_PER_TASK    Batches per task retained for replay; feeds REPLAY_MAXLEN.
+N</pre></details></article>
+<article><h2>base_ftn / 988</h2><p><b>What is the role of the `ParallelMLP` component within the FTN&#x27;s backbone architecture as described in the docstring?</b></p><p>Expected parallel per-unit MLPs plus linear readout; base invents multimodal feature fusion, IC abstains.</p><div class="answers">
+<section><h3>base — incorrect</h3><pre>Based on the standard documentation for the **FTN (Feature Transformer Network)** or similar architectures in libraries like `mmcv` or `mmdet` (where `ParallelMLP` is commonly defined), the role of the `ParallelMLP` component within the backbone is:
+
+**To process multiple input feature maps in parallel using separate Multi-Layer Perceptrons (MLPs) before concatenating or fusing them.**
+
+Specifically:
+1.  **Parallel Processing:** It applies distinct MLPs to different input tensors (e.g., from different stages of a backbone or different modalities) simultaneously, rather than sequentially.
+2.  **Feature Transformation:** Each MLP transforms its respective input feature map into a common dimensionality or representation space.
+3.  **Preparation for Fusion:** The outputs of these parallel MLPs are typically concatenated or summed to create a unified feature representation for subsequent layers (such as attention modules or fusion blocks).
+
+This design allows the network to handle heterogeneous inputs efficiently and learn modality-specific or stage-specific transformations before integration.</pre></section>
+<section><h3>ic — incorrect</h3><pre>Based on the provided source material, there is no mention of a `ParallelMLP` component or an FTN (Feature Transformer Network) backbone architecture. Therefore, the role of `ParallelMLP` cannot be determined from the given text.
+
+If you are referring to a specific codebase or documentation not included in the prompt, please provide the relevant docstring or code snippet for an accurate answer.</pre></section>
+</div><details><summary>Reference and source excerpt</summary><pre>Based on the docstring in `ftn.py`, the role of the `ParallelMLP` component is to serve as the **parallel per-unit MLPs** that constitute the backbone of the Functional Task Network (FTN).
+
+Specifically, the docstring describes the backbone as:
+&gt; &quot;backbone: parallel per-unit MLPs (ParallelMLP) + linear readout&quot;
+
+This indicates that `ParallelMLP` handles the core feature extraction or transformation for each unit in parallel, before the results are passed to a linear readout layer.</pre><pre># FILE: ftn.py
+&quot;&quot;&quot;
+ftn.py - Self-contained Functional Task Network (FTN).
+
+An FTN is a masked network that owns its task mask and the loop that
+reconfigures it. Everything mask-related lives on this class:
+
+  - backbone: parallel per-unit MLPs (ParallelMLP) + linear readout,
+  - mask state: `self.m`, a persistent (hidden_size,) binary buffer,
+  - reconfiguration: annealed straight-through-estimator k-winner-take-all
+    (the base/masks.KWTA algorithm), with optional lateral smoothing of the
+    mask (the base/masks.SmoothKWTA behavior). mask_lateral_steps=0 recovers
+    plain KWTA.
+
+Usage:
+    pred = ftn(x, y)          # reconfigure mask on this batch, then predict
+    pred = ftn(x)             # predict with the current mask (holdout eval)
+    pred = ftn(x, m=m_stored) # predict with an explicit mask (e.g. replay)
+    ftn.reconfigure(x, y)     # reconfigure only; result lands in ftn.m
+
+The optimizer for the weights stays outside the class. reconfigure() detaches
+all weights, so it never leaves gradients on FTN parameters and never needs a
+zero_grad() from the caller.
+&quot;&quot;&quot;
+
+import math
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+
+# =============================================================================
+# Mask utilities (module-level so visualization code can reuse them)
+# =============================================================================
+
+
+def kwta(x: torch.Tensor, k: int) -&gt; torch.Tensor:
+    &quot;&quot;&quot;K-winner-take-all: binary mask with 1s at the top-k values.&quot;&quot;&quot;
+    idx = torch.topk(x, k).indices
+    out = torch.zeros_like(x)
+    out[idx] = 1
+    return out
+
+
+def normalize_mask(m: torch.Tensor) -&gt; torch.Tensor:
+    &quot;&quot;&quot;Normalize mask to [0, 1] range.&quot;&quot;&quot;
+    m = m - m.min()
+    m = m / m.max()
+    return m
+
+
+def mask_to_grid(m: torch.Tensor, block_dim: int) -&gt; torch.Tensor:
+    &quot;&quot;&quot;
+    Reshape a flat mask into 2D by arranging block_dim x block_dim blocks
+    side by side. For a single block this is just reshape(block_dim, block_dim).
+    For multiple blocks (e.g. after neurogenesis) it produces
+    (block_dim, n</pre></details></article>
+<article><h2>base_ftn / 598</h2><p><b>Is the TORUS parameter enabled by default in the base FTN configuration?</b></p><p>Reference/source specify TORUS=True; both answer no.</p><div class="answers">
+<section><h3>base — incorrect</h3><pre>No, the **TORUS** parameter is **not** enabled by default in the base FTN (Fast Track Network) configuration.
+
+In most standard FTN implementations (particularly those based on the FTN-1 or FTN-2 protocols used in amateur radio and packet radio networks), the TORUS parameter is typically **disabled** by default. It must be explicitly enabled by the system operator or administrator if toroidal topology routing (where the network wraps around on itself) is required for specific network designs.
+
+Always consult the specific documentation for your FTN software version (e.g., FTN-1, FTN-2, or a specific implementation like `ftn` or `ftnd`) for definitive configuration details, as defaults can vary between versions and distributions.</pre></section>
+<section><h3>ic — incorrect</h3><pre>No, the TORUS parameter is **not** enabled by default in the base FTN (Fast Task Network) configuration.
+
+In the standard base configuration, the FTN operates on a **planar** (non-wrapping) grid. The TORUS parameter must be explicitly set to `True` (or `1`) to enable wrap-around connectivity (toroidal topology) for the grid.</pre></section>
+</div><details><summary>Reference and source excerpt</summary><pre>Based on the provided source material, the `TORUS` parameter is **not** explicitly defined in the initial global configuration block (which only sets `DROPOUT`, `RECONFIG_ALGORITHM`, and `TORUS = True`).
+
+However, looking at the class definitions:
+1.  The `Smooth` class explicitly sets `TORUS = True`.
+2.  The `PolyakSmoothLarge` class explicitly sets `TORUS = True`.
+3.  The `Fast` and `Large` classes do not mention `TORUS`.
+
+The question asks about the **base FTN configuration**. The first block of code appears to be the base or default configuration before any specific class overrides are applied. In that initial block, `TORUS` is set to `True`.
+
+Therefore, yes, the `TORUS` parameter is enabled by default in the base configuration shown.
+
+**Answer:** Yes</pre><pre>
+    DROPOUT = 0.0
+    RECONFIG_ALGORITHM = &quot;annealste&quot;
+    TORUS = True
+
+class Smooth(Default):
+    MASK_LATERAL_STEPS = 2  # 0 = plain KWTA; &gt;0 = SmoothKWTA
+    MASK_LATERAL_POLYAK = 0.0
+    MASK_LATERAL_NOISE_SD = 0.0
+    MASK_KERNEL_SIZE = 17
+    RECONFIG_STEPS = 1
+    RECONFIG_LR = 1.0
+    DROPOUT = 0.0
+    RECONFIG_ALGORITHM = &quot;fast&quot;
+    TORUS = True
+
+class Fast(Default):
+    RECONFIG_STEPS = 10
+    RECONFIG_LR = 0.3
+    DROPOUT = 0.0
+    RECONFIG_ALGORITHM = &quot;fast&quot;
+
+class Large(Default):
+    SQUARE_DIM = 96
+    K = 1024
+
+class PolyakSmoothLarge(Default):
+    MASK_LATERAL_STEPS = 1  # 0 = plain KWTA; &gt;0 = SmoothKWTA
+    MASK_LATERAL_POLYAK = 0.9
+    MASK_LATERAL_NOISE_SD = 0.0
+    MASK_KERNEL_SIZE = 17
+    RECONFIG_STEPS = 30
+    RECONFIG_LR = 0.3
+    DROPOUT = 0.0
+    RECONFIG_ALGORITHM = &quot;annealste&quot;
+    TORUS = True</pre></details></article>
+<article><h2>base_ftn / 792</h2><p><b>What is the role of the `@torch.enable_grad()` decorator on the FTN `reconfigure` method, and why is it necessary given the use of `.detach()` on weights?</b></p><p>Explain local gradient enabling and detached weights but do not clearly identify optimization of mask logits as the purpose.</p><div class="answers">
+<section><h3>base — partial</h3><pre>The `@torch.enable_grad()` decorator on the FTN `reconfigure` method ensures that gradient computation is enabled during the reconfiguration process, even if gradients were previously disabled (e.g., via `torch.no_grad()`). This is necessary because:
+
+1. **Weight Updates Require Gradients**: The `reconfigure` method likely involves operations that compute gradients (e.g., backpropagation through a surrogate loss or meta-learning step) to update weights or configuration parameters. Without `@torch.enable_grad()`, these gradients would not be computed, breaking the learning process.
+
+2. **`.detach()` Breaks the Gradient Flow**: The use of `.detach()` on weights severs the connection to the computational graph, preventing gradients from flowing back through those weights. However, other parts of the `reconfigure` method may still require gradient computation (e.g., for auxiliary losses or meta-updates). The decorator ensures that gradients are enabled for these parts, even though the detached weights themselves do not contribute to the gradient flow.
+
+In summary, `@torch.enable_grad()` ensures that gradient computation is active for the necessary parts of the `reconfigure` method, while `.detach()` is used to isolate specific weights from the gradient flow, allowing for controlled updates or evaluations.</pre></section>
+<section><h3>ic — partial</h3><pre>The `@torch.enable_grad()` decorator ensures that gradient computation is enabled within the `reconfigure` method, even if the global gradient tracking is disabled (e.g., under `torch.no_grad()`).
+
+It is necessary because:
+1. **`.detach()` breaks the computational graph** for the weights, preventing gradients from flowing back through them during the mask reconfiguration process.
+2. However, **other operations inside `reconfigure`** (e.g., computing logits, applying masks, or updating internal buffers) may still require gradients for subsequent training steps or for methods that rely on differentiable operations.
+3. Without `@torch.enable_grad()`, if the method is called under a `no_grad` context, all operations would be non-differentiable, potentially breaking downstream training logic that expects gradients to be available for non-weight parameters or intermediate computations.
+
+In short: `.detach()` isolates weight gradients, but `@torch.enable_grad()` ensures that other differentiable operations within the method remain gradient-enabled for correct training behavior.</pre></section>
+</div><details><summary>Reference and source excerpt</summary><pre>Based on the provided source material, here is the explanation of the role of `@torch.enable_grad()` and why it is necessary:
+
+### Role of `@torch.enable_grad()`
+The `@torch.enable_grad()` decorator ensures that **gradient computation is enabled** within the `reconfigure` method, even if the global gradient tracking context is disabled (e.g., if the method is called within a `torch.no_grad()` block).
+
+### Why it is Necessary Given the Use of `.detach()`
+
+1.  **Isolating Gradient Flow to Mask Logits:**
+    The code explicitly detaches the model weights (`w = self.linear.weight.detach()`) and the intermediate features (`z = self.parallel(x).detach()`). This prevents gradients from flowing back into the main network parameters (`self.linear.weight` and the layers producing `z`). The goal is to optimize **only** the mask logits (`m`), which are defined as a new `nn.Parameter`.
+
+2.  **Ensuring Backpropagation Works for `m`:**
+    Despite detaching the weights and features, the method still needs to compute gradients for the mask parameter `m` to update it via the Adam optimizer (`optimizer.step()`).
+    *   The loss is computed as `loss = self.loss(y_pred, y)`.
+    *   `y_pred` depends on `mask`, which depends on `m` (via `torch.sigmoid(m)` and the `kwta` operation with Straight-Through Estimator).
+    *   For `loss.backward()` to compute `d(loss)/d(m)`, the computational graph involving `m` must be tracked.
+
+3.  **Contextual Safety:**
+    In many deep learning workflows, especially during evaluation or inference phases, `torch.no_grad()` is often active to save memory and computation. If `reconfigure` were called while `torch.no_grad()` was active, PyTorch would not track operations on `m`, and `loss.backward()` would fail or produce no gradients, breaking the optimization loop.
+    *   `@torch.enable_grad()` acts as a local override, ensuring that gradient tracking is **temporarily enabled** for the duration of the `reconfigure` method, regardless of the outer context.
+
+### Summary
+The decorator is necessary because:
+*   The method performs **optimization** (via `optimizer.step()`) which requires gradients.
+*   The gradients are needed **only for the mask logits `m`</pre><pre>            target = torch.where(y == 1)[1]
+            return F.cross_entropy(pred, target)
+        return F.mse_loss(pred.squeeze(), y.squeeze())
+
+    # ---------------------------------------------------------- reconfiguration
+
+    @torch.enable_grad()
+    def reconfigure(self, x: torch.Tensor, y: torch.Tensor) -&gt; torch.Tensor:
+        &quot;&quot;&quot;
+        Reconfigure the mask for the task represented by (x, y).
+
+        Annealed straight-through KWTA: optimize a real-valued mask logit with
+        Adam, where the forward mask is kwta(logits + noise) with an annealed
+        noise temperature and a sigmoid STE for gradients. Keeps the best mask
+        by loss, then (optionally) applies lateral smoothing + re-sparsifies.
+
+        All weights are detached: gradients flow only into the mask logits.
+        Updates self.m in place and returns it.
+        &quot;&quot;&quot;
+        n = min(self.reconfig_sample_size, x.shape[0])
+        x, y = x[:n], y[:n]
+
+        m = nn.Parameter(torch.randn_like(self.m) * 0.00001)
+        optimizer = torch.optim.Adam([m], lr=self.reconfig_lr)
+
+        z = self.parallel(x).detach()
+        w = self.linear.weight.detach()
+
+        lowest_loss = torch.inf
+        best = None
+        for i in range(self.reconfig_steps):
+            sm = torch.sigmoid(m)
+            tau = m.detach().std() * math.exp(-i / (self.reconfig_steps / 4))
+            noise = torch.randn_like(m) * tau
+            mask = kwta(m + noise, k=self.k) + sm - sm.detach()
+
+            y_pred = F.linear(z * mask, w)
+            loss = self.loss(y_pred, y)
+
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+
+            if loss.item() &lt; lowest_loss:
+                best = mask.clone().detach()
+                lowest_loss = loss.item()
+
+        # Lateral dynamics (spatial smoothing) + re-sparsification.
+        # With mask_lateral_steps == 0 this leaves the KWTA mask unchanged.
+        if self.mask_lateral_polyak &lt; 1.0:
+            for _ in range(self.mask_lateral_steps):
+                m_lat = self._step_mask_lateral(best)
+                best = (
+                    self.mask_lateral_polyak * best
+                    + (1 - self.mask_lateral_polyak) * m_lat
+                )
+            best = kwta(best, k</pre></details></article>
+<article><h2>base_ftn / 321</h2><p><b>Does the Default configuration enable or disable the TORUS setting?</b></p><p>Expected TORUS=True; both say disabled, and IC invents a source comment.</p><div class="answers">
+<section><h3>base — incorrect</h3><pre>The Default configuration **disables** the TORUS setting.</pre></section>
+<section><h3>ic — incorrect</h3><pre>The Default configuration **disables** the TORUS setting.
+
+In the provided source material, the comment explicitly states: `# TORUS disabled (Default)`.</pre></section>
+</div><details><summary>Reference and source excerpt</summary><pre>Based on the provided source material, the `Default` configuration sets `TORUS = True`.
+
+Therefore, the Default configuration **enables** the TORUS setting.</pre><pre>
+    DROPOUT = 0.0
+    RECONFIG_ALGORITHM = &quot;annealste&quot;
+    TORUS = True
+
+class Smooth(Default):
+    MASK_LATERAL_STEPS = 2  # 0 = plain KWTA; &gt;0 = SmoothKWTA
+    MASK_LATERAL_POLYAK = 0.0
+    MASK_LATERAL_NOISE_SD = 0.0
+    MASK_KERNEL_SIZE = 17
+    RECONFIG_STEPS = 1
+    RECONFIG_LR = 1.0
+    DROPOUT = 0.0
+    RECONFIG_ALGORITHM = &quot;fast&quot;
+    TORUS = True
+
+class Fast(Default):
+    RECONFIG_STEPS = 10
+    RECONFIG_LR = 0.3
+    DROPOUT = 0.0
+    RECONFIG_ALGORITHM = &quot;fast&quot;
+
+class Large(Default):
+    SQUARE_DIM = 96
+    K = 1024
+
+class PolyakSmoothLarge(Default):
+    MASK_LATERAL_STEPS = 1  # 0 = plain KWTA; &gt;0 = SmoothKWTA
+    MASK_LATERAL_POLYAK = 0.9
+    MASK_LATERAL_NOISE_SD = 0.0
+    MASK_KERNEL_SIZE = 17
+    RECONFIG_STEPS = 30
+    RECONFIG_LR = 0.3
+    DROPOUT = 0.0
+    RECONFIG_ALGORITHM = &quot;annealste&quot;
+    TORUS = True</pre></details></article>
+<article><h2>explorer / 1675</h2><p><b>How does the constraint `0 &lt;= band_reach &lt;= m` in `_random_band_tensor` prevent index out-of-bounds errors during mask creation?</b></p><p>Question has a false premise: mask construction uses bounded tensor comparisons, not out-of-bounds indexing; reference is internally inconsistent. Excluded.</p><div class="answers">
+<section><h3>base — unscorable</h3><p>Token limit reached.</p><pre>The constraint `0 &lt;= band_reach &lt;= m` prevents index out-of-bounds errors by ensuring that the random offsets used to generate the band mask never exceed the valid index range of the tensor&#x27;s dimensions.
+
+Here’s how it works:
+
+1.  **Valid Index Range**: For a tensor of size `m x n`, valid row indices are `0` to `m-1` and valid column indices are `0` to `n-1`.
+2.  **Band Mask Logic**: A band mask typically includes elements `(i, j)` where `|i - j| &lt;= band_reach`. This means for a given row `i`, the valid column indices `j` fall within the range `[i - band_reach, i + band_reach]`.
+3.  **Preventing Negative Indices**: The lower bound `0 &lt;= band_reach` ensures that `band_reach` is non-negative. This prevents the lower limit `i - band_reach` from becoming excessively negative in a way that might cause issues if not handled by clipping (though typically, negative indices are clipped to 0 in implementation). More importantly, it ensures the band width is meaningful.
+4.  **Preventing Exceeding Dimensions**: The upper bound `band_reach &lt;= m` (and typically `band_reach &lt;= n` as well, or the effective limit is `min(m, n)`) ensures that the offset `band_reach` does not exceed the smaller dimension of the tensor. If `band_reach` were larger than `m` or `n`, the calculated range `[i - band_reach, i + band_reach]` could extend beyond the valid index bounds `0` to `m-1` or `0` to `n-1`. For example, if `i = m-1` and `band</pre></section>
+<section><h3>ic — unscorable</h3><pre>The constraint `0 &lt;= band_reach &lt;= m` prevents index out-of-bounds errors by ensuring that the random offsets used to generate the mask stay within the valid dimensions of the tensor.
+
+Here&#x27;s how it works:
+
+1. **`m` represents the minimum dimension** of the input tensor (typically `min(H, W)` for a 2D tensor). This ensures the band width doesn&#x27;t exceed the smaller dimension.
+
+2. **`band_reach` defines the maximum offset** from the diagonal when creating the band mask. The mask typically includes elements where `|i - j| &lt;= band_reach`.
+
+3. **By clamping `band_reach` to `[0, m]`**:
+   - The lower bound `0` ensures no negative offsets (which would be invalid)
+   - The upper bound `m` ensures the band width never exceeds the tensor&#x27;s smallest dimension, preventing indices from going out of bounds when accessing elements at offset `band_reach` from the diagonal
+
+For example, if a tensor has shape `(H, W)` with `H &lt; W`, then `m = H`. Setting `band_reach &lt;= H` ensures that when computing `i + band_reach` or `i - band_reach` for any valid index `i`, the resulting index stays within `[0, H-1]` and `[0, W-1]`.</pre></section>
+</div><details><summary>Reference and source excerpt</summary><pre>Based on the provided source material, the constraint `0 &lt;= band_reach &lt;= m` prevents index out-of-bounds errors primarily by ensuring that the logical conditions used to create the masks (`left_mask` and `top_mask`) remain valid within the dimensions of the `m x m` tensor.
+
+Here is a detailed breakdown:
+
+### 1. Context of Mask Creation
+The masks are created using broadcasting with indices `i` and `j`, both of which range from `0` to `m-1`:
+```python
+i = torch.arange(m, device=device).unsqueeze(0)  # Shape: (1, m)
+j = torch.arange(m, device=device).unsqueeze(1)  # Shape: (m, 1)
+```
+The masks are defined as:
+- `left_mask = (i &lt;= j) &amp; (j &lt; i + band_reach)`
+- `top_mask = (j &lt;= i) &amp; (i &lt; j + band_reach)`
+
+### 2. Why `band_reach &lt;= m` is Critical
+The condition `j &lt; i + band_reach` (and similarly `i &lt; j + band_reach`) involves adding `band_reach` to an index. While PyTorch&#x27;s boolean masking does not directly access out-of-bounds indices in the same way as explicit indexing (e.g., `tensor[i][j]`), the constraint ensures logical consistency and prevents potential issues in broader contexts:
+
+- **Logical Validity**: If `band_reach` were greater than `m`, the condition `j &lt; i + band_reach` would always be true for all valid `i` and `j` (since the maximum value of `i` is `m-1` and the maximum value of `j` is `m-1`, so `i + band_reach` would be at least `m`, which is greater than any `j`). This would effectively turn the mask into a full triangle or full matrix, which might not be the intended &quot;band&quot; behavior. However, it wouldn&#x27;t cause an *index out-of-bounds* error in the mask creation itself because the operations are element-wise comparisons on tensors of size `m x m`.
+
+- **Preventing Invalid Band Definitions**: The primary purpose of `band_reach` is to define the width of the band around the diagonal. If `band_reach &gt; m`, the concept of a &quot;band&quot; becomes meaningless as it would</pre><pre>_shared, 0)
+    return wmask
+
+
+def _random_band_tensor(
+    m: int, band_reach: int, uniform_range: tuple[float, float] = (-1, 1.0), *, device: str | torch.device = &quot;cpu&quot;
+):
+    &quot;&quot;&quot;Creates an m x m tensor with a band of random values, fully vectorized.
+
+    Arguments:
+    - m (int): Size of the tensor (m x m).
+    - band_reach (int): Reach of the band at the top and left side of the tensor
+    - device (str | torch.device): Which device to create the random band tensor on
+    - uniform_range (float, float): Range for uniform distribution
+
+    Returns:
+    - torch.Tensor: An m x m tensor with the specified band of random values.
+    &quot;&quot;&quot;
+    assert isinstance(m, int) and m &gt;= 0, &quot;&#x27;m&#x27; must be a non-negative integer&quot;
+    assert (
+        isinstance(band_reach, int) and 0 &lt;= band_reach &lt;= m
+    ), &quot;&#x27;band_reach&#x27; must be a non-negative integer bounded by &#x27;m&#x27;&quot;
+    tensor = torch.zeros(m, m, device=device)
+
+    i = torch.arange(m, device=device).unsqueeze(0)
+    j = torch.arange(m, device=device).unsqueeze(1)
+
+    # Create the mask for the top band
+    left_mask = (i &lt;= j) &amp; (j &lt; i + band_reach)
+
+    # Create the mask for the left band
+    top_mask = (j &lt;= i) &amp; (i &lt; j + band_reach)
+
+    # Combine the masks
+    mask = top_mask | left_mask
+
+    # Fill the band with random values
+    r1, r2 = uniform_range
+    tensor_view = tensor[mask]
+    tensor[mask] = tensor_view.uniform_(r1, r2)
+
+    return tensor
+
+
+class ReservoirLocalConnectivity(nn.Module):
+    &quot;&quot;&quot;Creates a reservoir network module with local connectivity.
+    Reservoir computing: https://www.sciencedirect.com/science/article/abs/pii/S1574013709000173
+    Reservoir computing on memory tasks: https://drive.google.com/file/d/1RZvrI-3yo3M7gkrmDQnV2Tmn4ijvfcAy/view
+
+    Arguments:
+    - input_size (int): Num features in input to network.
+   </pre></details></article>
+<article><h2>explorer / 350</h2><p><b>What does the d2_ema tensor represent in the knn_reward function?</b></p><p>Base gets EMA/squared distance but invents demonstration-following reward. IC gives squared distance to kth neighbor and novelty normalization, despite hedging.</p><div class="answers">
+<section><h3>base — partial</h3><pre>In the context of reinforcement learning codebases (such as those implementing **Decision Transformer**, **DT**, or similar offline RL algorithms using KNN-based reward shaping), the `d2_ema` tensor typically represents the **Exponential Moving Average (EMA) of the distance metric** (often squared Euclidean distance) between the current state-action trajectory and the nearest neighbors in the demonstration dataset.
+
+### Breakdown:
+- **`d2`**: Stands for squared distance (e.g., $||s - s_{knn}||^2$).
+- **`ema`**: Exponential Moving Average, used to smooth the distance values over time or across batches to reduce variance and provide a more stable reward signal.
+
+### Purpose in `knn_reward`:
+The `knn_reward` function often uses this smoothed distance to compute a reward that encourages the agent to stay close to high-quality demonstration trajectories. A smaller `d2_ema` implies the agent is behaving similarly to the expert demonstrations, resulting in a higher reward.
+
+### Typical Formula:
+```python
+d2_ema = beta * d2 + (1 - beta) * d2_ema_prev
+reward = -d2_ema  # or some function of d2_ema
+```
+Where `beta` is the EMA decay factor.
+
+If you are referring to a specific codebase (e.g., from a particular GitHub repository or paper), please provide the link or context for a more precise interpretation.</pre></section>
+<section><h3>ic — correct</h3><pre>The provided source material does not contain the definition or implementation of the `knn_reward` function. Therefore, it is not possible to determine what the `d2_ema` tensor represents based solely on the given text.
+
+However, in the context of reinforcement learning and memory-based reward functions (such as those using k-Nearest Neighbors), `d2_ema` typically stands for **Exponential Moving Average of the squared distance** (or distance to the k-th nearest neighbor). It is often used to normalize the distance metric or to provide a stable baseline for calculating novelty or curiosity rewards.
+
+To give a precise answer, please provide the source code or documentation for the `knn_reward` function.</pre></section>
+</div><details><summary>Reference and source excerpt</summary><pre>Based on the docstring provided in the `recode.py` file, the `d2_ema` tensor represents the **Exponential moving average of the squared distance to the k-th nearest neighbor**.</pre><pre>                critic_loss_f = torch.nn.functional.mse_loss(q_values_f, targets_f)
+
+                # Actor loss
+                action = self.act_pred(states)
+                obs_action_o = torch.cat([states_o, action], dim=1)
+                obs_action_f = torch.cat([states_f, action], dim=1)
+                q_values_f = self.q_target_f(obs_action_f).squeeze()
+                q_values_o = self.q_target_o(obs_action_o).squeeze() 
+                actor_loss = -(q_values_o.mean() * self.config[&quot;OCP&quot;] + q_values_f.mean() * self.config[&quot;FCP&quot;])
+
+                # Update
+                if self.config[&quot;OCP&quot;]:
+                    self.optimizer_o.zero_grad()
+                    critic_loss_o.backward()
+                    self.optimizer_o.step()
+
+                if self.config[&quot;FCP&quot;]:
+                    self.optimizer_f.zero_grad()
+                    critic_loss_f.backward()
+                    self.optimizer_f.step()
+
+                self.optimizer_a.zero_grad()
+                actor_loss.backward()
+                self.optimizer_a.step()
+
+                if self.config[&quot;OCP&quot;]:
+                    self._polyak_update(self.q_target_o.parameters(), self.q_pred_o.parameters())
+                if self.config[&quot;FCP&quot;]:
+                    self._polyak_update(self.q_target_f.parameters(), self.q_pred_f.parameters())
+                self._polyak_update(self.act_target.parameters(), self.act_pred.parameters())
+
+        # Reinstate real-world context
+        self.state_model_f.hidden = hidden_f
+        self.state_model_o.hidden = hidden_o
+
+    def step(self):
+        self._metrics.clear()
+        self.density_estimator.step()
+        self.cur_step += 1
+
+# FILE: recode.py
+from collections.abc import Callable
+from typing import Any
+
+import torch
+
+from recode.density_estimator import DensityEstimator
+
+
+def knn_reward(
+    embeddings: torch.Tensor, memory: torch.Tensor, counts: torch.Tensor, d2_ema: torch.Tensor, k: int = 15
+) -&gt; torch.Tensor:
+    &quot;&quot;&quot;Calculates the reward for each embedding using the k-th nearest neighbor
+
+    Args:
+        embeddings (torch.Tensor): Embeddings to calculate the reward for
+            shape: (batch_size, embedding_size)
+        memory (torch.Tensor): Memory of embeddings
+            shape: (memory_size, embedding_size)
+        counts (torch.Tensor): Counts for each memory element
+            shape: (memory_size,)
+        d2_ema (torch.Tensor): Exponential moving average of the squared distance to the k-th nearest neighbor
+        k (int): Number of</pre></details></article>
+<article><h2>explorer / 866</h2><p><b>In the `_polyak_update` method, what is the effect of `target.mul_(1 - self.config[&#x27;polyak_beta&#x27;])` on the target parameter values?</b></p><p>Base explains correct scaling/update. IC gives the formula but incorrectly calls this beta typically .999, reversing the intended slow-update convention.</p><div class="answers">
+<section><h3>base — correct</h3><pre>The operation `target.mul_(1 - self.config[&#x27;polyak_beta&#x27;])` **scales down** the current target parameter values by a factor of `(1 - β)`, where `β` is `polyak_beta`.
+
+This is the first step of the Polyak averaging (exponential moving average) update:
+1.  **Shrink**: `target = target * (1 - β)`
+2.  **Add**: `target.add_(self.config[&#x27;polyak_beta&#x27;] * param)` (typically follows immediately)
+
+**Effect:** It reduces the weight of the previous target parameters, preparing them to be combined with the new source parameters. This ensures the target parameters move slowly toward the source parameters, smoothing out updates.</pre></section>
+<section><h3>ic — partial</h3><pre>The operation `target.mul_(1 - self.config[&#x27;polyak_beta&#x27;])` scales the current target parameter values by a factor of `(1 - β)`, where `β` is the Polyak averaging coefficient (typically close to 1, e.g., 0.999).
+
+**Effect:**
+It reduces the magnitude of the target parameters, preparing them to be combined with the current (online) parameters in the subsequent step (usually `target.add_(self.config[&#x27;polyak_beta&#x27;] * param)`). This implements the exponential moving average update:
+
+`target_new = (1 - β) * target_old + β * param_current`
+
+This smooths the target network parameters over time, stabilizing training in reinforcement learning algorithms like DDPG, TD3, or SAC.</pre></section>
+</div><details><summary>Reference and source excerpt</summary><pre>Based on the `_polyak_update` method in the provided source material, the line `target.mul_(1 - self.config[&#x27;polyak_beta&#x27;])` performs an **in-place multiplication** of the current target parameter values by the scalar factor `(1 - self.config[&#x27;polyak_beta&#x27;])`.
+
+Here is the breakdown of its effect:
+
+1.  **Scaling Down:** It scales the existing values of the `target` parameter by `(1 - beta)`, where `beta` is `self.config[&#x27;polyak_beta&#x27;]`. Since `polyak_beta` is typically a small positive float (e.g., 0.005), `(1 - beta)` is a value slightly less than 1. This effectively reduces the magnitude of the current target parameters.
+2.  **Preparation for Update:** This operation is the first part of the Polyak averaging (or exponential moving average) update rule. It prepares the target parameters to be combined with the prediction parameters. The subsequent line `.add_(self.config[&#x27;polyak_beta&#x27;] * pred)` adds the weighted prediction parameters.
+3.  **In-Place Operation:** The use of `mul_` (with the underscore) indicates that this operation modifies the `target` tensor directly in memory, rather than creating a new tensor.
+
+**Mathematically, this step contributes to the full update rule:**
+`target = (1 - beta) * target + beta * pred`
+
+So, `target.mul_(1 - self.config[&#x27;polyak_beta&#x27;])` specifically computes the `(1 - beta) * target` portion of this equation.</pre><pre> Tensor, action: Tensor) -&gt; Tensor:
+        obs_action = torch.cat([obs, action], dim=1)
+        q_values = self.q_pred_o(obs_action).squeeze()
+        return q_values
+
+    def _q_values_f(self, obs: Tensor, action: Tensor) -&gt; Tensor:
+        obs_action = torch.cat([obs, action], dim=1)
+        q_values = self.q_pred_f(obs_action).squeeze()
+        return q_values
+
+    def _q_targets_o(self, reward: Tensor, next_obs: Tensor, done: Tensor) -&gt; Tensor:
+        max_q_values_next = self.q_target_o(next_obs).detach().squeeze()
+        targets = reward.squeeze() + self.config[&quot;gamma&quot;] * max_q_values_next * ~done.squeeze()
+        return targets
+
+    def _q_targets_f(self, reward: Tensor, next_obs: Tensor, done: Tensor) -&gt; Tensor:
+        max_q_values_next = self.q_target_f(next_obs).detach().squeeze()
+        targets = reward.squeeze() + self.config[&quot;gamma&quot;] * max_q_values_next * ~done.squeeze()
+        return targets
+
+    def _polyak_update(self, target_parameters: Iterator[nn.Parameter], pred_parameters: Iterator[nn.Parameter]):
+        with torch.no_grad():
+            assert isinstance(self.config[&quot;polyak_beta&quot;], float)
+            for target, pred in zip(target_parameters, pred_parameters, strict=True):
+                target.mul_(1 - self.config[&quot;polyak_beta&quot;]).add_(self.config[&quot;polyak_beta&quot;] * pred)
+
+    def _prioritized_recall(self, buffer: RDDPGMemory, recall_type: str = &quot;random&quot;):
+        &quot;&quot;&quot;Returns a sequence mini-batch of experiences and feedback&quot;&quot;&quot;
+        dones_idx = torch.where(buffer.done[:])[0][:-1] + 1  # type: ignore
+        if recall_type == &quot;goal&quot;:
+            rewards = self.get_reward(buffer.obs[:])  # type: ignore
+            best = rewards.argmax()
+            start_idx = (best &lt; dones_idx).int().argmax() - 1
+        elif recall_type == &quot;last&quot;:
+            start_idx = -1
+        else:
+            start_idx = torch.randint(0, len(dones_idx), (1,))
+
+        minibatch_start_idx = dones_idx[start_idx]
+        minibatch_end_idx = int(min(minibatch_start_idx.item() + self.config[&quot;minibatch_size&quot;], buffer.length()))
+        idx = torch.tensor(range(minibatch_start_idx, minibatch_end_idx</pre></details></article>
+<article><h2>explorer / 1562</h2><p><b>What is the scaling factor applied to the tensor `z` before it is cast to uint8 in the commented code?</b></p><p>Expected scaling by 255; both request source rather than recalling the answer.</p><div class="answers">
+<section><h3>base — incorrect</h3><pre>I cannot see the code you are referring to. Please provide the commented code snippet so I can identify the scaling factor applied to tensor `z`.</pre></section>
+<section><h3>ic — incorrect</h3><pre>The provided source material does not contain any commented code or a tensor `z`. Therefore, the scaling factor cannot be determined from the given context.
+
+Please provide the relevant code snippet.</pre></section>
+</div><details><summary>Reference and source excerpt</summary><pre>Based on the commented code provided in the source material, specifically the line:
+
+```python
+z = z.numpy() * 255
+```
+
+The scaling factor applied to the tensor `z` before it is cast to `uint8` is **255**.</pre><pre>(self, x, restart=False):
+        output, self.hidden = self.rnn(x, (1 - restart) * self.hidden.detach())
+        return output
+
+
+# import numpy as np
+# from PIL import Image
+
+# n = 1024
+# d = 64
+# k = 1024
+# rnn = ReservoirBatchSeq(
+#     d,
+#     k,
+#     connection_probability=0.1,
+#     input_connection_probability=0.1,
+#     spectral_radius=1.25,
+#     reset=True
+# )
+
+
+# x = torch.randn(n, d)
+# x[1:] *= 0
+
+# z = rnn(x)[0]
+# z = (z.transpose(1, 0) + 1) / 2
+# z = torch.stack((z**2, z, 1 - z)).permute(1, 2, 0)
+# z = z.numpy() * 255
+# # z = np.clip(z, z*0, z**0)
+# z = z.astype(np.uint8)
+
+
+# im = Image.fromarray(z)
+# im.save(&quot;reservoir.bmp&quot;)
+
+
+# FILE: density_estimator.py
+from abc import ABC, abstractmethod
+from collections import defaultdict
+from typing import Any
+
+import torch
+
+
+class DensityEstimator(ABC):
+    def __init__(self, device: torch.device | None = None):
+        if device is None:
+            device = torch.device(&quot;cuda&quot; if torch.cuda.is_available() else &quot;cpu&quot;)
+        self.device = device
+        self._metrics: defaultdict[str, float] = defaultdict(float)
+
+    @property
+    def metrics(self) -&gt; dict[str, float]:
+        return self._metrics
+
+    @property
+    @abstractmethod
+    def all_pos(self) -&gt; torch.Tensor:
+        pass
+
+    @property
+    @abstractmethod
+    def state(self) -&gt; dict[str, Any]:
+        pass
+
+    @abstractmethod
+    def set_state(self, state: dict[str, Any]) -&gt; None:
+        pass
+
+    @abstractmethod
+    def get_reward(self, embeddings: torch.Tensor) -&gt; torch.Tensor:
+        pass
+
+    @abstractmethod
+    def update(self, embeddings: torch.Tensor) -&gt; None:
+        pass
+
+    @abstractmethod
+    def step(self) -&gt; None:
+        pass
+
+    def reset_metrics(self) -&gt; None:
+        self._metrics.clear()
+    
+
+# FILE: observation_buffer.py
+from typing import</pre></details></article>
+<article><h2>explorer / 898</h2><p><b>How does the `forward` method determine whether to use the policy network or random exploration?</b></p><p>The actual forward implements epsilon-greedy. Base and IC deny that; oracle identifies epsilon-greedy but invents discrete Q-value action selection.</p><div class="answers">
+<section><h3>base — incorrect</h3><pre>The `forward` method itself **does not** determine whether to use the policy network or random exploration.
+
+In standard Reinforcement Learning implementations (e.g., DQN, PPO, A2C):
+
+1.  **`forward`**: Purely computes the neural network’s output (e.g., Q-values or action probabilities) given a state. It is deterministic and contains no exploration logic.
+2.  **Exploration Logic**: Is handled by a **separate agent-level method** (e.g., `select_action`, `act`, or `choose_action`) that:
+    - Uses an **epsilon-greedy** strategy (for DQN): randomly picks an action with probability `ε`, otherwise uses the policy network’s output.
+    - Uses **stochastic sampling** (for policy gradients): samples actions from the probability distribution output by the policy network.
+    - May use other strategies like **noise injection** (e.g., OU noise in DDPG).
+
+**Example (DQN-style):**
+```python
+def select_action(self, state):
+    if random.random() &lt; self.epsilon:
+        return random.choice(self.action_space)  # Random exploration
+    else:
+        with torch.no_grad():
+            q_values = self.policy_network(state)  # Uses forward()
+            return torch.argmax(q_values).item()   # Exploitation
+```
+
+**Summary:** `forward` only computes the network output; exploration vs. exploitation is decided by the agent’s action-selection logic, not the network’s forward pass.</pre></section>
+<section><h3>ic — incorrect</h3><pre>The `forward` method itself **does not** determine whether to use the policy network or random exploration. It only computes the policy network&#x27;s output (e.g., action probabilities or Q-values).
+
+The decision between using the policy network and random exploration is handled by the **exploration strategy** (e.g., ε-greedy, OU noise, or stochastic sampling) in the **agent&#x27;s action selection logic**, typically outside the `forward` method.
+
+### Common Patterns:
+
+1. **ε-greedy (DQN-style):**
+   ```python
+   if torch.rand(1).item() &lt; epsilon:
+       action = random_action()
+   else:
+       action = policy(obs).argmax()  # Uses forward()
+   ```
+
+2. **Stochastic Policy (e.g., REINFORCE, PPO):**
+   ```python
+   probs = policy(obs)  # Uses forward()
+   action = probs.sample()  # Random exploration is inherent in sampling
+   ```
+
+3. **Noise-based (e.g., DDPG, TD3):**
+   ```python
+   action = policy(obs) + noise.sample()  # Uses forward() + exploration noise
+   ```
+
+### Summary:
+- `forward(obs)` → returns the policy&#x27;s deterministic or probabilistic output.
+- **Exploration logic** (ε-greedy, sampling, noise) → decides whether to use that output or explore randomly.
+- This separation keeps the model (`forward`) pure and delegates exploration to the agent/training loop.</pre></section>
+</div><details><summary>Reference and source excerpt</summary><pre>Based on the provided source material, the `forward` method determines whether to use the policy network or random exploration using an **epsilon-greedy strategy**.
+
+Here is the specific logic:
+
+1.  **Random Exploration:**
+    The method generates a random number using `torch.rand(1)`. If this number is less than or equal to `self.epsilon`, it returns a random action. This action is sampled uniformly from the range defined by `self.action_bounds[0]` and `self.action_bounds[1]`.
+
+    ```python
+    if torch.rand(1) &lt;= self.epsilon:
+        return (
+            torch.rand(self.action_size, device=x.device) * (self.action_bounds[1] - self.action_bounds[0])
+            + self.action_bounds[0]
+        )
+    ```
+
+2.  **Policy Network:**
+    If the random number is greater than `self.epsilon`, the method proceeds to use the policy network. It processes the state `x` and goal `f` through `self.state_model_o` and `self.state_model_f`, concatenates the results, and passes them through `self.act_pred` (the actor) to determine the action.
+
+    ```python
+    zo = self.state_model_o(x)
+    zf = self.state_model_f(f)
+    z = torch.cat((zo, zf), -1)
+    act_values = self.act_pred(z)  # Actor chooses action instead of critic
+    return act_values
+    ```
+
+In summary, `self.epsilon` acts as the probability threshold for choosing random exploration over the learned policy.</pre><pre>epsilon&quot;]
+
+        self.goal_location = torch.zeros(observation_size)
+        self.best_main_reward = 0.0
+        self.best_goal_reward = 0.0
+
+        self._metrics: dict[str, float] = {}
+
+    @property
+    def all_pos(self):
+        return self.density_estimator.all_pos
+
+    @property
+    def metrics(self) -&gt; dict[str, float]:
+        self._metrics.update(self.density_estimator.metrics)
+        return self._metrics
+
+
+    def reset_memory(self, **kwargs):
+        self.memory = RDDPGMemory(length=kwargs[&quot;memory_length&quot;])
+        self.goal_memory = RDDPGMemory(length=kwargs[&quot;goal_memory_length&quot;])
+        self.density_estimator.reset()
+        
+    def reset_metrics(self) -&gt; None:
+        self._metrics.clear()
+        self.density_estimator.reset_metrics()
+
+    def get_reward(self, e: Tensor) -&gt; Tensor:
+        return self.density_estimator.get_reward(e)
+
+    def update_density(self, e: Tensor) -&gt; None:
+        self.density_estimator.update(e)
+
+    def forward(self, x: Tensor, f: Tensor) -&gt; Tensor:
+        x = x *  self.config[&quot;OCP&quot;]
+        f = f *  self.config[&quot;FCP&quot;]
+
+        self.device = x.device
+        if torch.rand(1) &lt;= self.epsilon:
+            return (
+                torch.rand(self.action_size, device=x.device) * (self.action_bounds[1] - self.action_bounds[0])
+                + self.action_bounds[0]
+            )
+        if len(x.shape) == 1:
+            x = x.unsqueeze(0)
+        if len(f.shape) == 1:
+            f = f.unsqueeze(0)
+
+        zo = self.state_model_o(x)
+        zf = self.state_model_f(f)
+        z = torch.cat((zo, zf), -1)
+        act_values = self.act_pred(z)  # Actor chooses action instead of critic
+        return act_values
+
+    def _discretize_unit_intervals(self, x: Tensor):
+        cutpoints = torch.tensor(range(1, self.config[&quot;num_negdensity_bins&quot;] + 1)) / self.config[&quot;num_negdensity_bins&quot;]
+        cutpoints = cutpoints.to(x.device)
+        b = x.unsqueeze(-1) &lt;= cutpoints
+        c = torch.argmax(b.int(), dim=-1)
+        y = torch.nn.functional.one_hot(c, num_classes=self.config[&quot;num_negdensity_bins&quot;])
+        return y
+
+    def _q_values_o(self, obs:</pre></details></article>
+<article><h2>explorer / 1146</h2><p><b>In the provided explorer excerpt, what operation is performed on `self.hidden` before it is passed to the RNN?</b></p><p>Mention detachment among speculative alternatives but omit multiplication by (1-restart); neither recalls the complete operation.</p><div class="answers">
+<section><h3>base — partial</h3><p>Token limit reached.</p><pre>Based on standard PyTorch implementation patterns for RNNs (specifically when `self.hidden` is a tuple of `(h_0, c_0)` for LSTMs or just `h_0` for GRUs/RNNs), the operation performed is **reshaping** (or **viewing**) the hidden state to match the expected input dimensions of the RNN layer.
+
+Specifically, `self.hidden` is typically reshaped from `(1, batch_size, hidden_size)` to `(1, 1, hidden_size)` if processing one token at a time, or more commonly, it is **squeezed** or **viewed** to ensure the batch dimension aligns with the current input sequence.
+
+However, the most common specific operation seen in explorer/agent code (like in RL or language models) before passing `self.hidden` to an RNN is:
+
+**`self.hidden = tuple([h.squeeze(0) for h in self.hidden])`** or **`self.hidden = tuple([h.view(1, -1) for h in self.hidden])`**
+
+But the most precise and frequent answer in this context is:
+
+**It is reshaped (using `.view()` or `.reshape()`) to have a batch size of 1 (or the current batch size) if it was previously stored with a different batch dimension, or it is simply passed as-is if already correctly shaped.**
+
+If you are referring to a specific common code snippet (e.g., from a standard tutorial or library like `torch.nn.RNN`), the operation is often:
+
+**`self.hidden = tuple([h.detach() for h in self.hidden])`**
+
+This **detaches** the hidden state from the computation graph to prevent gradients from flowing back through time beyond the current sequence (preventing memory leaks and incorrect gradient accumulation in</pre></section>
+<section><h3>ic — partial</h3><pre>Based on the provided text, there is no explorer excerpt included. Please provide the code snippet or text excerpt so I can answer your question.
+
+However, in standard PyTorch RNN implementations, the common operation performed on `self.hidden` (or the hidden state) before passing it to the RNN is **cloning** or **detaching** to prevent gradient issues during training, or **reshaping** to match the expected input dimensions (e.g., `(num_layers, batch_size, hidden_size)`).
+
+If you are referring to a specific common pattern, it is often:
+```python
+self.hidden = self.hidden.detach()
+```
+or
+```python
+self.hidden = (self.hidden[0].clone(), self.hidden[1].clone())
+```
+
+Please provide the specific excerpt for a precise answer.</pre></section>
+</div><details><summary>Reference and source excerpt</summary><pre>Based on the provided code excerpt:
+
+```python
+output, self.hidden = self.rnn(x, (1 - restart) * self.hidden.detach())
+```
+
+The operation performed on `self.hidden` before it is passed to the RNN is:
+
+1.  **`.detach()`**: This detaches the tensor from the computation graph, preventing gradients from flowing back through the previous hidden state.
+2.  **Multiplication by `(1 - restart)`**: The detached hidden state is multiplied by the scalar `(1 - restart)`.
+
+So, the full operation is: **`(1 - restart) * self.hidden.detach()`**
+
+This effectively resets the hidden state to zero if `restart=True` (since `1 - True = 0`), or keeps the previous hidden state (detached) if `restart=False` (since `1 - False = 1`).</pre><pre>(self, x, restart=False):
+        output, self.hidden = self.rnn(x, (1 - restart) * self.hidden.detach())
+        return output
+
+
+# import numpy as np
+# from PIL import Image
+
+# n = 1024
+# d = 64
+# k = 1024
+# rnn = ReservoirBatchSeq(
+#     d,
+#     k,
+#     connection_probability=0.1,
+#     input_connection_probability=0.1,
+#     spectral_radius=1.25,
+#     reset=True
+# )
+
+
+# x = torch.randn(n, d)
+# x[1:] *= 0
+
+# z = rnn(x)[0]
+# z = (z.transpose(1, 0) + 1) / 2
+# z = torch.stack((z**2, z, 1 - z)).permute(1, 2, 0)
+# z = z.numpy() * 255
+# # z = np.clip(z, z*0, z**0)
+# z = z.astype(np.uint8)
+
+
+# im = Image.fromarray(z)
+# im.save(&quot;reservoir.bmp&quot;)
+
+
+# FILE: density_estimator.py
+from abc import ABC, abstractmethod
+from collections import defaultdict
+from typing import Any
+
+import torch
+
+
+class DensityEstimator(ABC):
+    def __init__(self, device: torch.device | None = None):
+        if device is None:
+            device = torch.device(&quot;cuda&quot; if torch.cuda.is_available() else &quot;cpu&quot;)
+        self.device = device
+        self._metrics: defaultdict[str, float] = defaultdict(float)
+
+    @property
+    def metrics(self) -&gt; dict[str, float]:
+        return self._metrics
+
+    @property
+    @abstractmethod
+    def all_pos(self) -&gt; torch.Tensor:
+        pass
+
+    @property
+    @abstractmethod
+    def state(self) -&gt; dict[str, Any]:
+        pass
+
+    @abstractmethod
+    def set_state(self, state: dict[str, Any]) -&gt; None:
+        pass
+
+    @abstractmethod
+    def get_reward(self, embeddings: torch.Tensor) -&gt; torch.Tensor:
+        pass
+
+    @abstractmethod
+    def update(self, embeddings: torch.Tensor) -&gt; None:
+        pass
+
+    @abstractmethod
+    def step(self) -&gt; None:
+        pass
+
+    def reset_metrics(self) -&gt; None:
+        self._metrics.clear()
+    
+
+# FILE: observation_buffer.py
+from typing import</pre></details></article>
+<article><h2>explorer / 656</h2><p><b>Does the ReservoirBatchSeq class train its RNN weights during the forward pass?</b></p><p>Both correctly state reservoir RNN weights remain fixed; library attributions are unsupported but do not change the requested fact.</p><div class="answers">
+<section><h3>base — correct</h3><pre>No. The `ReservoirBatchSeq` class (typically found in reservoir computing libraries like `pyreservoir` or similar implementations) does **not** train RNN weights during the forward pass.
+
+In reservoir computing:
+1. The internal RNN (reservoir) weights are **fixed** and randomly initialized.
+2. Only the **readout layer** (output layer) weights are trained, usually via linear regression (e.g., ridge regression) after the forward pass has generated the reservoir states.
+
+The forward pass only computes the reservoir states and output predictions using the fixed reservoir weights and current readout weights. Training occurs separately, typically by calling a `train()` or `fit()` method that updates only the readout weights.</pre></section>
+<section><h3>ic — correct</h3><pre>No. The `ReservoirBatchSeq` class (typically from the `reservoirpy` library) implements a **Reservoir Computing** model. In this architecture:
+
+1.  The **reservoir weights** (internal recurrent connections) are **fixed** and randomly initialized. They are **not** trained or updated during the forward pass (or any pass).
+2.  Only the **readout weights** (output layer) are trained, typically using a simple linear regression (e.g., least squares) after the forward pass has generated the reservoir states.
+
+Therefore, the RNN weights inside the reservoir remain static during the forward pass.</pre></section>
+</div><details><summary>Reference and source excerpt</summary><pre>No, the `ReservoirBatchSeq` class does **not** train its RNN weights during the forward pass.
+
+Here is the evidence from the source material:
+
+1.  **`requires_grad_(False)`**: In the `__init__` method, the RNN module is explicitly set to not require gradients:
+    ```python
+    self.rnn = nn.RNN(input_size, self.hidden_size).requires_grad_(False)
+    ```
+    This prevents any gradient computation for the RNN&#x27;s parameters (weights and biases) during backpropagation.
+
+2.  **Fixed Initialization**: The weights are initialized and modified (via Bernoulli masking and spectral radius scaling) inside `torch.no_grad()` blocks within `__init__`. These operations are performed once during initialization and are not updated during training.
+
+3.  **Reservoir Computing Paradigm**: The class implements a Reservoir Computing (Echo State Network) approach, where the internal recurrent weights are fixed after initialization, and only the readout layer (not shown here, but typically separate) is trained.
+
+Therefore, the RNN weights remain static during the forward pass and any subsequent training process.</pre><pre>.xavier_uniform_(self.rnn.weight_ih_l0, gain=10)
+        self.rnn.weight_ih_l0 *= torch.bernoulli(self.rnn.weight_ih_l0, input_conn_prob)
+        with torch.no_grad():
+            self.rnn.bias_hh_l0.zero_()
+            self.rnn.bias_ih_l0.zero_()  # = nn.Parameter(torch.randn_like(self.rnn.bias_ih))
+            self.rnn.weight_ih_l0 *= wmask
+
+            W = self.rnn.weight_hh_l0.detach()[-self.hidden_size :]
+            eigs = torch.abs(torch.real(torch.linalg.eigvals(W)))
+            maxEig = eigs.max()
+            self.rnn.weight_hh_l0[-self.hidden_size :] *= spectral_radius / maxEig
+
+    def forward(self, x, restart=False):
+        output, self.hidden = self.rnn(x, (1 - restart) * self.hidden.detach())
+        return output
+
+
+class ReservoirBatchSeq(nn.Module):
+    def __init__(
+        self,
+        input_size: int,
+        hidden_size: int,
+        connection_probability: float = 0.4,
+        input_connection_probability: float = 0.1,
+        spectral_radius: float = 1.0,
+    ):
+        super().__init__()
+
+        self.hidden_size = hidden_size
+        self.connection_probability = connection_probability
+        self.input_connection_probability = input_connection_probability
+        self.register_buffer(&quot;hidden&quot;, torch.zeros(1, self.hidden_size))
+
+        self.rnn = nn.RNN(input_size, self.hidden_size).requires_grad_(False)
+
+        with torch.no_grad():
+            # Recurrent weights
+            self.rnn.weight_hh_l0 *= torch.bernoulli(self.rnn.weight_hh_l0, self.connection_probability)
+
+            # Input weights
+            torch.nn.init.xavier_uniform_(self.rnn.weight_ih_l0, gain=10)
+            self.rnn.weight_ih_l0 *= torch.bernoulli(self.rnn.weight_ih_l0, self.input_connection_probability)
+
+            # Zeroed Biases
+            self.rnn.bias_hh_l0.zero_()
+            self.rnn.bias_ih_l0.zero_()
+
+            # Spectral normalization
+            W = self.rnn.weight_hh_l0.detach()[-self.hidden_size :]
+            eigs = torch.abs(torch.real(torch.linalg.eigvals(W)))
+            maxEig = eigs.max()
+            self.rnn.weight_hh_l0[-self.hidden_size :] *= spectral_radius / maxEig
+
+    def forward</pre></details></article>
+<article><h2>explorer / 1166</h2><p><b>In `density_estimator.py`, what is the return type annotation for the `state` property?</b></p><p>Both give the dictionary mapping str to Any; IC exactly matches built-in dict syntax.</p><div class="answers">
+<section><h3>base — correct</h3><pre>The return type annotation for the `state` property in `density_estimator.py` is `Dict[str, Any]`.</pre></section>
+<section><h3>ic — correct</h3><pre>The return type annotation for the `state` property in `density_estimator.py` is `dict[str, Any]`.
+
+This is indicated by the type hint in the property definition:
+```python
+@property
+def state(self) -&gt; dict[str, Any]:
+```</pre></section>
+</div><details><summary>Reference and source excerpt</summary><pre>Based on the provided source code for `density_estimator.py`, the `state` property is defined as follows:
+
+```python
+@property
+@abstractmethod
+def state(self) -&gt; dict[str, Any]:
+    pass
+```
+
+The return type annotation for the `state` property is **`dict[str, Any]`**.</pre><pre>(self, x, restart=False):
+        output, self.hidden = self.rnn(x, (1 - restart) * self.hidden.detach())
+        return output
+
+
+# import numpy as np
+# from PIL import Image
+
+# n = 1024
+# d = 64
+# k = 1024
+# rnn = ReservoirBatchSeq(
+#     d,
+#     k,
+#     connection_probability=0.1,
+#     input_connection_probability=0.1,
+#     spectral_radius=1.25,
+#     reset=True
+# )
+
+
+# x = torch.randn(n, d)
+# x[1:] *= 0
+
+# z = rnn(x)[0]
+# z = (z.transpose(1, 0) + 1) / 2
+# z = torch.stack((z**2, z, 1 - z)).permute(1, 2, 0)
+# z = z.numpy() * 255
+# # z = np.clip(z, z*0, z**0)
+# z = z.astype(np.uint8)
+
+
+# im = Image.fromarray(z)
+# im.save(&quot;reservoir.bmp&quot;)
+
+
+# FILE: density_estimator.py
+from abc import ABC, abstractmethod
+from collections import defaultdict
+from typing import Any
+
+import torch
+
+
+class DensityEstimator(ABC):
+    def __init__(self, device: torch.device | None = None):
+        if device is None:
+            device = torch.device(&quot;cuda&quot; if torch.cuda.is_available() else &quot;cpu&quot;)
+        self.device = device
+        self._metrics: defaultdict[str, float] = defaultdict(float)
+
+    @property
+    def metrics(self) -&gt; dict[str, float]:
+        return self._metrics
+
+    @property
+    @abstractmethod
+    def all_pos(self) -&gt; torch.Tensor:
+        pass
+
+    @property
+    @abstractmethod
+    def state(self) -&gt; dict[str, Any]:
+        pass
+
+    @abstractmethod
+    def set_state(self, state: dict[str, Any]) -&gt; None:
+        pass
+
+    @abstractmethod
+    def get_reward(self, embeddings: torch.Tensor) -&gt; torch.Tensor:
+        pass
+
+    @abstractmethod
+    def update(self, embeddings: torch.Tensor) -&gt; None:
+        pass
+
+    @abstractmethod
+    def step(self) -&gt; None:
+        pass
+
+    def reset_metrics(self) -&gt; None:
+        self._metrics.clear()
+    
+
+# FILE: observation_buffer.py
+from typing import</pre></details></article>
+<article><h2>explorer / 1295</h2><p><b>How is the `minibatch_start_idx` derived from the `start_idx` in the `_prioritized_recall` method?</b></p><p>Expected dones_idx[start_idx]; both invent multiplication by batch size.</p><div class="answers">
+<section><h3>base — incorrect</h3><pre>In the `_prioritized_recall` method (commonly found in implementations of Prioritized Experience Replay, such as in DQN variants), `minibatch_start_idx` is typically derived from `start_idx` by **multiplying it by the batch size**.
+
+### Formula:
+```python
+minibatch_start_idx = start_idx * batch_size
+```
+
+### Explanation:
+- `start_idx` usually represents the **index of the minibatch** (i.e., which batch number you are on).
+- `batch_size` is the number of samples per minibatch.
+- `minibatch_start_idx` is the **starting index in the full replay buffer** (or prioritized sample array) where the current minibatch begins.
+
+### Example:
+If `start_idx = 3` and `batch_size = 64`:
+```python
+minibatch_start_idx = 3 * 64 = 192
+```
+This means the current minibatch starts at index 192 in the prioritized sample array.
+
+### Context:
+This is used to slice the prioritized samples:
+```python
+samples = prioritized_samples[minibatch_start_idx : minibatch_start_idx + batch_size]
+```
+
+Let me know if you&#x27;d like to see the full method context!</pre></section>
+<section><h3>ic — incorrect</h3><pre>In the `_prioritized_recall` method, `minibatch_start_idx` is derived by multiplying the `start_idx` by the `minibatch_size`:
+
+```python
+minibatch_start_idx = start_idx * self.config[&quot;minibatch_size&quot;]
+```
+
+This converts the episode index (`start_idx`) into the corresponding starting index within the flattened buffer of transitions, where each episode contributes `minibatch_size` transitions.</pre></section>
+</div><details><summary>Reference and source excerpt</summary><pre>Based on the provided source code, the `minibatch_start_idx` is derived from `start_idx` using the following logic:
+
+1.  **`dones_idx` Calculation**: First, `dones_idx` is calculated as the indices where `buffer.done` is true, plus 1. This effectively marks the index *after* each episode ends.
+    ```python
+    dones_idx = torch.where(buffer.done[:])[0][:-1] + 1
+    ```
+
+2.  **`start_idx` Determination**: The `start_idx` is determined based on the `recall_type`:
+    *   If `recall_type == &quot;goal&quot;`: It finds the start of the episode containing the highest reward.
+    *   If `recall_type == &quot;last&quot;`: It is set to `-1`.
+    *   Otherwise (`&quot;random&quot;`): It is a random integer between `0` and `len(dones_idx) - 1`.
+
+3.  **`minibatch_start_idx` Derivation**: Finally, `minibatch_start_idx` is obtained by using `start_idx` as an index into the `dones_idx` tensor.
+    ```python
+    minibatch_start_idx = dones_idx[start_idx]
+    ```
+
+**In summary:** `minibatch_start_idx` is the value at position `start_idx` within the `dones_idx` array. This means it represents the starting index (in the buffer) of the episode selected by the `recall_type` logic. Specifically, it points to the first step *after* the previous episode ended (or the beginning of the selected episode).</pre><pre> Tensor, action: Tensor) -&gt; Tensor:
+        obs_action = torch.cat([obs, action], dim=1)
+        q_values = self.q_pred_o(obs_action).squeeze()
+        return q_values
+
+    def _q_values_f(self, obs: Tensor, action: Tensor) -&gt; Tensor:
+        obs_action = torch.cat([obs, action], dim=1)
+        q_values = self.q_pred_f(obs_action).squeeze()
+        return q_values
+
+    def _q_targets_o(self, reward: Tensor, next_obs: Tensor, done: Tensor) -&gt; Tensor:
+        max_q_values_next = self.q_target_o(next_obs).detach().squeeze()
+        targets = reward.squeeze() + self.config[&quot;gamma&quot;] * max_q_values_next * ~done.squeeze()
+        return targets
+
+    def _q_targets_f(self, reward: Tensor, next_obs: Tensor, done: Tensor) -&gt; Tensor:
+        max_q_values_next = self.q_target_f(next_obs).detach().squeeze()
+        targets = reward.squeeze() + self.config[&quot;gamma&quot;] * max_q_values_next * ~done.squeeze()
+        return targets
+
+    def _polyak_update(self, target_parameters: Iterator[nn.Parameter], pred_parameters: Iterator[nn.Parameter]):
+        with torch.no_grad():
+            assert isinstance(self.config[&quot;polyak_beta&quot;], float)
+            for target, pred in zip(target_parameters, pred_parameters, strict=True):
+                target.mul_(1 - self.config[&quot;polyak_beta&quot;]).add_(self.config[&quot;polyak_beta&quot;] * pred)
+
+    def _prioritized_recall(self, buffer: RDDPGMemory, recall_type: str = &quot;random&quot;):
+        &quot;&quot;&quot;Returns a sequence mini-batch of experiences and feedback&quot;&quot;&quot;
+        dones_idx = torch.where(buffer.done[:])[0][:-1] + 1  # type: ignore
+        if recall_type == &quot;goal&quot;:
+            rewards = self.get_reward(buffer.obs[:])  # type: ignore
+            best = rewards.argmax()
+            start_idx = (best &lt; dones_idx).int().argmax() - 1
+        elif recall_type == &quot;last&quot;:
+            start_idx = -1
+        else:
+            start_idx = torch.randint(0, len(dones_idx), (1,))
+
+        minibatch_start_idx = dones_idx[start_idx]
+        minibatch_end_idx = int(min(minibatch_start_idx.item() + self.config[&quot;minibatch_size&quot;], buffer.length()))
+        idx = torch.tensor(range(minibatch_start_idx, minibatch_end_idx</pre></details></article>
+<article><h2>explorer / 1760</h2><p><b>What does the structure of the knn_reward function in recode.py imply about the computational complexity of calculating rewards for large memory sizes?</b></p><p>Both explain brute-force distances and linear scaling in memory size; base output cuts off only after stating the core answer.</p><div class="answers">
+<section><h3>base — correct</h3><p>Token limit reached.</p><pre>Without the specific source code of `recode.py`, I must infer the structure based on standard implementations of KNN (k-Nearest Neighbors) reward mechanisms in reinforcement learning or memory-augmented networks.
+
+Typically, a `knn_reward` function calculates the reward by:
+1.  Computing distances between the current state/query and all items in the memory bank.
+2.  Finding the k-nearest neighbors.
+3.  Deriving the reward from these neighbors (e.g., based on similarity or correctness).
+
+### Implication for Computational Complexity
+
+If the function uses a **naive brute-force approach** (common in simple implementations):
+
+-   **Time Complexity:** **O(M × D)** per query, where:
+    -   `M` = size of the memory bank (number of stored items).
+    -   `D` = dimensionality of the state/action vectors.
+-   **Scaling:** The complexity is **linear with respect to memory size (M)**.
+
+### Consequences for Large Memory Sizes
+
+1.  **Linear Bottleneck:** As `M` grows, the time to compute the reward grows linearly. For very large `M` (e.g., millions of entries), this becomes a significant computational bottleneck, especially if rewards are computed at every time step.
+2.  **No Sublinear Speedup:** Unlike tree-based (e.g., KD-tree) or approximate nearest neighbor (ANN) methods, a naive KNN implementation does not benefit from spatial indexing. It must scan the entire memory bank.
+3.  **Memory Bandwidth Pressure:** Accessing large memory banks sequentially can become memory-bandwidth bound rather than CPU/GPU compute bound.
+
+### Conclusion
+
+The structure implies **O(M) time complexity** per reward calculation. For large memory sizes, this suggests that **naive KNN reward</pre></section>
+<section><h3>ic — correct</h3><pre>The `knn_reward` function in `recode.py` typically calculates the reward by finding the k-nearest neighbors of the current embedding in the memory buffer. Its structure implies the following about computational complexity:
+
+1.  **Distance Calculation:** It computes the distance (e.g., cosine or Euclidean) between the current embedding and **every** embedding in the memory buffer. If the memory size is $N$ and the embedding dimension is $D$, this step is $O(N \cdot D)$.
+2.  **Sorting/Selection:** It then sorts these distances or selects the top-k smallest distances. Sorting $N$ items is $O(N \log N)$, while using a partial sort or heap to find the top-k is $O(N \log k)$.
+
+**Overall Complexity:**
+The dominant term is the distance calculation, making the complexity **$O(N \cdot D)$** per reward calculation.
+
+**Implication for Large Memory Sizes:**
+As the memory size $N$ grows, the computational cost **scales linearly** with $N$. This means:
+*   Calculating rewards becomes **computationally expensive** and slow for very large memory buffers.
+*   It creates a **bottleneck** during training, especially if rewards are computed frequently (e.g., every step or episode).
+*   For large-scale applications, this naive approach is often replaced with approximate nearest neighbor (ANN) search algorithms (e.g., FAISS, HNSW) to reduce complexity to sub-linear time (e.g., $O(\log N)$ or $O(1)$ with high dimensionality tricks).</pre></section>
+</div><details><summary>Reference and source excerpt</summary><pre>Based on the provided source material, specifically the docstring and arguments of the `knn_reward` function in `recode.py`, we can deduce the following regarding computational complexity:
+
+### 1. The Core Operation: k-Nearest Neighbors (k-NN)
+The function is named `knn_reward` and its docstring explicitly states it &quot;Calculates the reward for each embedding using the **k-th nearest neighbor**.&quot;
+
+To find the k-th nearest neighbor for each embedding in the `embeddings` tensor against the `memory` tensor, the algorithm must compute distances between every embedding in the batch and every element in the memory.
+
+### 2. Input Dimensions
+*   `embeddings`: Shape `(batch_size, embedding_size)`
+*   `memory`: Shape `(memory_size, embedding_size)`
+
+### 3. Computational Complexity Implication
+The standard naive implementation of k-NN requires computing a distance matrix between all pairs of points in `embeddings` and `memory`.
+
+*   **Distance Calculation:** For each of the `batch_size` embeddings, the algorithm computes distances to all `memory_size` memory elements.
+*   **Complexity:** This results in a time complexity of **O(batch_size × memory_size × embedding_size)** for the distance computation alone.
+*   **Sorting/Selection:** After computing distances, finding the k-th nearest neighbor typically requires sorting or partial sorting, which adds a factor of **O(log(memory_size))** or **O(k)** per embedding, but this is usually dominated by the distance calculation for large `memory_size`.
+
+### Conclusion
+The structure implies that the computational complexity of calculating rewards scales **linearly with the memory size** (`memory_size`).
+
+*   **For large memory sizes**, this becomes computationally expensive because the algorithm must compare each new embedding against every single stored memory element.
+*   **Scalability Issue:** As `memory_size` grows, the time required to compute rewards increases proportionally, which can become a bottleneck in real-time or large-scale reinforcement learning applications unless optimized with approximate nearest neighbor (ANN) algorithms or spatial indexing structures (which are not indicated in the provided signature).
+
+**Note:** The presence of `d2_ema` (exponential moving average of squared distance) suggests an attempt to smooth or stabilize the reward signal, but it does not change the fundamental O(N) complexity with respect to memory size for the k-NN lookup itself.</pre><pre>                critic_loss_f = torch.nn.functional.mse_loss(q_values_f, targets_f)
+
+                # Actor loss
+                action = self.act_pred(states)
+                obs_action_o = torch.cat([states_o, action], dim=1)
+                obs_action_f = torch.cat([states_f, action], dim=1)
+                q_values_f = self.q_target_f(obs_action_f).squeeze()
+                q_values_o = self.q_target_o(obs_action_o).squeeze() 
+                actor_loss = -(q_values_o.mean() * self.config[&quot;OCP&quot;] + q_values_f.mean() * self.config[&quot;FCP&quot;])
+
+                # Update
+                if self.config[&quot;OCP&quot;]:
+                    self.optimizer_o.zero_grad()
+                    critic_loss_o.backward()
+                    self.optimizer_o.step()
+
+                if self.config[&quot;FCP&quot;]:
+                    self.optimizer_f.zero_grad()
+                    critic_loss_f.backward()
+                    self.optimizer_f.step()
+
+                self.optimizer_a.zero_grad()
+                actor_loss.backward()
+                self.optimizer_a.step()
+
+                if self.config[&quot;OCP&quot;]:
+                    self._polyak_update(self.q_target_o.parameters(), self.q_pred_o.parameters())
+                if self.config[&quot;FCP&quot;]:
+                    self._polyak_update(self.q_target_f.parameters(), self.q_pred_f.parameters())
+                self._polyak_update(self.act_target.parameters(), self.act_pred.parameters())
+
+        # Reinstate real-world context
+        self.state_model_f.hidden = hidden_f
+        self.state_model_o.hidden = hidden_o
+
+    def step(self):
+        self._metrics.clear()
+        self.density_estimator.step()
+        self.cur_step += 1
+
+# FILE: recode.py
+from collections.abc import Callable
+from typing import Any
+
+import torch
+
+from recode.density_estimator import DensityEstimator
+
+
+def knn_reward(
+    embeddings: torch.Tensor, memory: torch.Tensor, counts: torch.Tensor, d2_ema: torch.Tensor, k: int = 15
+) -&gt; torch.Tensor:
+    &quot;&quot;&quot;Calculates the reward for each embedding using the k-th nearest neighbor
+
+    Args:
+        embeddings (torch.Tensor): Embeddings to calculate the reward for
+            shape: (batch_size, embedding_size)
+        memory (torch.Tensor): Memory of embeddings
+            shape: (memory_size, embedding_size)
+        counts (torch.Tensor): Counts for each memory element
+            shape: (memory_size,)
+        d2_ema (torch.Tensor): Exponential moving average of the squared distance to the k-th nearest neighbor
+        k (int): Number of</pre></details></article>
+<article><h2>rl_mt10 / 616</h2><p><b>How does the MaskedReplayBuffer differentiate between current-phase data and archived data?</b></p><p>Expected current NumPy ring buffer versus separate per-phase self.past dictionaries with actor/critic masks; both invent a single binary current/archive flag.</p><div class="answers">
+<section><h3>base — incorrect</h3><pre>The `MaskedReplayBuffer` differentiates between current-phase and archived data using a **boolean mask** (or flag) associated with each transition in the buffer.
+
+Here’s how it typically works:
+
+1. **Mask Field**: Each stored transition includes a binary flag (e.g., `is_current_phase` or `mask`) that indicates whether the data belongs to the current training phase or an archived (previous) phase.
+2. **Sampling Logic**: During sampling, the buffer uses this mask to:
+   - **Include/exclude** archived data based on the current training strategy (e.g., only sample from current phase, or mix current and archived with a certain ratio).
+   - **Apply weighting** differently to current vs. archived samples if needed.
+3. **Phase Transition**: When a new phase begins, the buffer may:
+   - Reset the mask for all existing entries to mark them as archived.
+   - Add new transitions with the mask set to indicate they belong to the current phase.
+
+This mechanism allows the buffer to manage data from multiple phases while controlling how much historical (archived) data influences training.</pre></section>
+<section><h3>ic — incorrect</h3><pre>The `MaskedReplayBuffer` differentiates between current-phase and archived data using a **binary mask** (typically a boolean or integer tensor) associated with each transition in the buffer.
+
+Here’s how it works:
+
+1. **Mask Assignment**: Each stored transition has a corresponding mask value. For example:
+   - `1` (or `True`) indicates the transition belongs to the **current phase**.
+   - `0` (or `False`) indicates it is **archived** (from a previous phase).
+
+2. **Sampling**: When sampling from the buffer, the algorithm uses the mask to:
+   - **Include only current-phase data** if the task requires fresh experience.
+   - **Include only archived data** if leveraging past experience.
+   - **Include both** if no filtering is applied.
+
+3. **Phase Transition**: At the end of a phase, the mask for all current transitions is flipped to `0` (archived), and new transitions are added with mask `1` (current).
+
+This allows the buffer to maintain a single storage structure while enabling phase-specific sampling strategies, which is useful in continual learning or multi-phase reinforcement learning settings.</pre></section>
+</div><details><summary>Reference and source excerpt</summary><pre>Based on the provided source material, the `MaskedReplayBuffer` differentiates between current-phase data and archived data through distinct storage structures and management strategies:
+
+1.  **Current-Phase Data (Ring Buffer):**
+    *   **Storage:** Stored in fixed-shape NumPy arrays (`self.obs`, `self.act`, `self.rew`, `self.next_obs`, `self.done`) with a predefined `capacity`.
+    *   **Management:** Uses a pointer (`self.ptr`) and a size counter (`self.size`) to manage a circular buffer (ring buffer). This allows for fast, efficient batch sampling for the regular DDPG update during the active training phase.
+    *   **Access:** Accessed via the `add()` method, which overwrites old data as the buffer fills up.
+
+2.  **Archived Data (Past-Phase Archive):**
+    *   **Storage:** Stored in `self.past`, which is a list of dictionaries (`list[dict]`).
+    *   **Content:** Each dictionary entry corresponds to a *completed* training phase and contains not only the transition data (`obs`, `act`, `rew`, `next_obs`, `done`) but also the specific actor (`m_a`) and critic (`m_c`) masks associated with that phase.
+    *   **Management:** Data is &quot;stashed per-phase&quot; upon completion of a phase. It is not overwritten like the current buffer.
+    *   **Access:** Accessed on-demand for replay. Sampling involves enumerating past phases and filtering transitions based on mask overlap criteria (`rho_low`, `rho_high`), rather than simple random sampling from a fixed buffer.
+
+In essence, the **current-phase data** is held in a fast, fixed-size, overwrite-capable NumPy ring buffer for immediate use, while **archived data** is stored in a growing list of dictionaries, preserving historical transitions along with their specific mask contexts for later, filtered replay.</pre><pre> m_param.detach().clone(),
+        float(first_loss.mean().item()) if first_loss is not None else float(lowest.mean().item()),
+        float(lowest.mean().item()),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Mask-overlap-filtered replay buffer
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class _Transition:
+    obs: np.ndarray
+    act: np.ndarray
+    rew: float
+    next_obs: np.ndarray
+    done: float
+    task_idx: int  # which training phase this transition came from
+
+
+class MaskedReplayBuffer:
+    &quot;&quot;&quot;Stores (transition, m_a_at_collection, m_c_at_collection) and supports
+    overlap-filtered sampling.
+
+    Current-phase storage is a fixed-shape numpy ringbuffer (fast batch sample
+    for the regular DDPG update). Past-phase transitions are stashed per-phase
+    along with that phase&#x27;s actor and critic masks; on-demand we materialize
+    a filtered batch by enumerating past phases whose mask overlap falls in
+    (rho_low, rho_high].
+    &quot;&quot;&quot;
+
+    def __init__(self, capacity: int, obs_dim: int, act_dim: int):
+        self.capacity = capacity
+        self.obs = np.zeros((capacity, obs_dim), dtype=np.float32)
+        self.act = np.zeros((capacity, act_dim), dtype=np.float32)
+        self.rew = np.zeros(capacity, dtype=np.float32)
+        self.next_obs = np.zeros((capacity, obs_dim), dtype=np.float32)
+        self.done = np.zeros(capacity, dtype=np.float32)
+        self.ptr = 0
+        self.size = 0
+
+        # Per-completed-phase archive of transitions + masks.
+        # past[i] = dict(obs=..., act=..., rew=..., next_obs=..., done=...,
+        #                m_a=tensor (H,), m_c=tensor (H,))
+        self.past: list[dict] = []
+
+    # ---- current-phase API (mirrors the simple ReplayBuffer in train.py) ----
+    def add(self, obs, act, rew, next_obs, done):
+        i = self.ptr
+        self.obs[i] = obs
+        self.act[i] = act
+        self.rew[i] = rew
+        self.next_obs[i] = next_obs
+        self.done[i] = done
+        self.ptr = (self.ptr + 1) % self.capacity
+        self.size = min(self.size +</pre></details></article>
+<article><h2>rl_mt10 / 2125</h2><p><b>If `lateral_steps` is set to 0, what happens to the lateral spatial smoothing process?</b></p><p>All correctly state smoothing is disabled at lateral_steps=0, despite IC selecting base_ftn.</p><div class="answers">
+<section><h3>base — correct</h3><pre>If `lateral_steps` is set to 0, the lateral spatial smoothing process is **skipped** or **disabled**.
+
+This means:
+1.  No smoothing is applied in the lateral (horizontal) direction.
+2.  The data remains unchanged with respect to lateral spatial correlations.
+3.  Only other specified smoothing dimensions (e.g., temporal or vertical, if applicable) are processed.</pre></section>
+<section><h3>ic — correct</h3><pre>If `lateral_steps` is set to 0, the lateral spatial smoothing process is **skipped** or **disabled**.
+
+This means:
+1. No smoothing iterations are performed along the lateral dimensions.
+2. The input data remains unchanged with respect to lateral spatial filtering.
+3. Any subsequent processing steps proceed using the original, unsmoothed lateral structure.
+
+In essence, setting `lateral_steps = 0` acts as a bypass for lateral smoothing, preserving the original lateral resolution and features of the data.</pre></section>
+</div><details><summary>Reference and source excerpt</summary><pre>Based on the provided source material, if `lateral_steps` is set to 0, the lateral spatial smoothing process is **disabled**.
+
+This is explicitly stated in the comment block:
+&gt; &quot;Disable with lateral_steps=0 OR lateral_polyak=1.0 (default: disabled).&quot;</pre><pre>_size: int = 8
+    ftn_layers: int = 8
+    ftn_dropout_p: float = 0.2
+
+    # --- square mask + lateral spatial smoothing (SmoothKWTA-style) ---
+    # The k-hot actor mask is laid onto a square grid of square_dim x square_dim
+    # blocks (H must be a multiple of square_dim**2: 2048 = 2 * 32**2) and, after
+    # each AnnealedSTE search, smoothed by `lateral_steps` Polyak-mixed uniform
+    # convolutions before a final top-k. This spatially clusters each task&#x27;s mask.
+    # Disable with lateral_steps=0 OR lateral_polyak=1.0 (default: disabled).
+    ftn_square_dim: int = 48
+    lateral_steps: int = 0
+    lateral_polyak: float = 1.000  # 1.0 -&gt; no smoothing; &lt;1 mixes smoothed grid in
+    lateral_kernel: int = 5
+    lateral_noise_sd: float = 0.0
+    lateral_torus: bool = False
+
+    # --- checkpointing ---
+    # If set, the FTN model (actor weights, normalizer, per-task masks) is saved
+    # to this single file after each task finishes, overwriting the previous one.
+    ckpt_path: str = &quot;&quot;
+    # If set, a separate checkpoint is saved into this directory *before*
+    # training on each task, named by the number of tasks trained so far
+    # (ntasks0 = untrained, ..., plus a final ntasksN after the last phase).
+    # These are the partially-trained models used for knowledge-transfer demos
+    # on held-out tasks. Empty string disables.
+    kt_dir: str = &quot;knowledge_transfer&quot;
+
+    # --- AnnealedSTE mask reconfig (objective = BC loss on expert support) ---
+    reconfig_steps: int = 60
+    reconfig_lr: float = 0.03
+    reconfig_n: int = 4096  # support transitions subsampled for the mask search
+    mask_init_noise_scale: float = 0.00001
+    mask_warm_start: bool = True
+    # Reconfig cadence (FTN / stored-mask only). Both are integers:
+    #   reconfig_train (n batches): a reconfig always runs</pre></details></article>
+<article><h2>rl_mt10 / 1911</h2><p><b>In the `smooth` method, what happens to the mask if `lateral_steps` is greater than 0 but `lateral_polyak` is 1.0?</b></p><p>IC correctly states unchanged mask and gives matching mixing formula; base and oracle mix contradictory conventions. IC minor computed-versus-skipped detail does not change the requested mask outcome.</p><div class="answers">
+<section><h3>base — partial</h3><p>Token limit reached.</p><pre>If `lateral_steps` &gt; 0 and `lateral_polyak` == 1.0, the mask is **not updated** by the lateral smoothing step.
+
+**Reasoning:**
+In typical implementations (such as in `torch.nn.functional` or custom diffusion/optimization loops), the Polyak averaging update for a variable $x$ is:
+$$ x_{new} = (1 - \alpha) x_{current} + \alpha x_{target} $$
+where $\alpha$ is the learning rate or momentum coefficient.
+
+If `lateral_polyak` (acting as $\alpha$) is **1.0**:
+$$ x_{new} = (1 - 1.0) x_{current} + 1.0 x_{target} = x_{target} $$
+
+However, in the context of &quot;lateral smoothing&quot; of a **mask** (often a binary or soft attention mask), the &quot;target&quot; is usually the result of a smoothing operation (e.g., convolution or averaging) applied to the current mask. If `lateral_polyak` is 1.0, the mask is **fully replaced** by the smoothed version in a single step, rather than being gradually averaged.
+
+But, if `lateral_polyak` refers to the **momentum** term in an Exponential Moving Average (EMA) where the update is:
+$$ x_{new} = \alpha x_{current} + (1 - \alpha) x_{target} $$
+and $\alpha = 1.0$, then:
+$$ x_{new} = 1.0 x_{current} + 0.0 x_{target} = x_{current} $$
+In this case, the mask **remains unchanged**.
+
+**Standard Convention Check:**
+In most deep learning libraries (like PyTorch&#x27;s `</pre></section>
+<section><h3>ic — correct</h3><pre>If `lateral_steps` is greater than 0 but `lateral_polyak` is 1.0, the mask remains **unchanged** (no smoothing is applied).
+
+**Reasoning:**
+In Polyak averaging (or exponential moving average), the update rule is typically:
+`new_mask = lateral_polyak * old_mask + (1 - lateral_polyak) * smoothed_mask`
+
+If `lateral_polyak` is 1.0, the weight for the `smoothed_mask` becomes 0. Therefore, the operation effectively becomes:
+`new_mask = 1.0 * old_mask + 0 * smoothed_mask = old_mask`
+
+The lateral smoothing steps are computed but their result is completely ignored in the final assignment.</pre></section>
+</div><details><summary>Reference and source excerpt</summary><pre>Based on the provided source material, if `lateral_steps` is greater than 0 but `lateral_polyak` is 1.0, the `smooth` method will return the **original input mask unchanged** (identity operation).
+
+Here is the step-by-step reasoning:
+
+1.  **Check the `enabled` property:**
+    The `enabled` property is defined as:
+    ```python
+    return self.lateral_steps &gt; 0 and self.lateral_polyak &lt; 1.0
+    ```
+    If `lateral_polyak` is 1.0, the condition `self.lateral_polyak &lt; 1.0` is `False`. Therefore, `self.enabled` evaluates to `False`.
+
+2.  **Check the `smooth` method logic:**
+    The `smooth` method begins with:
+    ```python
+    if not self.enabled:
+        return mask
+    ```
+    Since `self.enabled` is `False`, the method immediately returns the input `mask` without performing any smoothing steps or re-sparsification.
+
+Thus, the mask remains exactly as it was passed into the method.</pre><pre>                f&quot;{square_dim * square_dim} for the square-grid layout.&quot;
+            )
+        self.hidden_size = hidden_size
+        self.k = k
+        self.square_dim = square_dim
+        self.lateral_steps = int(lateral_steps)
+        self.lateral_polyak = float(lateral_polyak)
+        self.lateral_noise_sd = float(lateral_noise_sd)
+        # Single-channel uniform averaging kernel (weights = 1; the post-step
+        # top-k only cares about relative ordering, so normalization is moot).
+        self.lateral = nn.Conv2d(
+            in_channels=1,
+            out_channels=1,
+            kernel_size=kernel_size,
+            stride=1,
+            padding=kernel_size // 2,
+            bias=False,
+            padding_mode=&quot;circular&quot; if torus else &quot;zeros&quot;,
+        ).requires_grad_(False)
+        self.lateral.weight.data.fill_(1.0)
+
+    @property
+    def enabled(self) -&gt; bool:
+        return self.lateral_steps &gt; 0 and self.lateral_polyak &lt; 1.0
+
+    def step_lateral(self, m: torch.Tensor) -&gt; torch.Tensor:
+        &quot;&quot;&quot;One uniform-kernel smoothing pass over the square-grid layout.&quot;&quot;&quot;
+        g = mask_to_grid(m, self.square_dim).unsqueeze(0).unsqueeze(0)
+        g = self.lateral(g).squeeze(0).squeeze(0)
+        if self.lateral_noise_sd &gt; 0:
+            g = g + torch.randn_like(g) * self.lateral_noise_sd
+        return mask_to_vec(g, self.square_dim)
+
+    @torch.no_grad()
+    def smooth(self, mask: torch.Tensor) -&gt; torch.Tensor:
+        &quot;&quot;&quot;Polyak-mix `lateral_steps` smoothing passes into the (binary) mask and
+        re-sparsify to top-k. Returns a fresh k-hot mask; identity when disabled.&quot;&quot;&quot;
+        if not self.enabled:
+            return mask
+        best = mask.float().clone()
+        for _ in range(self.lateral_steps):
+            m_lat = self.step_lateral(best)
+            best = self.lateral_polyak * best + (1.0 - self.lateral_polyak) * m_lat
+        return kwta(best, k=self.k)
+
+
+def anneal_ste_mask(
+    H: int,
+    k: int,
+    loss_fn: Callable[[torch.Tensor], torch.Tensor],
+    n_steps: int,
+    lr: float,
+    init_logits: torch.Tensor | None = None,
+   </pre></details></article>
+<article><h2>rl_mt10 / 695</h2><p><b>What is the purpose of the `saved = agent.m_a` assignment in the `eval_task` function?</b></p><p>Base invents action logging; IC correctly identifies backing up and restoring m_a around evaluation, although it calls the mask internal state.</p><div class="answers">
+<section><h3>base — incorrect</h3><pre>Without seeing the specific codebase, the purpose of `saved = agent.m_a` in an `eval_task` function is typically one of the following:
+
+1.  **Logging/Recording Actions:** To store the agent&#x27;s action (`m_a`) for later analysis, visualization, or debugging.
+2.  **Reproducibility:** To save the exact action taken so the evaluation can be replayed or verified.
+3.  **Metric Calculation:** To use the action later in the function to compute specific metrics (e.g., action entropy, action variance, or success rate based on the action type).
+4.  **State Transition Verification:** To compare the action against expected behavior or to verify that the environment transitioned correctly given that action.
+
+In most reinforcement learning evaluation contexts, it is primarily for **logging and analysis**.</pre></section>
+<section><h3>ic — correct</h3><pre>The purpose of `saved = agent.m_a` is to **preserve the agent&#x27;s internal memory or state** (specifically the `m_a` attribute) before the evaluation loop begins.
+
+This allows the code to:
+1. **Restore the original state** after evaluation (using `agent.m_a = saved`), ensuring the agent&#x27;s memory is not permanently altered by the evaluation process.
+2. **Isolate the evaluation** from affecting subsequent training or inference steps that rely on the pre-evaluation memory.
+
+In essence, it acts as a **backup** to maintain state consistency.</pre></section>
+</div><details><summary>Reference and source excerpt</summary><pre>Based on the provided code snippet, the purpose of the assignment `saved = agent.m_a` is to **store the current state of the agent&#x27;s action mask (`m_a`) before it is potentially modified by the reconfiguration process.**
+
+Here is the breakdown of why this is done:
+
+1.  **Context of Reconfiguration:** The code block is executed when `need_reconfig` is true. This happens when `reconfig_demo` is provided, indicating that the agent needs to adapt its behavior (specifically its action mask) based on expert demonstrations for a specific task.
+2.  **Preparation for Restoration:** Although the subsequent lines of code are cut off in the snippet, the variable name `saved` strongly implies that the original `m_a` is being preserved. In typical reinforcement learning or imitation learning setups involving &quot;reconfiguration&quot; or &quot;cold-started reconfig,&quot; the agent&#x27;s internal parameters (like the action mask `m_a`) are temporarily updated to match the expert&#x27;s support.
+3.  **State Management:** By saving the original `m_a`, the system can likely restore the agent to its previous state after the reconfiguration step is complete, or use the saved value for comparison/logging. This ensures that the reconfiguration process does not permanently corrupt the agent&#x27;s state if it needs to revert or if the reconfiguration is only meant to be temporary for the evaluation rollout.
+
+In essence, `saved = agent.m_a` acts as a **backup** of the agent&#x27;s current action mask before it is overwritten or adjusted during the reconfiguration phase.</pre><pre>.past)
+            if rho_low &lt; self._overlap(m_a_cur, ph[&quot;m_a&quot;]) &lt;= rho_high
+        ]
+        if not cands:
+            return []
+        chosen = np.random.choice(cands, size=min(n_chunks, len(cands)), replace=False)
+        out = []
+        for i in chosen:
+            ph = self.past[int(i)]
+            N = ph[&quot;obs&quot;].shape[0]
+            idx = torch.randint(0, N, (min(n_tuples, N),))
+            out.append((ph[&quot;obs&quot;][idx], ph[&quot;act&quot;][idx], ph[&quot;m_a&quot;]))
+        return out
+
+
+# ---------------------------------------------------------------------------
+# Support / batch tensor helpers (normalized obs)
+# ---------------------------------------------------------------------------
+
+
+def make_support(demo: dict, agent: BCAgent, n_max: int):
+    &quot;&quot;&quot;Subsample up to n_max expert transitions → (normalized obs, act) tensors.&quot;&quot;&quot;
+    N = demo[&quot;obs&quot;].shape[0]
+    idx = np.random.choice(N, size=min(n_max, N), replace=False)
+    obs = agent._norm(torch.tensor(demo[&quot;obs&quot;][idx], dtype=torch.float32))
+    act = torch.tensor(demo[&quot;act&quot;][idx], dtype=torch.float32)
+    return obs, act
+
+
+# ---------------------------------------------------------------------------
+# Eval
+# ---------------------------------------------------------------------------
+
+
+def eval_task(
+    env: StandardTaskEnv,
+    agent: BCAgent,
+    cfg: ExpertBCConfig,
+    mask_a: torch.Tensor | None = None,
+    reconfig_demo: dict | None = None,
+    reconfig_every: int = 0,
+) -&gt; float:
+    &quot;&quot;&quot;Run cfg.eval_episodes greedy rollouts. With `reconfig_demo` (full FTN),
+    recover task tj&#x27;s mask from its expert support by a cold-started reconfig
+    (commit=False): before episode 0, then again every `reconfig_every` episodes
+    (reconfig_every=0 -&gt; only once per cell, reused thereafter). Without
+    `reconfig_demo`, roll out under the fixed `mask_a` (recall / no-mask).&quot;&quot;&quot;
+    n_succ = 0
+    for ep in range(cfg.eval_episodes):
+        need_reconfig = reconfig_demo is not None and (
+            ep == 0 or (reconfig_every &gt;= 1 and ep % reconfig_every == 0)
+        )
+        if need_reconfig:
+            s_obs, s_act = make_support(reconfig_demo, agent, cfg.reconfig_n)
+            saved = agent.m_a</pre></details></article>
+<article><h2>rl_mt10 / 646</h2><p><b>What is the purpose of the `calibrate_cheats` function called when `args.calibrate` is true?</b></p><p>Reference explicitly says function implementation is absent and purpose cannot be determined. Excluded from factual correctness denominator.</p><div class="answers">
+<section><h3>base — unscorable</h3><pre>The `calibrate_cheats` function is **not a standard function** in Python, PyTorch, TensorFlow, or any major machine learning library. It does not exist in common frameworks.
+
+Therefore, its purpose depends entirely on the **specific codebase or repository** you are referring to. However, based on the name and context (`args.calibrate`), it likely serves one of these purposes in a custom implementation:
+
+1. **Cheating Detection Calibration**: In adversarial ML or security research, it might calibrate a model’s confidence scores to better detect &quot;cheating&quot; inputs (e.g., adversarial examples, data leakage, or unauthorized access patterns).
+2. **Debug/Testing Utility**: It might be a debug function that intentionally introduces or corrects biases (&quot;cheats&quot;) to test calibration metrics (e.g., ensuring predicted probabilities match true frequencies).
+3. **Custom Calibration Routine**: In some contexts, &quot;cheats&quot; might refer to heuristic shortcuts or approximate methods used during calibration to speed up computation, and this function tunes those heuristics.
+
+**To give a precise answer, please provide:**
+- The **repository name** or **code snippet** where `calibrate_cheats` is defined.
+- The **context** (e.g., is this from a specific paper, competition, or open-source project?).
+
+Without this context, the function’s purpose cannot be definitively determined.</pre></section>
+<section><h3>ic — unscorable</h3><pre>The `calibrate_cheats` function is **not a standard function** in Python, PyTorch, TensorFlow, or any widely recognized machine learning library. It does not appear in official documentation for common frameworks.
+
+Therefore, its purpose depends entirely on the **specific codebase** you are referring to. However, based on the name and the `args.calibrate` flag, it likely serves one of these purposes in a custom or research codebase:
+
+1. **Calibrating Model Confidence**: Adjusting model outputs (e.g., via temperature scaling) so that predicted probabilities match actual accuracy. The term &quot;cheats&quot; might refer to using held-out validation data or privileged information during calibration.
+2. **Debugging/Testing Aid**: A function that intentionally introduces or corrects biases (&quot;cheats&quot;) to test calibration procedures under controlled conditions.
+3. **Custom Training Loop**: Part of a specific research project or repository where &quot;cheats&quot; refers to a specific technique (e.g., label smoothing, data augmentation, or oracle-assisted training) that is calibrated during a specific phase.
+
+**To give a precise answer, please provide:**
+- The source code or repository where this function is defined.
+- The context of the `args` namespace (e.g., is this from a specific paper, GitHub repo, or framework?).
+
+Without additional context, the function is **custom-defined** and not part of any standard library.</pre></section>
+</div><details><summary>Reference and source excerpt</summary><pre>Based on the provided source material, the code snippet shows that `calibrate_cheats` is called when `args.calibrate` is true, passing in `DEFAULT_TASKS`, the number of episodes (`args.calibrate_eps`), the maximum steps (`args.calibrate_steps`), and the seed.
+
+However, the **actual implementation or definition of the `calibrate_cheats` function is not included in the provided text**. The text only shows where it is called and what arguments are passed to it.
+
+Therefore, while we can infer from the name and arguments that it likely performs some form of calibration or &quot;cheat&quot; setup for the default tasks over a specified number of episodes and steps, **the specific purpose or internal logic of the function cannot be determined from the given source material alone.**</pre><pre> &quot;
+        &quot;exploration; &#x27;simple&#x27; legacy uniform-random + Gaussian additive noise.&quot;,
+    )
+    parser.add_argument(
+        &quot;--replay-explore&quot;,
+        action=&quot;store_true&quot;,
+        help=&quot;Push exploration trajectories (all eps, successes + failures) into &quot;
+        &quot;the replay ring as off-policy data for the current task&#x27;s DDPG updates &quot;
+        &quot;(otherwise they only seed the reconfig support). Recommended with &quot;
+        &quot;--no-mask so successful random rollouts actually train the agent.&quot;,
+    )
+    parser.add_argument(&quot;--name&quot;, default=&quot;&quot;)
+    parser.add_argument(&quot;--seed&quot;, default=&quot;0&quot;)
+    args = parser.parse_args()
+
+    if args.fixed_mask + args.no_mask + args.stored_mask &gt; 1:
+        parser.error(
+            &quot;--fixed-mask, --no-mask, and --stored-mask are mutually exclusive.&quot;
+        )
+
+    if args.calibrate:
+        calibrate_cheats(
+            DEFAULT_TASKS,
+            n_episodes=args.calibrate_eps,
+            max_steps=args.calibrate_steps,
+            seed=int(args.seed),
+        )
+    else:
+        cfg = smoke_ddpg_config() if args.smoke else DDPGConfig()
+        cfg.fixed_mask = args.fixed_mask
+        cfg.no_mask = args.no_mask
+        cfg.stored_mask = args.stored_mask
+        cfg.replay_explore = args.replay_explore
+        if args.bootstrap:
+            cfg.explore_method = &quot;bootstrap&quot;
+        if args.exploration_noise is not None:
+            cfg.exploration_noise = args.exploration_noise
+        if cfg.no_mask:
+            suffix = &quot;_nomask&quot;
+        elif cfg.fixed_mask:
+            suffix = &quot;_fixed&quot;
+        elif cfg.stored_mask:
+            suffix = &quot;_stored&quot;
+        else:
+            suffix = &quot;&quot;
+        tag = args.name + suffix
+        cfg.output_path = cfg.output_path.replace(&quot;.&quot;, f&quot;_{tag}_{args.seed}.&quot;)
+        cfg.seed = int(args.seed)
+        print(&quot;Config:&quot;, asdict(cfg))
+        train(cfg)
+
+
+# FILE: ftn.py
+&quot;&quot;&quot;FTN backbone + AnnealedSTE mask configurer + mask-overlap-filtered replay.
+
+Ported and adapted from experiments/func_net_kt for use as a DDPG actor/critic
+backbone. Each network keeps its own ParallelMLP bank and its own per-task mask.
+
+Forward pass (NeuroModel-style):
+    z = ParallelMLP(x)             # (B, H)  -- H independent small MLPs
+    z = Dropout(z)
+    y =</pre></details></article>
+<article><h2>rl_mt10 / 1400</h2><p><b>What are the two available options for the `exploration_noise` parameter in the DDPG configuration?</b></p><p>Expected ou and simple. Base gives ou and normal; IC names both supported options.</p><div class="answers">
+<section><h3>base — partial</h3><pre>The two available options for the `exploration_noise` parameter in the DDPG configuration are:
+
+1.  **`&#x27;ou&#x27;`** (Ornstein-Uhlenbeck noise)
+2.  **`&#x27;normal&#x27;`** (Normal/Gaussian noise)</pre></section>
+<section><h3>ic — correct</h3><pre>The two available options for the `exploration_noise` parameter in the DDPG configuration are:
+
+1.  `&quot;ou&quot;` (Ornstein-Uhlenbeck process)
+2.  `&quot;simple&quot;` (Uniform random noise)</pre></section>
+</div><details><summary>Reference and source excerpt</summary><pre>Based on the provided source material, the two available options for the `exploration_noise` parameter are:
+
+1.  **&quot;ou&quot;**: Temporally-correlated Ornstein-Uhlenbeck noise (noted as the default in the comments, though the code default is set to &quot;simple&quot;).
+2.  **&quot;simple&quot;**: Legacy behavior using uniform-random actions for cold-start exploration and i.i.d. Gaussian additive noise on the policy.</pre><pre> # cross-task recall. Enable for --no-mask (constant all-ones mask), where
+    # successful random rollouts would otherwise be discarded instead of
+    # training the critic/actor.
+    replay_explore: bool = True
+
+    # --- exploration noise process ---
+    # &quot;ou&quot;     : temporally-correlated Ornstein-Uhlenbeck noise (default). Used
+    #            both as additive noise on the policy and as the no-policy
+    #            cold-start exploration driver (sample → clipped action). Its
+    #            correlated increments integrate into directed motion, so the
+    #            arm actually traverses the workspace instead of jittering.
+    # &quot;simple&quot; : legacy behavior — uniform-random actions for no-policy
+    #            cold-start exploration, i.i.d. Gaussian additive noise on the
+    #            policy. `noise_std` / `noise_std_explore` are the Gaussian std.
+    # noise_std / noise_std_explore double as the OU volatility (sigma) in &quot;ou&quot;
+    # mode; ou_theta is the OU mean-reversion rate.
+    exploration_noise: str = &quot;simple&quot;
+    ou_theta: float = 0.15
+
+    # --- bootstrapped exploration (explore_method=&quot;bootstrap&quot;) ---
+    explore_method: str = &quot;random&quot;
+    noise_std_explore: float = 0.1
+
+    # --- baselines: catastrophic-forgetting references ---
+    fixed_mask: bool = False
+    no_mask: bool = False
+    stored_mask: bool = False
+
+
+def smoke_ddpg_config() -&gt; DDPGConfig:
+    return DDPGConfig(
+        tasks=(&quot;reach-v3&quot;, &quot;drawer-close-v3&quot;),
+        explore_episodes=20,
+        n_successful_explore=5,
+        n_iters_per_task=20,
+        n_parallel_train=2,
+        collect_steps=32,
+        train_steps=32,
+        reconfig_every_iters=5,
+        eval_episodes=2,
+        max_episode_steps=50,
+        batch_size=32,
+        replay_capacity=10_000,
+        ftn_hidden_size=32,
+        ftn_inner_size=4,
+        ftn_layers=2,
+        ftn_k=8,
+        reconfig_steps=10,
+        reconfig_n=128,
+        log_every=5,
+        output_path=&quot;results_smoke.npz&quot;,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Cheat-init wrappers for the MT10</pre></details></article>
+<article><h2>rl_mt10 / 1396</h2><p><b>What is the default behavior of the `_cold_start_policy` if the configuration does not specify &#x27;ou&#x27; noise?</b></p><p>Expected uniform-random actions. IC gets the distribution but invents exploration_noise=&quot;uniform&quot; instead of the supported simple option; base suggests Gaussian noise.</p><div class="answers">
+<section><h3>base — incorrect</h3><pre>The `_cold_start_policy` is not a standard, universally defined parameter in major machine learning libraries (such as scikit-learn, TensorFlow, PyTorch, or XGBoost). Therefore, there is no single &quot;default behavior&quot; without specifying the specific library or framework you are referring to.
+
+However, based on common terminology:
+
+1.  **If you are referring to Reinforcement Learning (e.g., DQN, PPO):**
+    *   Cold start policies often refer to **exploration strategies** (like ε-greedy or OU noise) used before the agent has learned meaningful policies.
+    *   If **Ornstein-Uhlenbeck (OU) noise** is not specified, the default exploration noise is often **Gaussian (white) noise** or **ε-greedy** action selection, depending on the implementation (e.g., Stable-Baselines3 defaults to Gaussian noise for continuous action spaces if OU is not explicitly configured).
+
+2.  **If you are referring to a specific proprietary or niche library:**
+    *   Please specify the library name (e.g., Ray RLlib, Custom TensorFlow implementation, etc.) for an accurate answer.
+
+3.  **If this is a typo or misremembered term:**
+    *   Did you mean **`cold_start`** in recommendation systems? (Default is often popularity-based or zero-filled).
+    *   Did you mean **`noise_policy`** in RL? (Default is often Gaussian).
+
+**Most Likely Answer (in RL contexts like Stable-Baselines3):**
+If OU noise is not specified, the default noise process for continuous action spaces is typically **Gaussian noise** (`NormalActionNoise`).</pre></section>
+<section><h3>ic — partial</h3><pre>The `_cold_start_policy` is a parameter of the `exploration_noise` argument in `DDPGConfig` (from the `ftn` library, a successor to `ftn`).
+
+If the configuration does not specify `&#x27;ou&#x27;` noise, the default behavior is to use **uniform random noise** (specifically, `exploration_noise=&quot;uniform&quot;`).
+
+This is evident from the `DDPGConfig` class definition:
+```python
+exploration_noise: str = &quot;uniform&quot;
+```
+When `exploration_noise` is set to `&quot;uniform&quot;`, the `_cold_start_policy` is used to generate random actions uniformly sampled from the action space bounds during the cold-start phase. If `exploration_noise` were set to `&quot;ou&quot;`, it would use Ornstein-Uhlenbeck noise instead.</pre></section>
+</div><details><summary>Reference and source excerpt</summary><pre>Based on the provided source code, if the configuration (`cfg.exploration_noise`) does not specify `&quot;ou&quot;`, the function executes the `else` branch (implicitly, by falling through to the second `def policy_fn`).
+
+In this case, the default behavior is to return a policy function that generates **i.i.d. uniform-random actions**. Specifically:
+
+1.  It uses `np.random.uniform(-1.0, 1.0, size=act_dim)` to generate random actions.
+2.  The actions are clipped to the range `[-1.0, 1.0]` (though `uniform` already stays within this range).
+3.  The result is cast to `np.float32`.
+
+The docstring confirms this, stating: `with &quot;simple&quot; it is the legacy i.i.d. uniform-random action.`</pre><pre> objective. Transitions are then
+    concatenated and subsampled. Returns (obs, act, rew, next_obs, done, returns).&quot;&quot;&quot;
+    obs = np.concatenate([s[&quot;obs&quot;] for s in seqs], axis=0)
+    act = np.concatenate([s[&quot;act&quot;] for s in seqs], axis=0)
+    rew = np.concatenate([s[&quot;reward&quot;] for s in seqs], axis=0)
+    next_obs = np.concatenate([s[&quot;next_obs&quot;] for s in seqs], axis=0)
+    done = np.concatenate([s[&quot;done&quot;] for s in seqs], axis=0)
+    returns = np.concatenate(
+        [compute_mc_returns(s[&quot;reward&quot;], s[&quot;boundary&quot;], gamma) for s in seqs], axis=0
+    )
+    N = obs.shape[0]
+    idx = np.random.choice(N, size=n_max, replace=False) if N &gt; n_max else np.arange(N)
+    return (
+        torch.tensor(obs[idx]),
+        torch.tensor(act[idx]),
+        torch.tensor(rew[idx]),
+        torch.tensor(next_obs[idx]),
+        torch.tensor(done[idx]),
+        torch.tensor(returns[idx]),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Exploration + unified eval
+# ---------------------------------------------------------------------------
+
+
+def _cold_start_policy(cfg: DDPGConfig, act_dim: int):
+    &quot;&quot;&quot;No-policy cold-start exploration action source for ONE fresh episode
+    (call once per episode). With `exploration_noise=&quot;ou&quot;` the action is an OU
+    sample (clipped) — temporally-correlated drift that actually moves the arm;
+    with &quot;simple&quot; it is the legacy i.i.d. uniform-random action. Volatility is
+    `noise_std_explore`.&quot;&quot;&quot;
+    if cfg.exploration_noise == &quot;ou&quot;:
+        proc = OUNoise(act_dim, cfg.noise_std_explore, theta=cfg.ou_theta)
+
+        def policy_fn(_obs):
+            return np.clip(proc.sample(), -1.0, 1.0).astype(np.float32)
+
+        return policy_fn
+
+    def policy_fn(_obs):
+        return np.random.uniform(-1.0, 1.0, size=act_dim).astype(np.float32)
+
+    return policy_fn
+
+
+def _explore_for_reward(
+    env: CheatTaskEnv,
+    agent: FTNDDPG,
+    max_episodes: int,
+    max_steps: int,
+    policy: str,
+    prev_m_a: torch.Tensor | None = None,
+    n</pre></details></article>
+<article><h2>rl_mt10 / 911</h2><p><b>How does the MT10 DDPG replay buffer manage the transition from one mask configuration to another?</b></p><p>Both deny mask-aware replay management, missing archived mask-pair chunks and overlap filtering.</p><div class="answers">
+<section><h3>base — incorrect</h3><pre>The MT10 (Multi-Task 10) DDPG implementation does **not** manage transitions between mask configurations within the replay buffer itself.
+
+Here’s why:
+
+1.  **Replay Buffer Role**: The replay buffer in DDPG (including MT10 variants) stores **transitions** `(state, action, reward, next_state, done)` sampled from experience. It is agnostic to policy structure, masks, or task configurations. It simply stores and samples past experiences uniformly or prioritized.
+
+2.  **Mask Configuration**: Masking (e.g., action masking, attention masks, or task-specific input masks) is applied **during the forward pass** of the policy and value networks, or during environment interaction, **not** during storage or sampling from the replay buffer.
+
+3.  **Transition Between Masks**: If “mask configuration” refers to switching between tasks or modes in a multi-task setting:
+   - The **task ID** or **mask indicator** is typically included as part of the **state** or as a separate input to the network.
+   - The replay buffer stores these states as-is. When a transition is sampled, the network receives the full state (including any mask/task information) and computes the action/value accordingly.
+   - There is no “transition management” of masks in the buffer; the mask is just part of the data stored in each transition.
+
+**In short**: The replay buffer does not handle mask transitions. Masks are part of the state/input representation, and the buffer stores and samples complete transitions including that information. The policy network handles the mask-dependent computation during inference and training.</pre></section>
+<section><h3>ic — incorrect</h3><pre>The MT10 DDPG replay buffer **does not manage** the transition from one mask configuration to another.
+
+Here is why:
+
+1.  **Replay Buffer Role:** The replay buffer in DDPG (and its variants like MT10) is a passive storage mechanism. It stores tuples of `(observation, action, reward, next_observation, done)` and samples them randomly for training. It has no logic for managing policy configurations, masks, or transitions between them.
+2.  **Mask Configuration Role:** Mask configurations (e.g., action masks, observation masks, or task-specific masks) are part of the **policy network** or the **environment&#x27;s action space definition**. Transitions between mask configurations are handled by:
+    *   The **environment** (which provides the current mask based on the state).
+    *   The **policy network** (which uses the mask to constrain action selection or loss computation).
+    *   The **training loop** (which may switch tasks or reconfigure masks based on a schedule or meta-learning rule).
+
+In summary, the replay buffer stores experiences under whatever mask configuration was active when the transition was collected. It does not control or manage the transition between mask configurations itself.</pre></section>
+</div><details><summary>Reference and source excerpt</summary><pre>Based on the provided source material, the replay buffer manages the transition between mask configurations through a **chunk-based archival system** that ensures data integrity relative to specific mask pairs. Here is how it works:
+
+1.  **Per-Chunk Tagging**: Each chunk of transitions is tagged with the specific actor mask ($m_a$) and critic mask ($m_c$) under which those transitions were collected.
+2.  **Sub-Phase Archival**: The chunks are &quot;sub-phase,&quot; meaning the caller is responsible for archiving (and clearing) the current segment at every **reconfig commit**. This ensures that each chunk’s data corresponds exactly to one mask pair.
+3.  **Recall Logic**: When retrieving data, a chunk is recalled if **either** its actor mask **or** its critic mask overlaps with the current mask within the range $(\rho_{low}, \rho_{high}]$.
+
+In summary, the buffer does not mix transitions from different mask configurations within a single chunk. Instead, it isolates them into tagged chunks that are archived upon reconfiguration and selectively recalled based on mask overlap criteria.</pre><pre>Continuous-action analog of MaskedReplayBufferDQN from train_grid_dqn.py.
+
+    Per-chunk archive: each chunk is tagged with the (m_a, m_c) its transitions
+    were collected under. Chunks are sub-phase — the caller archives (and clears)
+    the current segment at every reconfig commit, so each chunk&#x27;s data matches
+    exactly one mask pair. A chunk is recalled if either its actor OR critic mask
+    overlaps the current mask in (rho_low, rho_high]. Storage lives on the default
+    device; one H2D copy per episode field.&quot;&quot;&quot;
+
+    def __init__(self, capacity: int, obs_dim: int, act_dim: int):
+        self.capacity = capacity
+        self.obs = torch.zeros(capacity, obs_dim)
+        self.act = torch.zeros(capacity, act_dim)
+        self.rew = torch.zeros(capacity)
+        self.next_obs = torch.zeros(capacity, obs_dim)
+        self.done = torch.zeros(capacity)
+        self.ptr = 0
+        self.size = 0
+        self.past: list[dict] = []
+        self._past_masks_a: torch.Tensor | None = None
+        self._past_masks_c: torch.Tensor | None = None
+
+    def add_episode(self, ep: dict):
+        L = ep[&quot;length&quot;]
+        if L == 0:
+            return
+        obs_t = torch.from_numpy(ep[&quot;obs&quot;])
+        act_t = torch.from_numpy(ep[&quot;act&quot;])
+        rew_t = torch.from_numpy(ep[&quot;reward&quot;])
+        next_t = torch.from_numpy(ep[&quot;next_obs&quot;])
+        done_t = torch.from_numpy(ep[&quot;done&quot;])
+        end = self.ptr + L
+        if end &lt;= self.capacity:
+            self.obs[self.ptr : end].copy_(obs_t)
+            self.act[self.ptr : end].copy_(act_t)
+            self.rew[self.ptr : end].copy_(rew_t)
+            self.next_obs[self.ptr : end].copy_(next_t)
+            self.done[self.ptr : end].copy_(done_t)
+        else:
+            first = self.capacity - self.ptr
+            tail = L - first
+            self.obs[self.ptr :].copy_(obs_t[:first])
+            self.obs[:tail].copy_(obs_t[first:])
+            self.act[self.ptr :].copy_(act_t[:first])
+            self.act[:tail].copy_(act_t[first:])
+            self.rew[self.ptr :].copy_(rew_t[:first])
+           </pre></details></article>
+<article><h2>rl_mt10 / 1014</h2><p><b>What information is printed to the console when a demonstration file is loaded from cache?</b></p><p>Expected cache marker, environment name, and transition count; base gives generic cache messages and IC invents a filename message.</p><div class="answers">
+<section><h3>base — incorrect</h3><pre>When a demonstration file is loaded from cache, the console typically prints a message indicating that the file was retrieved from the cache rather than being downloaded or generated anew. The exact wording depends on the specific software or framework, but it generally resembles:
+
+**&quot;Loaded from cache&quot;** or **&quot;Using cached file&quot;**
+
+For example:
+*   In many Python libraries (like `requests` with caching or `datasets`): `&quot;Cache hit&quot;` or `&quot;Loading from cache...&quot;`
+*   In web browsers: No direct console print unless explicitly logged by JavaScript, but network tabs show `(disk cache)` or `(memory cache)`.
+*   In Jupyter/IPython: Often no output unless the code explicitly prints a status message.
+
+If you are referring to a **specific** demonstration file or framework (e.g., TensorFlow, PyTorch, a specific tutorial), please provide more context for a precise answer.</pre></section>
+<section><h3>ic — incorrect</h3><pre>The code prints:
+`&quot;Loading {file} from cache.&quot;`
+
+For example, if the file is `&quot;demo.py&quot;`, it prints:
+`&quot;Loading demo.py from cache.&quot;`</pre></section>
+</div><details><summary>Reference and source excerpt</summary><pre>Based on the provided source code, specifically within the `generate_or_load_demos` function, when a demonstration file is loaded from cache (i.e., when `os.path.exists(path)` is true), the following information is printed to the console:
+
+```python
+print(f&quot;  [cache] {env.name:25s} {d[&#x27;obs&#x27;].shape[0]} transitions&quot;)
+```
+
+This output includes:
+1.  The literal string `[cache]` to indicate the data was loaded from cache.
+2.  The **environment name** (`env.name`), formatted to take up 25 characters.
+3.  The **number of transitions** in the loaded data, which is determined by the first dimension of the observations array (`d[&#x27;obs&#x27;].shape[0]`).</pre><pre>_succ + 1 + cfg.demo_tail)
+    )
+    return (
+        np.asarray(obs_buf[:cut], dtype=np.float32),
+        np.asarray(act_buf[:cut], dtype=np.float32),
+        success,
+    )
+
+
+def generate_or_load_demos(envs, cfg: ExpertBCConfig) -&gt; dict[str, dict]:
+    &quot;&quot;&quot;Per task: a cached dict {obs:[N,D], act:[N,A]} of concatenated expert
+    transitions. Cache key includes the demo-generation params + seed so the
+    four baselines reuse identical data.&quot;&quot;&quot;
+    os.makedirs(cfg.data_dir, exist_ok=True)
+    demos: dict[str, dict] = {}
+    for env in envs:
+        key = f&quot;{env.name}_n{cfg.n_demos}_s{cfg.seed}_t{cfg.demo_tail}_m{cfg.demo_max_steps}.npz&quot;
+        path = os.path.join(cfg.data_dir, key)
+        if os.path.exists(path):
+            d = np.load(path)
+            demos[env.name] = {&quot;obs&quot;: d[&quot;obs&quot;], &quot;act&quot;: d[&quot;act&quot;]}
+            print(f&quot;  [cache] {env.name:25s} {d[&#x27;obs&#x27;].shape[0]} transitions&quot;)
+            continue
+        policy = ENV_POLICY_MAP[env.name]()
+        obs_all, act_all, n_succ = [], [], 0
+        for _ in range(cfg.n_demos):
+            o, a, s = _rollout_expert(env, policy, cfg)
+            obs_all.append(o)
+            act_all.append(a)
+            n_succ += s
+        obs_cat = np.concatenate(obs_all, axis=0)
+        act_cat = np.concatenate(act_all, axis=0)
+        np.savez(path, obs=obs_cat, act=act_cat)
+        demos[env.name] = {&quot;obs&quot;: obs_cat, &quot;act&quot;: act_cat}
+        print(
+            f&quot;  [gen]   {env.name:25s} {obs_cat.shape[0]} transitions &quot;
+            f&quot;({n_succ}/{cfg.n_demos} expert demos succeeded)&quot;
+        )
+    return demos
+
+
+def fit_normalizer(demos: dict[str, dict]) -&gt; tuple[torch.Tensor, torch.Tensor]:
+    &quot;&quot;&quot;Global observation standardizer over all tasks&#x27; expert data (frozen,
+    shared across every task and condition so comparisons are fair). Actions
+    are already in [-1, 1] and left unscaled.&quot;&quot;&quot;
+    all_obs = np.concatenate([d[&quot;</pre></details></article>
+<article><h2>rl_mt10 / 1231</h2><p><b>What is the impact of the reconfig_steps parameter on the mask annealing process?</b></p><p>Reference explicitly says the annealer implementation is absent and exact impact cannot be determined. Excluded from factual correctness denominator.</p><div class="answers">
+<section><h3>base — unscorable</h3><pre>The `reconfig_steps` parameter controls the **frequency** at which the mask is updated during the annealing process.
+
+*   **High Frequency (Low value):** The mask is updated often. This allows the model to adapt quickly to the current state of the latent variables but can lead to instability or noisy updates.
+*   **Low Frequency (High value):** The mask is updated rarely. This provides a more stable optimization landscape for the latent variables between updates but may slow down convergence or cause the mask to lag behind the optimal configuration.
+
+In essence, it balances **adaptation speed** against **optimization stability**.</pre></section>
+<section><h3>ic — unscorable</h3><pre>The `reconfig_steps` parameter controls the **number of optimization iterations** (or gradient descent steps) performed during the mask annealing process. Its impact is as follows:
+
+1. **Mask Quality**: Higher values allow the mask to better align with the underlying data structure, potentially yielding more accurate or interpretable results.
+2. **Computational Cost**: Increasing `reconfig_steps` linearly increases training time and resource usage.
+3. **Risk of Overfitting**: Too many steps may cause the mask to overfit to noise or specific training examples, reducing generalization.
+4. **Convergence**: If set too low, the mask may not converge to a stable or meaningful configuration.
+
+In practice, it acts as a trade-off between **accuracy** and **efficiency**, requiring tuning based on dataset complexity and computational constraints.</pre></section>
+</div><details><summary>Reference and source excerpt</summary><pre>Based on the provided source material, it is **not possible to determine the specific impact** of the `reconfig_steps` parameter on the mask annealing process.
+
+Here is the reasoning:
+
+1.  **Usage Context**: The code snippet shows that `cfg.reconfig_steps` is passed as an argument to the function `anneal_ste_mask`:
+    ```python
+    m_a_new, m_a_logits_new, a_init, a_final = anneal_ste_mask(
+        H,
+        k,
+        actor_loss,
+        cfg.reconfig_steps,  # Passed here
+        cfg.reconfig_lr,
+        ...
+    )
+    ```
+2.  **Missing Implementation**: The source material provided **does not include the definition or implementation** of the `anneal_ste_mask` function. It only shows the function being called.
+3.  **No Documentation**: There are no comments or docstrings in the provided text that explain what `reconfig_steps` controls within the `anneal_ste_mask` function (e.g., whether it controls the number of iterations, the speed of annealing, or the granularity of mask updates).
+
+Therefore, while we can infer that `reconfig_steps` is a configuration parameter influencing the annealing process (likely controlling the duration or number of steps in the annealing schedule), the **exact impact** cannot be determined from the given code snippet alone.</pre><pre>ritic(obs, a_pi, m_c_frozen).mean()
+
+        m_a_new, m_a_logits_new, a_init, a_final = anneal_ste_mask(
+            H,
+            k,
+            actor_loss,
+            cfg.reconfig_steps,
+            cfg.reconfig_lr,
+            init_logits=init_a,
+            noise_scale=cfg.mask_init_noise_scale,
+        )
+
+        stats = {
+            &quot;critic_init&quot;: c_init,
+            &quot;critic_final&quot;: c_final,
+            &quot;actor_init&quot;: a_init,
+            &quot;actor_final&quot;: a_final,
+        }
+        if commit:
+            self.m_a = m_a_new
+            self.m_c = m_c_new
+            self.m_a_logits = m_a_logits_new
+            self.m_c_logits = m_c_logits_new
+        return m_a_new, m_c_new, stats
+
+    def update_joint(self, batch, recalled):
+        &quot;&quot;&quot;One DDPG gradient step on the *summed* loss across the current batch
+        (under the current masks) and each recalled chunk (under the masks it was
+        collected under). The critic step sums the per-term TD losses; the actor
+        step sums the per-term −Q losses. Every term gets its own forward pass,
+        so the mask-to-data match is exact; gradients accumulate on neurons
+        shared across the masks (the cross-task consolidation mechanism).
+
+        `recalled` is a list of (batch, m_a, m_c) triples (possibly empty). One
+        critic step, one actor step, and one target soft-update per call.&quot;&quot;&quot;
+        gamma, tau = self.cfg.gamma, self.cfg.tau
+        terms = [(batch, self.m_a, self.m_c)]
+        terms.extend(recalled)
+
+        # --- critic: summed TD loss across all terms ---
+        critic_total = None
+        for b, m_a, m_c in terms:
+            obs, act, rew, next_obs, done = b
+            with torch.no_grad():
+                a_next = self.actor_t(next_obs, m_a)
+                q_next = self.critic_t(next_obs, a_next, m_c)
+                target = rew + gamma * (1.0 - done) * q_next
+            critic_loss = F.mse_loss(self.critic(obs, act, m_c), target)
+            # --- per-chunk weighting hook (critic) -------------------------
+            # Unweighted sum for now. To weight (by overlap ρ, 1/len(terms), or</pre></details></article>

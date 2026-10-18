@@ -1,0 +1,532 @@
+----------------------------------------------------------------------
+-- Pegasun
+-- chicken like bird
+--[[
+males and females, must mate to reproduce.
+lives off flora, spreading surface and insects
+]] ---------------------------------------------------------------------
+-- Internationalization
+local S = animals.S
+
+local random = math.random
+local floor = math.floor
+
+local pegasun = animals.data[animals.index.pegasun]
+local pegasunMale = animals.data[animals.index.pegasunMale]
+
+-----------------------------------
+local function brain(self)
+
+    -- die from damage
+    if not animals.core_hp(self) then
+        return
+    end
+
+    if mobkit.timer(self, 1) then
+
+        local pos = mobkit.get_stand_pos(self)
+
+        local age, energy = animals.core_life(self, pegasun.lifespan, pos)
+        -- die from exhaustion or age
+        if not age then
+            return
+        end
+
+        ------------------
+        -- Emergency actions
+
+        -- swim to shore
+        if self.isinliquid then
+            mobkit.hq_liquid_recovery(self, 60)
+        end
+
+        local prty = mobkit.get_queue_priority(self)
+        -------------------
+        -- High priority actions
+        if prty < 50 then
+
+            -- Threats
+            local plyr = mobkit.get_nearby_player(self)
+            if plyr then
+                animals.fight_or_flight_plyr(self, plyr, 55, 0.01)
+            end
+
+            animals.predator_avoid(self, 55, 0.01)
+
+        end
+
+        ----------------------
+        -- Low priority actions
+        if prty < 20 then
+
+            -- random choice between
+            -- feeding, exploring, social
+            -- chance differs by time
+            local ce = 0.1
+            local cs = 0.1
+            -- c feeding is simply what happens if no
+            -- others are selected
+            local tod = minetest.get_timeofday()
+            if tod < 0.2 or tod > 0.8 then
+                -- more social at night
+                ce = 0.01
+                cs = 0.75
+            elseif tod > 0.55 and tod < 0.55 then
+                -- explore during midday
+                ce = 0.5
+                cs = 0.1
+            end
+
+            if random() < ce then
+                if random() < 0.95 then
+                    -- wander random
+                    mobkit.animate(self, 'walk')
+                    mobkit.hq_roam(self, 10)
+                else
+                    -- wander temp
+                    mobkit.animate(self, 'walk')
+                    animals.hq_roam_comfort_temp(self, 12, 21)
+                end
+
+            elseif random() < cs then
+
+                -- social
+                if random() < 0.3 then
+                    animals.flock(self, 25, 3)
+                elseif random() < 0.01 then
+                    animals.territorial(self, energy, false)
+                elseif random() < 0.05 then
+
+                    -- reproduction
+                    if self.hp >= self.max_hp and energy >= self.energy_max - 100 then
+
+                        -- are we already pregnant?
+                        local preg = mobkit.recall(self, 'pregnant') or false
+                        if preg == true then
+                            mobkit.lq_idle(self, 3)
+                            if random() < 0.05 then
+                                energy = animals.place_egg(
+                                    pos, "animals:pegasun_eggs", energy, pegasun.eggEnergy, 'air'
+                                )
+                                mobkit.remember(self, 'pregnant', false)
+                            end
+
+                        else
+
+                            -- we are randy
+                            mobkit.remember(self, 'sexual', true)
+                            local mate = animals.mate_assess(self, 'animals:pegasun_male')
+                            if mate then
+                                -- go get him!
+                                if random() < 0.5 then
+                                    animals.hq_mate(self, 25, mate)
+                                end
+                            end
+                        end
+                    else
+                        -- I'm too tired darling
+                        mobkit.remember(self, 'sexual', false)
+                    end
+                end
+
+            elseif energy < self.energy_max then
+
+                -- feed via a method
+                if random() < 0.85 then
+                    -- scratch dirt
+                    if not animals.eat_spreading_under(self, pos, 0.001) then
+                        -- wander to food source
+                        mobkit.animate(self, 'walk')
+                        -- mobkit.hq_roam(self,10)
+                        animals.hq_roam_surface_group(self, 'spreading', 20)
+                    end
+                elseif random() < 0.75 then
+                    -- veg
+                    animals.eat_flora(self, pos, 20, 0.5)
+                else
+                    -- hunt
+                    if not animals.prey_hunt(self, 25) then
+                        -- random search
+                        mobkit.animate(self, 'walk')
+                        mobkit.hq_roam(self, 10)
+                        -- animals.hq_roam_surface_group(self, 'spreading', 10)
+                    end
+                end
+            end
+
+        end
+
+        -------------------
+        -- generic behaviour
+        if mobkit.is_queue_empty_high(self) then
+            mobkit.animate(self, 'walk')
+            mobkit.hq_roam(self, 10)
+        end
+
+        -----------------
+        -- housekeeping
+        -- save energy, age
+        mobkit.remember(self, 'energy', energy)
+        mobkit.remember(self, 'age', age)
+
+    end
+end
+
+-----------------------------------
+-- MALE BEHAVIOUR
+local function brain_male(self)
+
+    -- die from damage
+    if not animals.core_hp(self) then
+        return
+    end
+
+    if mobkit.timer(self, 1) then
+
+        local pos = mobkit.get_stand_pos(self)
+
+        local age, energy = animals.core_life(self, pegasunMale.lifespan, pos)
+        -- die from exhaustion or age
+        if not age then
+            return
+        end
+        mobkit.remember(self, 'energy', energy)
+        mobkit.remember(self, 'age', age)
+
+        ------------------
+        -- Emergency actions
+
+        -- swim to shore
+        if self.isinliquid then
+            mobkit.hq_liquid_recovery(self, 60)
+        end
+
+        local prty = mobkit.get_queue_priority(self)
+        -------------------
+        -- High priority actions
+        if prty < 50 then
+
+            -- Threats
+            local plyr = mobkit.get_nearby_player(self)
+            if plyr then
+                animals.fight_or_flight_plyr(self, plyr, 55, 0.6)
+            end
+
+            animals.predator_avoid(self, 55, 0.6)
+
+        end
+
+        ----------------------
+        -- Low priority actions
+
+        if prty < 20 then
+
+            -- random choice between
+            -- feeding, exploring, social
+            -- chance differs by time
+            local ce = 0.2
+            local cs = 0.4
+            -- c feeding is simply what happens if no
+            -- others are selected
+            local tod = minetest.get_timeofday()
+            if tod < 0.2 or tod > 0.8 then
+                -- more social at night
+                ce = 0.01
+                cs = 0.95
+            elseif tod > 0.55 and tod < 0.55 then
+                -- explore during midday
+                ce = 0.6
+                cs = 0.2
+            end
+
+            if random() < ce then
+                if random() < 0.95 then
+                    -- wander random
+                    mobkit.animate(self, 'walk')
+                    mobkit.hq_roam(self, 10)
+                else
+                    -- wander temp
+                    mobkit.animate(self, 'walk')
+                    animals.hq_roam_comfort_temp(self, 10, 21)
+                end
+
+            elseif random() < cs then
+
+                -- social
+                if random() < 0.5 then
+                    animals.flock(self, 25, 1)
+                elseif random() < 0.85 then
+                    animals.territorial(self, energy, false)
+                elseif random() < 0.1 then
+
+                    -- reproduction
+                    if self.hp >= self.max_hp and energy >= self.energy_max / 2 then
+
+                        -- set status as randy
+                        -- find nearby prospect and try to mate
+                        mobkit.remember(self, 'sexual', true)
+                        local mate = animals.mate_assess(self, 'animals:pegasun')
+
+                        if mate then
+                            -- go get her!
+                            if random() < 0.5 then
+                                mobkit.remember(self, "energy", energy - 1000) -- energy use for mating lol
+                                animals.hq_mate(self, 25, mate)
+                            end
+                        end
+
+                    else
+                        -- in no state for hankypanky
+                        mobkit.remember(self, 'sexual', false)
+                    end
+                end
+
+            elseif energy < self.energy_max then
+
+                -- feed via a method
+                if random() < 0.75 then
+                    -- scratch dirt
+                    if not animals.eat_spreading_under(self, pos, 0.001) then
+                        -- wander random
+                        mobkit.animate(self, 'walk')
+                        -- mobkit.hq_roam(self,10)
+                        animals.hq_roam_surface_group(self, 'spreading', 20)
+                    end
+                elseif random() < 0.5 then
+                    -- veg
+                    animals.eat_flora(self, pos, 20, 0.5)
+                else
+                    -- hunt
+                    if not animals.prey_hunt(self, 25) then
+                        -- random search
+                        mobkit.animate(self, 'walk')
+                        mobkit.hq_roam(self, 10)
+                        -- animals.hq_roam_surface_group(self, 'spreading', 10)
+                    end
+                end
+            end
+
+        end
+
+        -------------------
+        -- generic behaviour
+        if mobkit.is_queue_empty_high(self) then
+            mobkit.animate(self, 'walk')
+            mobkit.hq_roam(self, 10)
+        end
+
+        -----------------
+        -- housekeeping
+        -- save energy, age
+
+    end
+end
+
+---------------
+-- the CREATURE
+---------------
+
+minetest.register_node(
+    "animals:pegasun_spawn", {
+        description = S('Pegasun Egg'),
+        tiles = {"animals_gundu_eggs.png"},
+        stack_max = minimal.stack_max_medium,
+        drawtype = "nodebox",
+        paramtype = "light",
+        node_box = {type = "fixed", fixed = {-0.125, -0.5, -0.125, 0.125, -0.125, 0.125}},
+        groups = {
+            snappy = 3,
+            falling_node = 1,
+            dig_immediate = 3,
+            flammable = 1,
+            temp_pass = 1,
+            edible = 1,
+        },
+        on_construct = function(pos)
+            minetest.get_node_timer(pos):start(1)
+        end,
+        on_timer = function(pos, elapsed)
+            if random() <= 0.4 then -- 40% for female, 60% for male
+                return animals.hatch_egg(pos, 'air', 'air', "animals:pegasun", pegasun.eggEnergy, 1)
+            else
+                return animals.hatch_egg(
+                    pos, 'air', 'air', "animals:pegasun_male", pegasun.eggEnergy, 1
+                )
+            end
+
+        end,
+    }
+)
+
+-- eggs
+minetest.register_node(
+    "animals:pegasun_eggs", {
+        description = S('Pegasun Egg'),
+        tiles = {"animals_gundu_eggs.png"},
+        stack_max = minimal.stack_max_medium,
+        drawtype = "nodebox",
+        paramtype = "light",
+        node_box = {type = "fixed", fixed = {-0.125, -0.5, -0.125, 0.125, -0.125, 0.125}},
+        groups = {
+            snappy = 3,
+            falling_node = 1,
+            dig_immediate = 3,
+            flammable = 1,
+            temp_pass = 1,
+            edible = 1,
+        },
+        on_construct = function(pos)
+            local egg_timer = 60 * 10
+            minetest.get_node_timer(pos):start(math.random(egg_timer, egg_timer * 2))
+        end,
+        on_timer = function(pos, elapsed)
+            if random() <= 0.4 then -- 40% for female, 60% for male
+                return animals.hatch_egg(pos, 'air', 'air', "animals:pegasun", pegasun.eggEnergy, 1)
+            else
+                return animals.hatch_egg(
+                    pos, 'air', 'air', "animals:pegasun_male", pegasun.eggEnergy, 1
+                )
+            end
+
+        end,
+    }
+)
+
+----------------------------------------------
+-- THE MALE
+
+minetest.register_entity(
+    "animals:pegasun_male", {
+        -- core
+        physical = true,
+        collide_with_objects = true,
+        collisionbox = {-0.16, -0.75, -0.16, 0.16, -0.25, 0.16},
+        visual = "mesh",
+        mesh = "animals_pegasun.b3d",
+        textures = {"animals_pegasun_male.png"},
+        visual_size = {x = 1, y = 1},
+        timeout = 0, -- damage
+        max_hp = pegasunMale.hp,
+        heal_rate = pegasunMale.heal,
+        lung_capacity = 25,
+        min_temp = pegasun.minTemp,
+        max_temp = pegasun.maxTemp,
+        energy_loss = pegasun.energyLoss,
+        energy_max = pegasun.energy, -- interaction
+        predators = {"animals:kubwakubwa", "animals:darkasthaan"},
+        prey = {"animals:sneachan", "animals:impethu"},
+        friends = {"animals:pegasun"},
+        rivals = {"animals:pegasun_male"},
+        sex = "male",
+        on_step = mobkit.stepfunc,
+        on_activate = mobkit.actfunc,
+        get_staticdata = mobkit.statfunc,
+        logic = brain_male,
+        -- optional mobkit props
+        -- or used by built in behaviors
+        -- physics = [function user defined] 		-- optional, overrides built in physics
+        animation = {
+            walk = {range = {x = 71, y = 90}, speed = 24, loop = true},
+            fast = {range = {x = 91, y = 110}, speed = 24, loop = true},
+            stand = {
+                {range = {x = 1, y = 30}, speed = 28, loop = true},
+                {range = {x = 31, y = 70}, speed = 32, loop = true},
+            },
+        }, -- movement
+        springiness = 0,
+        buoyancy = 1.01,
+        max_speed = pegasunMale.speed, -- m/s
+        jump_height = pegasunMale.jump, -- nodes/meters
+        view_range = pegasunMale.view, -- nodes/meters
+        -- attack
+        attack = {range = pegasunMale.range, damage_groups = {fleshy = pegasunMale.damage}},
+        armor_groups = {fleshy = pegasunMale.armor}, -- on actions
+        drops = {{name = "animals:carcass_bird_small", chance = 1, min = 1, max = 1}},
+        on_punch = function(self, puncher, time_from_last_punch, tool_capabilities, dir)
+            animals.on_punch(self, tool_capabilities, puncher, 55, 0.6)
+            return true
+        end,
+        on_rightclick = function(self, clicker)
+            if not clicker or not clicker:is_player() then
+                return
+            end
+            animals.stun_catch_mob(self, clicker, 0.15)
+        end,
+    }
+)
+
+-- spawn egg (i.e. live animal in inventory)
+animals.register_egg(
+    "animals:pegasun_male", S("Live Pegasun (male)"), "animals_pegasun_item.png",
+        minimal.stack_max_medium, pegasun.energyEgg
+)
+
+------------------------------------------------------------------------
+-- FEMALE
+
+minetest.register_entity(
+    "animals:pegasun", {
+        -- core
+        physical = true,
+        collide_with_objects = true,
+        collisionbox = {-0.16, -0.75, -0.16, 0.16, -0.25, 0.16},
+        visual = "mesh",
+        mesh = "animals_pegasun.b3d",
+        textures = {"animals_pegasun.png"},
+        visual_size = {x = 1, y = 1},
+        timeout = 0, -- damage
+        max_hp = pegasun.hp,
+        heal_rate = pegasun.heal,
+        lung_capacity = 20,
+        min_temp = pegasun.minTemp,
+        max_temp = pegasun.maxTemp,
+        energy_loss = pegasun.energyLoss,
+        energy_max = pegasun.energy, -- interaction
+        predators = {
+            "animals:kubwakubwa", "animals:darkasthaan", "animals:puma", "animals:mongoose",
+        },
+        prey = {"animals:sneachan", "animals:impethu"},
+        friends = {"animals:pegasun", "animals:pegasun_male"},
+        rivals = {"animals:pegasun"},
+
+        on_step = mobkit.stepfunc,
+        on_activate = mobkit.actfunc,
+        get_staticdata = mobkit.statfunc,
+        logic = brain, -- optional mobkit props
+        -- or used by built in behaviors
+        -- physics = [function user defined] 		-- optional, overrides built in physics
+        animation = {
+            walk = {range = {x = 71, y = 90}, speed = 24, loop = true},
+            fast = {range = {x = 91, y = 110}, speed = 24, loop = true},
+            stand = {
+                {range = {x = 1, y = 30}, speed = 28, loop = true},
+                {range = {x = 31, y = 70}, speed = 32, loop = true},
+            },
+        }, -- movement
+        springiness = 0,
+        buoyancy = 1.01,
+        max_speed = pegasun.speed, -- m/s
+        jump_height = pegasun.jump, -- nodes/meters
+        view_range = pegasun.view, -- nodes/meters
+        -- attack
+        attack = {range = pegasun.range, damage_groups = {fleshy = pegasun.damage}},
+        armor_groups = {fleshy = pegasun.armor}, -- on actions
+        drops = {{name = "animals:carcass_bird_small", chance = 1, min = 1, max = 1}},
+        on_punch = function(self, puncher, time_from_last_punch, tool_capabilities, dir)
+            animals.on_punch(self, tool_capabilities, puncher, 55, 0.05)
+            return true
+        end,
+        on_rightclick = function(self, clicker)
+            if not clicker or not clicker:is_player() then
+                return
+            end
+            animals.stun_catch_mob(self, clicker, 0.25)
+        end,
+    }
+)
+
+-- spawn egg (i.e. live animal in inventory)
+animals.register_egg(
+    "animals:pegasun", S("Live Pegasun (female)"), "animals_pegasun_item.png",
+        minimal.stack_max_medium, pegasun.energyEgg
+)

@@ -158,7 +158,8 @@ FTN mask / reconfiguration
 --------------------------
 K                    kWTA budget: number of active mask units.
 RECONFIG_STEPS       Gradient steps per mask reconfiguration.
-RECONFIG_LR          Adam lr for the mask logits.
+RECONFIG_LR          Learning rate for the mask logits.
+RECONFIG_OPTIMIZER   Mask-search optimizer: Adam (default), SGD, or RMSprop.
 RECONFIG_SAMPLE_SIZE Max samples used per reconfiguration.
 RECONFIG_NOISE_SCALE annealste only: multiplier on the annealed exploration
                      noise added to the logits inside kwta(logits + noise) at
@@ -414,6 +415,9 @@ EVAL_BACKWARDS       Re-evaluate all previously seen tasks after each task.
 EVAL_PROSPECTIVE     Also evaluate not-yet-trained tasks (forward transfer).
 N_RETRO_EVAL_BATCHES Batches per task during backwards eval.
 EVAL_RECONFIG_STEPS  Reconfiguration steps for backwards/prospective eval.
+EVAL_RECONFIG_SAMPLE_SIZE
+                     Maximum support rows for evaluation mask search; None
+                     uses the training reconfiguration sample limit.
                      None uses the training RECONFIG_STEPS value.
 
 Entropy tests (post-hoc out-of-distribution subspace probe)
@@ -444,7 +448,29 @@ LOSS_EMA_SMOOTHING       EMA factor for the plotted loss curve.
 RENDER_STEPS             Render per-training-step mask visualizations (mask
                          GIFs, task vis). False skips those; loss plots and
                          the forgetting (transfer) matrices are always saved.
-PLOT_EVERY               Plot/log every N epochs.
+PLOT_EVERY               Snapshot mask/rgb animations and selected plots every
+                         N epochs (epoch 0 is always included). This does not
+                         skip frames within a snapshotted epoch.
+BW_FRAME_SKIP            Save one bw_*.gif activity frame per N training steps;
+                         the activity EMA still updates every step. 1 saves
+                         every step. Does not change rgb_*.gif frames.
+SPATIAL_PERMUTE          Consolidate BW/RGB display positions after each task
+                         block using the latest mask of every seen task. One
+                         shared permutation; training/model state is unchanged.
+                         Defaults off; enable with subconfig SpatialPermute.
+SPATIAL_PERMUTE_ROUNDNESS Circular-neighborhood affinity relative to the basic
+                         four-neighbor score. Higher favors smoother blobs.
+SPATIAL_PERMUTE_CENTER   Attraction of the occupied union to the canvas center;
+                         higher packs it more tightly. Count shared pixels once.
+SPATIAL_PERMUTE_RADIUS   Circular neighborhood radius in display pixels.
+SPATIAL_PERMUTE_INIT     default = best of sector/serpentine/previous seeds;
+                        random_blobs = scattered blobs, then refine previous.
+SPATIAL_PERMUTE_SEED     Private display-layout RNG seed; does not affect training.
+SPATIAL_PERMUTE_SWEEPS   Optimization budget: eight swap proposals/pixel/sweep.
+SPATIAL_PERMUTE_TEMPERATURE Initial annealing temperature; 0 is greedy only.
+                         First half of sweeps cools, second half refines the best
+                         layout greedily. Set roundness/center/temperature to 0
+                         for the original four-neighbor adjacency objective.
 GIF_DURATION             Per-frame duration (ms) for GIFs.
 GIF_SAVE_EPOCH           Epoch interval at which GIFs are saved.
 GIF_EMA_SCALE            Time-constant scale for the blue/purple activity trails
@@ -468,7 +494,7 @@ class Default:
     SEED = 123
 
     # ---- Data generator: shared (both TASK values) ----
-    N_TASK = 8               # number of continual-learning tasks
+    N_TASK = 24               # number of continual-learning tasks
     T = 256                  # samples generated per task batch
 
     # ---- Data generator: sine (TASK == "sine") ----
@@ -522,8 +548,15 @@ class Default:
     RECONFIG_ALGORITHM = "annealste"
     RECONFIG_STEPS = 30
     RECONFIG_LR = 0.3
+    RECONFIG_OPTIMIZER = "Adam"
     RECONFIG_SAMPLE_SIZE = T
     RECONFIG_NOISE_SCALE = 1.0
+    RECONFIG_OVERLAP_MODE = "seen_logits"
+    RECONFIG_OVERLAP_LAMBDA = 0.0
+    RECONFIG_OVERLAP_THRESHOLD = 0.5
+    RECONFIG_OVERLAP_TEMPERATURE = 0.2
+    # Added only to mask-search losses; positive favors confident predictions.
+    RECONFIG_ENTROPY_COEF = 0.0
 
     RECONFIG_EVERY = 1
 
@@ -648,7 +681,7 @@ class Default:
     N_EVAL_EPOCHS = 1
 
     N_SAMPLE_PER_TASK = 100
-    N_REPLAY_SAMPLES = 4
+    N_REPLAY_SAMPLES = 2
     REPLAY_BATCH_SIZE = T
 
     # Noise probe (replay-free structure preservation)
@@ -666,6 +699,7 @@ class Default:
     EVAL_PROSPECTIVE = True
     N_RETRO_EVAL_BATCHES = 10
     EVAL_RECONFIG_STEPS = 60
+    EVAL_RECONFIG_SAMPLE_SIZE = None
 
     # Entropy tests (post-hoc OOD subspace probe; see ENTROPY_TESTS in glossary)
     ENTROPY_TESTS = False
@@ -678,9 +712,18 @@ class Default:
     RENDER_STEPS = True
     LOSS_EMA_SMOOTHING = 0.8
     PLOT_EVERY = 1
+    BW_FRAME_SKIP = 1
+    SPATIAL_PERMUTE = False
+    SPATIAL_PERMUTE_INIT = "default"
+    SPATIAL_PERMUTE_SEED = 0
+    SPATIAL_PERMUTE_ROUNDNESS = 2.0
+    SPATIAL_PERMUTE_CENTER = 0.0
+    SPATIAL_PERMUTE_RADIUS = 7
+    SPATIAL_PERMUTE_SWEEPS = 8
+    SPATIAL_PERMUTE_TEMPERATURE = 0.05
     GIF_DURATION = 20
     GIF_SAVE_EPOCH = 1
-    GIF_EMA_SCALE = 0.0
+    GIF_EMA_SCALE = 1.0
 
     @property
     def BINARY(self):
@@ -701,9 +744,18 @@ class Default:
         return self.NOISE_PROBE_SAMPLE_PER_TASK * self.N_TASK
 
     @property
+    def OVERLAP_PARS(self):
+        return dict(reconfig_entropy_coef=self.RECONFIG_ENTROPY_COEF,
+                    overlap_mode=self.RECONFIG_OVERLAP_MODE,
+                    overlap_lambda=self.RECONFIG_OVERLAP_LAMBDA,
+                    overlap_threshold=self.RECONFIG_OVERLAP_THRESHOLD,
+                    overlap_temperature=self.RECONFIG_OVERLAP_TEMPERATURE)
+
+    @property
     def FTN_PARS(self):
         """Everything the FTN class takes besides input/output/hidden sizes."""
         return {
+            **self.OVERLAP_PARS,
             "square_dim": self.SQUARE_DIM,
             "classification": self.CLASSIFICATION,
             "binary": self.BINARY,
@@ -718,6 +770,7 @@ class Default:
             "k": self.K,
             "reconfig_steps": self.RECONFIG_STEPS,
             "reconfig_lr": self.RECONFIG_LR,
+            "reconfig_optimizer": self.RECONFIG_OPTIMIZER,
             "reconfig_sample_size": self.RECONFIG_SAMPLE_SIZE,
             "reconfig_algorithm": self.RECONFIG_ALGORITHM,
             "reconfig_noise_scale": self.RECONFIG_NOISE_SCALE,
@@ -758,6 +811,7 @@ class Default:
         Reuses the shared K / RECONFIG_* / MASK_* knobs so the LoRA mask search
         is configured exactly like the base FTN's."""
         return {
+            **self.OVERLAP_PARS,
             "square_dim": self.SQUARE_DIM,
             "classification": self.CLASSIFICATION,
             "binary": self.BINARY,
@@ -775,6 +829,7 @@ class Default:
             "k": self.K,
             "reconfig_steps": self.RECONFIG_STEPS,
             "reconfig_lr": self.RECONFIG_LR,
+            "reconfig_optimizer": self.RECONFIG_OPTIMIZER,
             "reconfig_sample_size": self.RECONFIG_SAMPLE_SIZE,
             "reconfig_algorithm": self.RECONFIG_ALGORITHM,
             "reconfig_noise_scale": self.RECONFIG_NOISE_SCALE,
@@ -796,6 +851,7 @@ class Default:
         the base backbone knobs (LAYERS/INNER_DIM/DROPOUT) per block and the
         shared K / RECONFIG_* / MASK_* mask-search knobs."""
         return {
+            **self.OVERLAP_PARS,
             "square_dim": self.SQUARE_DIM,
             "classification": self.CLASSIFICATION,
             "binary": self.BINARY,
@@ -814,6 +870,7 @@ class Default:
             "k": self.K,
             "reconfig_steps": self.RECONFIG_STEPS,
             "reconfig_lr": self.RECONFIG_LR,
+            "reconfig_optimizer": self.RECONFIG_OPTIMIZER,
             "reconfig_sample_size": self.RECONFIG_SAMPLE_SIZE,
             "reconfig_algorithm": self.RECONFIG_ALGORITHM,
             "reconfig_noise_scale": self.RECONFIG_NOISE_SCALE,
@@ -851,6 +908,7 @@ class Default:
         shared K / RECONFIG_* / MASK_* mask-search knobs so the HML mask search
         is configured exactly like the base FTN's."""
         return {
+            **self.OVERLAP_PARS,
             "square_dim": self.SQUARE_DIM,
             "classification": self.CLASSIFICATION,
             "binary": self.BINARY,
@@ -863,6 +921,7 @@ class Default:
             "k": self.K,
             "reconfig_steps": self.RECONFIG_STEPS,
             "reconfig_lr": self.RECONFIG_LR,
+            "reconfig_optimizer": self.RECONFIG_OPTIMIZER,
             "reconfig_sample_size": self.RECONFIG_SAMPLE_SIZE,
             "reconfig_algorithm": self.RECONFIG_ALGORITHM,
             "reconfig_noise_scale": self.RECONFIG_NOISE_SCALE,
@@ -884,6 +943,7 @@ class Default:
         RNN_STEP_RMSNORM, and the shared K / RECONFIG_* / MASK_* mask-search
         knobs so its simultaneous per-mask search matches the recurrent FTN's."""
         return {
+            **self.OVERLAP_PARS,
             "square_dim": self.SQUARE_DIM,
             "classification": self.CLASSIFICATION,
             "binary": self.BINARY,
@@ -906,6 +966,7 @@ class Default:
             "k": self.K,
             "reconfig_steps": self.RECONFIG_STEPS,
             "reconfig_lr": self.RECONFIG_LR,
+            "reconfig_optimizer": self.RECONFIG_OPTIMIZER,
             "reconfig_sample_size": self.RECONFIG_SAMPLE_SIZE,
             "reconfig_algorithm": self.RECONFIG_ALGORITHM,
             "reconfig_init_sd": self.RECONFIG_INIT_SD,
@@ -962,6 +1023,30 @@ class Smoke(Default):
     N_RETRO_EVAL_BATCHES = 2
 
 
+class Adam(Default):
+    RECONFIG_OPTIMIZER = "Adam"
+
+
+class SGD(Default):
+    RECONFIG_OPTIMIZER = "SGD"
+
+
+class RMSprop(Default):
+    RECONFIG_OPTIMIZER = "RMSprop"
+
+
+class SpatialPermute(Default):
+    """Mixin: pack BW/RGB masks into central blobs; --config Smoke SpatialPermute."""
+    SPATIAL_PERMUTE = True
+
+
+class SpatialPermuteRandom(Default):
+    """Random blob layout, refined from its previous state after each task block."""
+    SPATIAL_PERMUTE = True
+    SPATIAL_PERMUTE_INIT = "random_blobs"
+    SPATIAL_PERMUTE_CENTER = 0.0
+
+
 class EntropyTests(Default):
     """Mixin: enable the post-hoc ENTROPY_TESTS OOD subspace probe. Compose onto
     any run, e.g. --config Default EntropyTests, or --config Smoke EntropyTests."""
@@ -988,6 +1073,7 @@ class NoReplay(Default):
     N_SAMPLE_PER_TASK = 1
     N_REPLAY_SAMPLES = 0
     REPLAY_BATCH_SIZE = 1
+
 
 
 class MatchStored(Default):
@@ -1059,12 +1145,12 @@ class Fast(Default):
 class Flash(Default):
     RECONFIG_STEPS = 1
     RECONFIG_LR = 1.0
-    # DROPOUT = 0.0
     RECONFIG_ALGORITHM = "fast"
+    EVAL_RECONFIG_STEPS = 1
 
 
 class Large(Default):
-    SQUARE_DIM = 96
+    SQUARE_DIM = 128
     K = 1024
 
 class PolyakSmoothLarge(Default):
@@ -1130,11 +1216,23 @@ class LoRA(Default):
     LORA_B0_SCALE = 0.01
     RECONFIG_INIT_SD = 1e-5   # std of the mask-logit init for the search
 
-    N_EPOCHS = 1
+    # N_EPOCHS = 1
 
-    RECONFIG_ALGORITHM = "annealste"
-    RECONFIG_STEPS = 60
-    RECONFIG_LR = 0.3
+    # RECONFIG_ALGORITHM = "annealste"
+    # RECONFIG_STEPS = 60
+    # RECONFIG_LR = 0.3
+
+    # EVAL_RECONFIG_STEPS=120
+
+    # ENTROPY_TESTS=True
+
+    # TRAIN_LR = 3e-4
+    # TRAIN_DURATION=500
+    # N_TASK=6
+    # RECONFIG_REACTIVE_SD=6
+    # RECONFIG_REACTIVE_EMA=0.99
+    # K=1024
+    # SQUARE_DIM=64
 
 class LoRARNN(Default):
     """FTN-LoRA-RNN: a single recurrent LoRA layer unrolled STACK_LAYERS steps,
@@ -1412,12 +1510,12 @@ class Thorough(Default):
     RECONFIG_STEPS = 60
     RECONFIG_LR = 0.3
 
-class Thorough2(Default):
+class Thorough120(Default):
     RECONFIG_ALGORITHM = "annealste"
     RECONFIG_STEPS = 120
     RECONFIG_LR = 0.3
 
-class Thorough3(Default):
+class Thorough240(Default):
     RECONFIG_ALGORITHM = "annealste"
     RECONFIG_STEPS = 240
     RECONFIG_LR = 0.3
@@ -1617,6 +1715,7 @@ class Hopfield_A1U(Default):
     RECONFIG_STEPS = 60
     RECONFIG_LR = 0.3
     RECONFIG_NOISE_SCALE=0.1
+    EVAL_RECONFIG_STEPS = 60
 
 class Hopfield_Flash(Default):
     RECONFIG_MATCH_STORED = True
@@ -1628,9 +1727,18 @@ class Hopfield_Flash(Default):
     RECONFIG_STEPS = 2
     RECONFIG_LR = 1.0
     RECONFIG_NOISE_SCALE=0.00
+    EVAL_RECONFIG_STEPS = 2
+
+class Sparse(Default):
+    K = 4
+    SQUARE_DIM=64
+    N_TASK=6
+    TRAIN_DURATION = 500
+    TRAIN_LR = 3e-4
+    INNER_DIM=32
 
 class Compose(Default):
-    TASK = "compose"            # "sine" (tasks.DataGenSine) | "compose" (task_comp)
+    TASK = "compose"            # "sine" (tasks.DatfaGenSine) | "compose" (task_comp)
     COMP_MATRIX_DIM = 6      # matrix side N; input/output dim = N**2
     COMP_STEPS = 4           # operators per composition ("rotate->flip->shift")
     COMP_P = 0.25            # Bernoulli prob for input matrix entries
@@ -1728,3 +1836,91 @@ class Wave2(Wave):
     WAVE_INPUT_THRESHOLD = 0.1
     WAVE_INPUT_FIRST_STEP_ONLY = True
     WAVE_INPUT_KERNEL_SIZE = 9
+
+class BW_Demos(Default):
+    TRAIN_DURATION=50
+    TRAIN_LR=1e-4
+    N_TASK=3
+    PLOT_EVERY = 1
+    BW_FRAME_SKIP = 5
+    GIF_EMA_SCALE=2.0
+    N_EPOCHS=10
+
+    MASK_LATERAL_POLYAK=0.93
+    MASK_LATERAL_STEPS=1
+    MASK_KERNEL_SIZE=17
+    TORUS=False
+
+class FastSmooth(Default):
+    N_TASK = 4
+
+    SQUARE_DIM = 64
+    K = 256
+    TRAIN_DURATION = 500
+    
+    # #Mask behavior
+    # RECONFIG_EVERY = 0
+    # RECONFIG_REACTIVE = True
+    # RECONFIG_REACTIVE_EMA = 0.9
+    # RECONFIG_REACTIVE_SD = 5.0
+
+    # #Disable replay
+    # N_REPLAY_SAMPLES=1
+
+    MASK_LATERAL_POLYAK = 0.0
+    MASK_LATERAL_STEPS = 1
+    MASK_KERNEL_SIZE = 5
+    TORUS = True
+
+    LATERAL_B = 0.0
+    LATERAL_STEPS = 1
+    #
+    # RECONFIG_ALGORITHM = "fast"
+    # RECONFIG_STEPS = 10
+    # RECONFIG_LR = 1.0
+    # EVAL_RECONFIG_STEPS = 10
+
+
+    #LoRA settings
+    LORA_LAYERS = 8           # number of hidden layers in the frozen MLP
+    LORA_WIDTH = 256           # width of each hidden layer
+    LORA_WEIGHT_SCALE = 1.0  # frozen backbone init std (N(0, scale/sqrt(fan_in)));
+                              # the fixed weight scale to sweep
+    LORA_RANK = 1             # rank of each LoRA atom
+    LORA_ALPHA = 256.0         # LoRA scaling; effective delta scaled by alpha/K
+    LORA_DROPOUT = 0.0
+    LORA_B0_SCALE = 0.01
+    RECONFIG_INIT_SD = 1e-5   # std of the mask-logit init for the search
+
+class LowSupport(Default):
+    """Use four support examples when reconfiguring masks for evaluation."""
+    EVAL_RECONFIG_SAMPLE_SIZE = 4
+
+class Orth(Default):
+    CORRELATED_TASKS=False
+
+
+class Overlap(Default):
+    RECONFIG_OVERLAP_MODE = "seen_logits"  # lambda * mean(logit_i * seen_i)
+    RECONFIG_OVERLAP_LAMBDA = 0.0001
+
+    RECONFIG_OVERLAP_THRESHOLD = 0.15
+    RECONFIG_OVERLAP_TEMPERATURE = 0.002
+
+class tasks4(Default):
+    N_TASK=4
+    # K=256
+
+
+class Entropy(Default):
+    RECONFIG_ENTROPY_COEF = 0.5
+
+class NoEvals(Default):
+    EVAL_BACKWARDS=False
+    EVAL_PROSPECTIVE=False
+
+class SpatialPermuteRandomCenter(Default):
+    """Random blob layout, refined from its previous state after each task block."""
+    SPATIAL_PERMUTE = True
+    SPATIAL_PERMUTE_INIT = "random_blobs"
+    SPATIAL_PERMUTE_CENTER = 0.25

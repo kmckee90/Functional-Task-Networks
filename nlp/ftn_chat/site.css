@@ -1,0 +1,22 @@
+html,body{background:#0e151d!important;color:#e4edf5!important;margin:0!important;color-scheme:dark}
+.gradio-container,.gradio-container.dark{
+ --background-fill-primary:#0e151d;--background-fill-secondary:#15212d;
+ --block-background-fill:#111c27;--block-border-color:#2d4051;
+ --block-label-background-fill:#15212d;--block-label-text-color:#adc1d5;
+ --block-title-text-color:#e4edf5;--body-text-color:#e4edf5;--body-text-color-subdued:#9cafc3;
+ --input-background-fill:#162330;--input-border-color:#344b5e;--input-text-color:#e4edf5;
+ --input-placeholder-color:#96aabe;--border-color-primary:#2d4051;
+ --button-secondary-background-fill:#1c3040;--button-secondary-text-color:#c5e3db;
+ --button-secondary-border-color:#3b5c65;--link-text-color:#7de1bf;
+ --shadow-drop:none;--shadow-drop-lg:none;
+ background:#0e151d!important;color:#e4edf5!important;font-family:system-ui,sans-serif!important;
+ width:100%!important;max-width:none!important;min-height:0!important;padding:20px!important;
+}
+.gradio-container .prose,.gradio-container .prose p,.gradio-container .prose h3{color:#c4d4e4!important}
+.gradio-container .prose h3{font-size:19px!important;font-weight:500!important}
+.gradio-container textarea{font-size:15px!important;line-height:1.5!important}
+.gradio-container .message{background:#182836!important;color:#e4edf5!important}
+.gradio-container .message.user{background:#213b3b!important}
+.gradio-container img{object-fit:contain!important}
+.gradio-container footer{display:none!important}
+@media(max-width:650px){.gradio-container{padding:12px!important}#chat-layout{gap:16px!important}.gradio-container .prose h3{font-size:17px!important}}

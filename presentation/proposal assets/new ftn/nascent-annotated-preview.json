@@ -1,0 +1,44 @@
+{
+  "fps": 24,
+  "frames": 7066,
+  "duration": 294.4166666666667,
+  "chapters": [
+    {
+      "label": "Nascent title",
+      "start": 0,
+      "end": 4
+    },
+    {
+      "label": "Panel explanation 1",
+      "start": 4.0,
+      "end": 12.0
+    },
+    {
+      "label": "Panel explanation 2",
+      "start": 12.0,
+      "end": 20.0
+    },
+    {
+      "label": "Panel explanation 3",
+      "start": 20.0,
+      "end": 28.0
+    },
+    {
+      "label": "Early wandering",
+      "start": 28.0,
+      "end": 101.33333333333333
+    },
+    {
+      "label": "Interacting with wildlife",
+      "start": 101.33333333333333,
+      "end": 225.75
+    },
+    {
+      "label": "Learning to climb trees",
+      "start": 226.0,
+      "end": 294.4166666666667
+    }
+  ],
+  "wolf_playback_speed": 0.2,
+  "wandering_annotation_seconds_per_clip": 6
+}

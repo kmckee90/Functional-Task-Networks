@@ -15,7 +15,7 @@ torch.set_default_device("cuda" if torch.cuda.is_available() else "cpu")
 from config import CFG
 from data import build_task, format_distill, teacher_user_msg
 from model import build, lora_params
-from perplexity_configurer import PerplexityConfigurer
+from bayes_configurer import BayesianPerplexityConfigurer
 from train import _collate, distill_loss, teacher_answer_logits
 
 try:
@@ -29,7 +29,7 @@ model, tok, ctrl, wrappers, _ = build(CFG)
 for p in lora_params(wrappers):
     p.requires_grad = True
 opt = torch.optim.Adam(lora_params(wrappers), lr=CFG.lr, foreach=False)
-cfgr = PerplexityConfigurer(CFG, ctrl)
+cfgr = BayesianPerplexityConfigurer(CFG, ctrl)
 dev = torch.device("cuda")
 pad_id = tok.pad_token_id if tok.pad_token_id is not None else tok.eos_token_id
 
@@ -65,12 +65,13 @@ t_batch = _collate([(ex["t_ids"], ex["t_lbl"])], pad_id, dev)
 model.train()
 for i in range(2):  # 1 warmup + 1 timed
     torch.cuda.synchronize(); t0 = time.time()
-    m, _, _ = cfgr(model, ex["recfg"].to(dev).unsqueeze(0), steps=CFG.train_reconfig_steps)
+    m, _, _ = cfgr(model, ex["recfg"].to(dev).unsqueeze(0))
+    search_steps = cfgr.last_stats["steps"]
     t_sel = teacher_answer_logits(model, ctrl, t_batch)
     opt.zero_grad()
     loss = distill_loss(model, ctrl, m, s_batch, t_sel, CFG)
     loss.backward(); opt.step()
     torch.cuda.synchronize()
     tag = "warmup" if i == 0 else "TRAIN STEP"
-    print(f"{tag}: {time.time()-t0:.1f}s  (reconfig {CFG.train_reconfig_steps} + teacher + student)")
+    print(f"{tag}: {time.time()-t0:.1f}s  (Bayes update {search_steps} + teacher + student)")
 print("BENCH OK")

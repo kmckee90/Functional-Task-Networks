@@ -1,0 +1,20 @@
+{
+  "bounds": [
+    -192,
+    192,
+    -192,
+    384
+  ],
+  "cell_size": 4,
+  "terrain_resolution": 2,
+  "max_visits": 81500,
+  "tiles_ready": 54,
+  "tiles_requested": 54,
+  "orientation": "north (+z) up",
+  "steps": {
+    "phase2_dreamer_s19": 545060,
+    "phase2_p2e_s19": 475650,
+    "phase2_m2e_s19": 359520,
+    "phase2_conv_s19": 297409
+  }
+}

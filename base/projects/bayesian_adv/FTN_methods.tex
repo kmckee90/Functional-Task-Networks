@@ -1,0 +1,486 @@
+\documentclass[11pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb,booktabs,array,longtable}
+\usepackage{float}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage{microtype}
+\usepackage{hyperref}
+\hypersetup{colorlinks=true,linkcolor=blue,urlcolor=blue}
+\newcommand{\TopK}{\operatorname{TopK}}
+\newcommand{\KL}{\operatorname{KL}}
+\newcommand{\sig}{\operatorname{sigmoid}}
+\newcommand{\loss}{\mathcal{L}}
+\title{Functional Task Networks: Approximately Bayesian State Space Routing with Input-Conditioned Priors}
+\author{Kevin L. McKee}
+\date{}
+\begin{document}
+\maketitle
+
+\noindent A functional task network (FTN) is a masked model of selectable
+functional units; its low-rank adaptation (LoRA) variant is FTN-LoRA.
+This document specifies the feed-forward implementations in
+\texttt{projects/bayesian\_adv}. Unless stated otherwise, ``default'' means the
+current \texttt{Bayes}, \texttt{BayesLoRA}, or composable
+\texttt{InputConditioned} configuration in \texttt{config.py}, rather than a
+constructor fallback. Let $H$ be the number of selectable units, $K$ the
+number active in one hard mask, $S=\{(x_i,y_i)\}_{i=1}^n$ a support batch, and
+$\loss_S(f)=n^{-1}\sum_i\ell(f(x_i),y_i)$. The implementation uses cross-entropy
+for classification and mean squared error for regression.
+
+\section{Background: FTN and FTN-LoRA}
+\paragraph{FTN.}
+An FTN has $H$ independently parameterized small multilayer perceptrons
+(MLPs) $u_j(x;\theta_j)$. Their scalar outputs use rectified linear unit
+(ReLU) hidden layers and a final $\tanh$; a shared
+readout $W\in\mathbb{R}^{C\times H}$ combines them. With a binary mask
+$m\in\{0,1\}^H$, $\sum_jm_j=K$, its prediction is
+\begin{equation}
+ z_j(x)=u_j(x;\theta_j),\qquad
+ f_{\theta,W}(x;m)=W\bigl(m\odot z(x)\bigr).
+ \label{eq:ftn}
+\end{equation}
+Dropout, when enabled, acts on $z$ before masking. In the ordinary FTN,
+mask reconfiguration searches temporary real-valued logits against $\loss_S$
+with model weights detached, then installs a hard top-$K$ mask. The selected
+weights are subsequently trained on data under that mask. Thus the mask
+selects which independent functional units contribute to the readout; it is
+not a separate learned network for every task.
+
+\paragraph{FTN-LoRA.}
+FTN-LoRA instead has one frozen random MLP. Each linear layer $\ell$ has a
+bank of $H$ trainable rank-$r$ atoms, and the \emph{same} mask selects atoms
+at every layer. Using row-vector notation, the layer computes
+\begin{equation}
+ h_{\ell+1}=h_\ell W^0_\ell+
+ \frac{\alpha}{K}\sum_{j=1}^{H}m_j
+ \left[(\operatorname{Drop}_\ell(h_\ell)A_{\ell j})B_{\ell j}
+       +b_{\ell j}\right],
+ \label{eq:lora}
+\end{equation}
+followed by ReLU except at the output layer. Here $W^0_\ell$ is frozen,
+$A_{\ell j}\in\mathbb{R}^{d_\ell\times r}$,
+$B_{\ell j}\in\mathbb{R}^{r\times d_{\ell+1}}$, and the optional
+$b_{\ell j}$ is a trainable per-atom bias. There is no frozen base bias.
+The bank is evaluated densely and multiplied by $m$, so all atoms have a
+mask-gradient path during straight-through search even when their current
+forward mask value is zero. Only atoms and their biases receive ordinary
+weight updates. Equations~\eqref{eq:ftn} and \eqref{eq:lora} share a $K$-of-$H$
+router, but the former gates outputs of independent MLPs while the latter
+gates edits to a shared computation.
+
+\section{Bayes FTN: persistent mask state}
+Bayes FTN retains the FTN predictor in Eq.~\eqref{eq:ftn}. Its additional
+state is a logit vector $L_t\in\mathbb{R}^{H}$, initialized to zero and
+carried across training batches. $L_t$ is a buffer updated by mask inference,
+not a parameter of the weight optimizer. For an ordinary update, the detached
+prior logits and the starting optimization variable are
+\begin{equation}
+ P_t=\rho L_{t-1},\qquad \lambda^{(0)}=P_t.
+ \label{eq:prior}
+\end{equation}
+$\rho=1$ preserves the preceding state exactly; $\rho=0$ gives zero logits,
+whose Bernoulli surrogate probabilities are uniform at $1/2$. We call this
+a \emph{persistent-state prior}: it is the preceding approximate mask state,
+possibly diffused toward zero. No other prior construction is needed here.
+With zero logits, Gumbel top-$K$ is uniform over exact-$K$ subsets, so each
+unit's actual inclusion probability is $K/H$, not the surrogate's $1/2$.
+For the configured masks, $K/H=1/16$ in Bayes FTN and $1/4$ in BayesLoRA.
+This illustrates why the Bernoulli probabilities below are an optimization
+proxy rather than calibrated marginals of the hard-mask distribution.
+
+At each of $J$ adaptive moment estimation (Adam) steps, independent
+$g_j=-\log(-\log U_j)$ with
+$U_j\sim\mathrm{Uniform}(0,1)$ perturb the ranking. The forward mask is
+exactly $K$-sparse:
+\begin{align}
+ a_s&=\exp\!\left[-\frac{s}{\max\{(J-1)/3,10\}}\right],
+ &m^{(s)}&=\TopK_K\!\left(\frac{\lambda^{(s)}}{T a_s}+g\right),\nonumber\\
+ q_j&=\sig(\lambda_j/T),
+ &p_j&=\sig(P_{t,j}/T).
+ \label{eq:gumbel}
+\end{align}
+When stochastic sampling is disabled, the forward mask is simply
+$\TopK_K(\lambda^{(s)})$. The search uses the straight-through quantity
+$\widetilde m=m^{(s)}+q-\operatorname{stopgrad}(q)$: its numerical forward
+value is hard, while its derivative follows the sigmoid relaxation. Backbone
+weights are detached during this search. A Kullback--Leibler (KL) divergence
+penalizes movement away from the prior. The objective is
+\begin{equation}
+ \min_{\lambda}\quad
+ \loss_S\bigl(f_{\theta,W}(\cdot;\widetilde m)\bigr)
+ +\beta\,\frac{1}{H}\sum_{j=1}^{H}
+ \left[q_j\log\frac{q_j}{p_j}
+ +(1-q_j)\log\frac{1-q_j}{1-p_j}\right].
+ \label{eq:objective}
+\end{equation}
+This is an \emph{approximate} Bayesian update. The mean factorized-Bernoulli
+KL is an analytic, coordinate-separable $O(H)$ penalty with a deterministic
+gradient; it uses the same sigmoid probabilities as the straight-through
+path. These properties make it inexpensive during the few Adam steps of an
+ordinary update. It is a stability penalty toward prior logits, not the KL
+of the exact-$K$ distribution used in forward passes. In particular,
+Gumbel top-$K$ couples selections through sampling without replacement,
+whereas the Bernoulli surrogate treats coordinates independently. It also
+penalizes a common shift $\lambda\mapsto\lambda+c\mathbf{1}$ even though
+that shift leaves the top-$K$ law unchanged.
+
+More distribution-matched alternatives are possible. The \emph{ordered}
+Gumbel top-$K$ draw $i_1,\ldots,i_K$ has a Plackett--Luce probability.
+Writing $a_j=\lambda_j/T_s$ for the sampling temperature at a given step,
+\begin{equation}
+ \log Q_a(i_1,\ldots,i_K)=\sum_{r=1}^{K}
+ \left[a_{i_r}-\log\!\sum_{j\notin\{i_1,\ldots,i_{r-1}\}}e^{a_j}\right].
+ \label{eq:pl}
+\end{equation}
+Its log probability is easy to evaluate, so sampled differences between
+the current and prior log probabilities could estimate a KL over \emph{orders}.
+The expectation and its gradient would need Monte Carlo estimation, however,
+and the order contains information discarded by the FTN's binary mask.
+Consequently, the ordered KL is an upper bound on the corresponding
+unordered-mask KL, not that KL itself. Obtaining an unordered mask's exact
+probability requires accounting for its possible selection orders.
+Another choice is a conditional-Bernoulli exact-$K$ distribution,
+$Q(S)\propto\exp(\sum_{j\in S}\lambda_j/T)$ for $|S|=K$.
+Its normalization can be computed by dynamic programming in $O(HK)$ rather
+than enumerating all $\binom{H}{K}$ masks, but it is a different sampling law
+from Gumbel top-$K$ and is costlier than the present $O(H)$ penalty.
+
+At the end, the optimized logits become $L_t$ and a hard mask becomes the
+active $m_t$.
+With \texttt{TAKE\_BEST=True}, Bayes FTN instead retains the sampled mask
+and pre-step logits that attained the lowest support loss during search;
+the selection criterion is task loss, not the KL-augmented objective.
+$L_t$ carries information to the next mask update; $m_t$ determines the
+present forward computation and which unit parameters receive task gradients.
+The active hard mask, rather than a fresh sample on every prediction, is used
+for subsequent weight updates until reconfiguration. The reactive detector
+below uses an exponential moving average (EMA) of recent losses; configuration
+keys abbreviate learning rate as \texttt{LR} and standard deviation as
+\texttt{SD}.
+
+\begin{table}[H]
+\centering\small
+\caption{Bayes FTN defaults from \texttt{Bayes} (and inherited \texttt{Default}).
+Sample sizes are rows of the current support batch.}
+\begin{tabular}{@{}p{.40\linewidth}p{.17\linewidth}p{.34\linewidth}@{}}
+\toprule
+Configuration key & Default & Role \\
+\midrule
+\texttt{SQUARE\_DIM}, $H$ & $64$, $4096$ & Unit-bank size ($H=64^2$) \\
+\texttt{K} & $256$ & Active units per mask \\
+\texttt{LAYERS}, \texttt{INNER\_DIM} & $8$, $8$ & Depth and hidden width of each unit MLP \\
+\texttt{BAYES\_RECONFIG\_STEPS} & $2$ & Ordinary posterior steps $J$ \\
+\texttt{BAYES\_RECONFIG\_LR} & $0.3$ & Adam rate for logits \\
+\texttt{RECONFIG\_SAMPLE\_SIZE} & $256$ & Ordinary support limit \\
+\texttt{BAYES\_KL\_WEIGHT} & $1.0$ & $\beta$ in Eq.~\eqref{eq:objective} \\
+\texttt{BAYES\_TEMPERATURE} & $3.0$ & $T$ for sigmoid and sampling \\
+\texttt{BAYES\_PRIOR\_DECAY} & $1.0$ & $\rho$ in Eq.~\eqref{eq:prior} \\
+\texttt{BAYES\_STOCHASTIC\_MASK} & \texttt{True} & Gumbel perturbations on \\
+\texttt{BAYES\_RECONFIG\_TAKE\_BEST} & \texttt{True} & Retain lowest support-loss iterate \\
+\texttt{RECONFIG\_REACTIVE}, \texttt{RECONFIG\_REACTIVE\_SD}, \texttt{RECONFIG\_REACTIVE\_EMA} & \texttt{True}, $5.0$, $0.9$ & Loss-triggered schedule; threshold and EMA factor \\
+\texttt{EVAL\_RECONFIG\_STEPS}, \texttt{EVAL\_RECONFIG\_RESTARTS} & $30$, $1$ & Independent cold evaluation search \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Evaluation-time \texttt{cold\_reconfigure} is separate from training-state
+updates: it starts temporary logits at zero, optimizes on labeled support
+without a KL term, and selects the best hard mask by support loss. It does
+not modify $L_t$. Normal evaluation uses 30 steps, Adam rate $0.3$,
+temperature $1$, one restart, and the full supplied support unless a sample
+limit is configured.
+
+\section{BayesLoRA}
+BayesLoRA applies the same persistent-logit update,
+Eqs.~\eqref{eq:prior}--\eqref{eq:objective}, to the FTN-LoRA predictor of
+Eq.~\eqref{eq:lora}. Its $H$ mask coordinates now select low-rank atoms,
+not independent output units. During mask inference, all trainable atom
+weights and biases are detached; during the following weight update, the
+installed hard mask selects their contributions. This distinction matters:
+overlapping masks expose shared atom parameters to updates from multiple
+solutions, whereas nonoverlapping atoms are structurally isolated. The
+frozen base matrices are shared but never updated.
+
+\begin{table}[H]
+\centering\small
+\caption{BayesLoRA defaults that differ from Bayes FTN, plus its LoRA-specific
+backbone values. Unlisted posterior and detector settings are inherited from
+Table 1.}
+\begin{tabular}{@{}p{.40\linewidth}p{.17\linewidth}p{.34\linewidth}@{}}
+\toprule
+Configuration key & Default & Role \\
+\midrule
+\texttt{K} & $1024$ & Active atoms from $H=4096$ \\
+\texttt{LORA\_LAYERS}, \texttt{LORA\_WIDTH} & $8$, $256$ & Frozen MLP hidden depth and width \\
+\texttt{LORA\_RANK} & $1$ & Rank of each atom \\
+\texttt{LORA\_ALPHA} & $256$ & Scale $\alpha/K$ of summed edits \\
+\texttt{LORA\_WEIGHT\_SCALE} & $1.0$ & Frozen base initialization scale \\
+\texttt{LORA\_DROPOUT}, \texttt{LORA\_BIAS} & $0$, \texttt{True} & Atom-input dropout; bias bank \\
+\texttt{LORA\_B0\_SCALE} & $0.01$ & Initial $B$ and bias standard deviation \\
+\texttt{BAYES\_RECONFIG\_TAKE\_BEST} & \texttt{False} & Install final logits and draw final mask \\
+\texttt{TRAIN\_DURATION} & $1500$ & Training batches per task block (Bayes: $500$) \\
+\texttt{REPLAY\_BATCH\_SIZE} & $16$ & Stored rows per replay batch (Bayes: $256$) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Changepoint detection and cold reset/refit}
+The reactive training loop tests each incoming batch \emph{before} changing
+its mask or weights. Let $d_t=\loss_{S_t}(f(\cdot;m_{t-1}))$, let $\mu_t$ and
+$v_t$ be the running post-update loss mean and variance, and let $c_t$ count
+batches since the last detected change. Apart from the first batch, it flags
+a change when
+\begin{equation}
+ c_t\geq \left\lceil\frac{1}{1-\gamma}\right\rceil
+ \quad\text{and}\quad
+ d_t>\mu_{t-1}+s\sqrt{\max(v_{t-1},0)}.
+ \label{eq:detector}
+\end{equation}
+Here $\gamma=0.9$, $s=5$, and the warmup is ten batches. After fitting the
+mask, the loss $a_t$ under the new mask restarts $\mu=a_t,v=0$ on a change;
+otherwise the code updates
+$\delta=a_t-\mu$, $\mu\leftarrow\gamma\mu+(1-\gamma)a_t$,
+$v\leftarrow\gamma v+(1-\gamma)\delta^2$. The detector never reads a task
+identifier or declared task boundary. Between detections, BayesLoRA still
+makes its two-step persistent update on each batch.
+
+On detection, \texttt{reconfigure\_changepoint} uses the same mask-inference
+objective with a separate parameter set. Its defaults are
+\begin{equation}
+ J_{\rm cp}=30,\quad \eta_{\rm cp}=0.3,\quad
+ \rho_{\rm cp}=0,\quad\beta_{\rm cp}=0,\quad T_{\rm cp}=1,
+ \label{eq:cp}
+\end{equation}
+with stochastic Gumbel masks and the entire detected batch as support
+(the changepoint sample-size option is \texttt{None}). Hence
+$P_t=0$ and $\lambda^{(0)}=0$: this is the long reconfiguration from
+uniform prior logits, or \emph{cold start}, rather than a continuation of
+the old mask state. The resulting logits become the new persistent state.
+BayesLoRA keeps the final logits and draws its installed mask from them.
+This training-time reset/refit is distinct from the stateless evaluation
+cold search described above.
+
+\clearpage
+\section{Input-conditioned priors}
+Abstractly, input-conditioned routing maps a small input set $X_s$ to
+mask scores $h(X_s)\in\mathbb{R}^H$. The useful choice is what those scores
+\emph{do}: they may determine a mask directly, or provide initial logits and
+a prior for the existing support-set optimization,
+\begin{equation}
+ \begin{aligned}
+ L_0&=h(X_s),\\
+ L^*&\approx\operatorname{Optimize}_{L\,\leftarrow\,L_0}
+ \left[\loss_S\bigl(f(\cdot;\widetilde m(L))\bigr)
+       +\beta_{\rm ic}\KL(q_L\Vert q_{L_0})\right],\\
+ m&=\TopK_K(L^*).
+ \end{aligned}
+ \label{eq:ic-abstract}
+\end{equation}
+Here $S$ adds labeled support when refinement is requested; the hard mask
+and its straight-through search follow Section 2. Thus input conditioning
+need not replace mask inference. It can supply a better starting point while
+the task loss corrects an imperfect match. Direct routing is the choice to
+use $m=\TopK_K(L_0)$ without that refinement.
+
+A learned neural map $h$ would have its own trainable parameters. Sequential
+updates for new input domains could then catastrophically forget old
+data-to-mask associations, causing routing failure even if the masked FTN
+still retains those solutions. The implemented input-conditioned (IC)
+mechanism avoids additional trainable router weights: it identifies a domain
+using analytically fitted, fixed input projectors and retrieves saved mask
+logits. This protects the \emph{routing map} from gradient-driven forgetting;
+it does not by itself prevent retrieved logits from becoming stale when the
+FTN's shared trainable parameters change. The repair option below addresses
+that separate problem.
+
+Concretely, the router adds an archive of pairs $(P_a,L_a)$ to Bayes FTN or
+BayesLoRA, where $P_a$ is an input-domain projector and $L_a$ is a saved
+persistent mask-logit vector. For the current segment, it accumulates the
+\emph{uncentered} scatter
+$C=\sum_i x_i^\top x_i$ over unlabeled training inputs. If $U_r$ contains
+the top $r$ eigenvectors of $C$, it builds the rank-$r$ projector
+$P=U_rU_r^\top$. A detected changepoint archives the outgoing projector
+and logits and begins collecting a new segment. Archived entries are
+append-only; a current-segment candidate may also participate in evaluation.
+
+Given the first $n_s$ unlabeled rows $X_s$ of a support batch, route matching
+uses normalized reconstruction error
+\begin{equation}
+ e(P;X_s)=\frac{\|X_s-X_sP\|_F^2}{\max(\|X_s\|_F^2,\varepsilon)}.
+ \label{eq:reconstruction}
+\end{equation}
+The router takes the \emph{latest} entry whose error is within tolerance
+$\delta$ of the minimum, accepting it only if its error is below threshold
+$\tau$. The mapping $h(X_s)=L_a$ therefore retrieves an
+\emph{input-conditioned prior} over mask choices. Matching uses inputs alone;
+labels are involved only if a subsequent refinement or fallback search is
+requested. Input distributions
+that are indistinguishable by Eq.~\eqref{eq:reconstruction} cannot be
+distinguished by this router merely because their labels differ.
+
+At evaluation, a successful match has two selectable behaviors.
+\texttt{direct} applies $\TopK_K(L_a)$ immediately, requiring neither labels
+nor optimization. The configured default \texttt{refine} starts temporary
+logits at $L_a$ and performs $J_{\rm ic}$ deterministic-mask posterior steps
+on labeled support, with $\rho=1$ and KL weight $\beta_{\rm ic}$ toward
+$L_a$. It installs the resulting hard mask but restores the pre-evaluation
+persistent logits. Thus retrieval and support-based optimization are
+complementary in the default path. A match failure takes a third path:
+ordinary zero-logit cold search on labeled support. With the current
+defaults, refinement uses ten steps and at most four labeled rows; fallback
+uses the ordinary 30-step search with the same four-row limit.
+
+Training-time use is a separate switch. With the default
+\texttt{IC\_TRAIN\_PRIOR=False}, detected changepoints retain the long
+zero-logit reset/refit of Eq.~\eqref{eq:cp}. If enabled, a matched
+changepoint instead initializes from $L_a$ and uses $J_{\rm ic}$ steps with
+$\rho=1$ and $\beta_{\rm ic}$; a miss still cold-starts. Another independent
+switch, \texttt{IC\_NOVELTY\_TRIGGER}, can add a changepoint when the live
+segment projector reconstructs current inputs with error at least $\tau$;
+it is off by default. The ordinary loss detector remains active either way.
+
+Saved logits may become stale when shared model weights change. The optional,
+default-enabled replay repair operates after each training block: it groups stored
+labeled replay examples by archived input projector, cold-searches a mask on
+fit rows, and accepts it only if a separate validation set improves by more
+than the specified margin over the old mask. Acceptance \emph{appends} a new
+entry with the old projector and logits $+a$ on selected atoms and $-a$
+elsewhere; it does not edit earlier entries or add trainable router weights.
+Disabling \texttt{IC\_REPLAY\_REPAIR} leaves archived masks fixed, which can
+allow their predictions to degrade as shared FTN weights evolve. Repair uses
+labeled training replay even though domain matching itself uses unlabeled
+inputs; it therefore requires sufficient stored rows for its separate fit
+and validation sets.
+
+\begin{longtable}{@{}p{.40\linewidth}p{.16\linewidth}p{.35\linewidth}@{}}
+\caption{Defaults in the composable \texttt{InputConditioned} configuration.
+The inherited Bayes/BayesLoRA values remain as above. In configuration keys,
+\texttt{AE} abbreviates autoencoder; here its fitted model is a linear projector.}\\
+\toprule
+Configuration key & Default & Role \\
+\midrule
+\endfirsthead
+\toprule Configuration key & Default & Role \\ \midrule
+\endhead
+\texttt{IC\_SUPPORT\_SIZE} & $4$ & Unlabeled rows used in matching \\
+\texttt{IC\_AE\_RANK} & $2$ & Projector rank $r$ \\
+\texttt{IC\_RECON\_THRESHOLD} & $0.10$ & Route acceptance threshold $\tau$ \\
+\texttt{IC\_MATCH\_TOLERANCE} & $10^{-3}$ & Latest-near-best tolerance $\delta$ \\
+\texttt{IC\_SAME\_DOMAIN\_DISTANCE} & $0.05$ & Projector-distance threshold for repair deduplication \\
+\texttt{IC\_NOVELTY\_TRIGGER} & \texttt{False} & Add live-domain novelty to detector \\
+\texttt{IC\_TRAIN\_PRIOR} & \texttt{False} & Use retrieved logits at training changes \\
+\texttt{IC\_EVAL\_STRATEGY} & \texttt{refine} & Direct mask or labeled refinement \\
+\texttt{IC\_PRIOR\_STEPS} & $10$ & $J_{\rm ic}$ for prior refinement \\
+\texttt{IC\_PRIOR\_KL} & $1.0$ & $\beta_{\rm ic}$ toward retrieved logits \\
+\texttt{EVAL\_RECONFIG\_SAMPLE\_SIZE} & $4$ & Labeled rows for refinement or fallback \\
+\texttt{IC\_REPLAY\_REPAIR} & \texttt{True} & Enable retrospective mask repair \\
+\texttt{IC\_REPAIR\_EVERY\_BLOCKS} & $1$ & Repair interval \\
+\texttt{IC\_REPAIR\_FIT\_ROWS}, \texttt{IC\_REPAIR\_VALIDATION\_ROWS} & $800$, $800$ & Repair fit and held-out rows \\
+\texttt{IC\_REPAIR\_STEPS}, \texttt{IC\_REPAIR\_LR} & $100$, $0.3$ & Cold-search steps and Adam rate \\
+\texttt{IC\_REPAIR\_TEMPERATURE}, \texttt{IC\_REPAIR\_RESTARTS} & $1.0$, $3$ & Cold-search sampling and restarts \\
+\texttt{IC\_REPAIR\_TAKE\_BEST} & \texttt{True} & Retain best search candidate \\
+\texttt{IC\_REPAIR\_MIN\_IMPROVEMENT} & $0.0$ & Required validation-loss gain \\
+\texttt{IC\_REPAIR\_LOGIT\_MAGNITUDE} & $4.0$ & Accepted entry's logit magnitude $a$ \\
+\bottomrule
+\end{longtable}
+
+\appendix
+\section{FTN as a state-space router}
+An architecture-independent FTN can be written as a state-space router over
+a bank of functional units. Let $s_t$ be routing state,
+$\theta_t=(\theta_{t1},\ldots,\theta_{tH})$ the current trainable unit
+parameters, and $B_t$ the available support. A schematic cycle is
+\begin{align}
+ s_t&=\mathcal{R}(s_{t-1},\theta_t,B_t),
+ &m_t&=\TopK_K\bigl(\mathcal{S}(s_t)\bigr),\nonumber\\
+ \hat y_t&=f_{\theta_t}(x_t;m_t)
+ =\mathcal{C}\!\left(x_t;
+      m_{t1}\mathcal{U}_1(\theta_{t1}),\ldots,
+      m_{tH}\mathcal{U}_H(\theta_{tH}),\theta_0\right),\nonumber\\
+ \theta_{t+1}&=\theta_t-\eta\nabla_{\theta_t}
+ \loss_{B_t}\bigl(f_{\theta_t}(\cdot;m_t)\bigr).
+ \label{eq:router}
+\end{align}
+$\theta_0$ denotes shared fixed structure. The last line is an idealized
+gradient step; the implementation uses Adam for weight training. These
+updates are coupled: routing chooses the trainable units exposed on this
+batch, and their changed parameters alter the fit of future routes.
+$\mathcal{U}_j$ is a functional unit and $\mathcal{C}$ combines the selected
+units. The route state need
+not be probabilistic: it could hold deterministic search scores, a mask,
+or a memory index. In the feed-forward FTN, $\mathcal{U}_j$ is a small MLP's
+scalar output and $\mathcal{C}$ is a linear readout. In FTN-LoRA,
+$\mathcal{U}_j$ is the collection of atom edits
+$\{A_{\ell j}B_{\ell j},b_{\ell j}\}_{\ell}$ and $\mathcal{C}$ is the
+composition of the edited layers with nonlinearities.
+
+The central dynamical property is conditional parameter isolation. For a
+hard route, an atom or independent MLP absent from $m_t$ contributes nothing
+to the forward calculation and receives no ordinary task-loss gradient:
+\begin{align}
+ m_{tj}=0&\quad\Longrightarrow\quad
+ \nabla_{\theta_j}\loss_{B_t}=0,\nonumber\\
+ \operatorname{supp}(m_t)\cap\operatorname{supp}(m_{t'})
+ &\quad\text{identifies parameters exposed to both updates.}
+ \label{eq:isolation}
+\end{align}
+This statement concerns the ordinary task-loss gradient; optimizer momentum
+can still move an inactive parameter after it has received earlier gradients.
+It assumes each $\theta_j$ belongs only to unit $j$; FTN's
+shared readout is best viewed by its per-unit columns, while the LoRA base
+is fixed. The mask intersection identifies where interference or transfer
+\emph{can} occur, not their magnitude or sign: those depend on the data,
+loss, and parameter gradients. The router can change overlap over time by
+reusing, dropping, or recruiting units.
+Thus isolation is \emph{dynamical}, rather than a once-for-all partition of
+parameters among tasks.
+
+\subsection*{A Bayesian representation}
+The same router admits a conditional latent-variable description. Let
+$\mathcal{M}_K=\{m\in\{0,1\}^H:\sum_jm_j=K\}$ and let $Q_L$ denote the
+distribution on $\mathcal{M}_K$ induced by Gumbel top-$K$ with logits $L$
+at a fixed sampling temperature.
+The previous routing state defines a predictive prior, and a single mask
+explains the labeled support batch:
+\begin{align}
+ \pi_t(m)&=Q_{\rho L_{t-1}}(m),\qquad m\in\mathcal{M}_K,\nonumber\\
+ p_{\theta_t}(Y_t\mid X_t,m)
+   &=\prod_{(x_i,y_i)\in B_t}p_{\theta_t}(y_i\mid x_i,m),\nonumber\\
+ p(m\mid B_t,L_{t-1},\theta_t)
+   &=\frac{p_{\theta_t}(Y_t\mid X_t,m)\,\pi_t(m)}
+     {\sum_{m'\in\mathcal{M}_K}
+       p_{\theta_t}(Y_t\mid X_t,m')\,\pi_t(m')}.
+ \label{eq:bayes-router}
+\end{align}
+For classification, $p_{\theta_t}(y\mid x,m)$ can be the categorical
+distribution obtained by applying softmax to the masked network's outputs;
+for squared-error regression, a Gaussian with masked-network mean and fixed
+variance gives a corresponding likelihood. Only the route is treated as
+latent here; the functional-unit weights $\theta_t$ are point estimates.
+
+An ideal variational router would approximate the posterior in
+Eq.~\eqref{eq:bayes-router} by a tractable $Q_L$:
+\begin{equation}
+ L_t^*\in\arg\min_L\left\{
+ \mathbb{E}_{m\sim Q_L}\!\left[-\log p_{\theta_t}(Y_t\mid X_t,m)\right]
+ +\KL\!\left(Q_L\,\Vert\,\pi_t\right)\right\},
+ \qquad m_t\sim Q_{L_t^*}.
+ \label{eq:variational-router}
+\end{equation}
+This equation specifies an exact-$K$ Bayesian target, not the implemented
+optimizer. The implementation carries $L_t$ forward but replaces the
+more involved exact-mask KL with the factorized-Bernoulli
+surrogate of Eq.~\eqref{eq:objective}, estimates task fit with hard-mask
+samples and straight-through gradients, and takes only a few steps. Its
+mean loss and separately weighted mean KL should therefore be read as a
+practical approximate update, not a calibrated posterior computation.
+At a changepoint, setting $\rho=0$ resets $\pi_t$ to a uniform exact-$K$
+prior; the implemented refit also sets the KL weight to zero, making that
+search an unregularized fit. An input-conditioned prior can instead set prior logits from a
+retrieved $h(X_s)$ before optional support-based refinement. In all cases,
+the probabilistic route changes which parameters are exposed to learning;
+the isolation and overlap property in Eq.~\eqref{eq:isolation} does not
+depend on using a Bayesian router.
+
+\end{document}

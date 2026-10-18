@@ -60,6 +60,7 @@ task's mask carries over unchanged.
 import math
 
 import torch
+from reconfig_optimizer import make_reconfig_optimizer, validate_reconfig_optimizer
 import torch.nn as nn
 import torch.nn.functional as F
 
@@ -202,6 +203,7 @@ class HMLFTN(nn.Module):
         k: int = 128,
         reconfig_steps: int = 30,
         reconfig_lr: float = 0.3,
+        reconfig_optimizer: str = "Adam",
         reconfig_sample_size: int = 2048,
         reconfig_algorithm: str = "annealste",   # "annealste" or "fast"
         reconfig_init_sd: float = 1e-5,
@@ -236,6 +238,7 @@ class HMLFTN(nn.Module):
         self.k = k
         self.reconfig_steps = reconfig_steps
         self.reconfig_lr = reconfig_lr
+        self.reconfig_optimizer = validate_reconfig_optimizer(reconfig_optimizer)
         self.reconfig_sample_size = reconfig_sample_size
         self.reconfig_algorithm = reconfig_algorithm
         self.reconfig_init_sd = reconfig_init_sd
@@ -363,7 +366,7 @@ class HMLFTN(nn.Module):
             .requires_grad_(True)
             for _ in range(self.n_stack)
         ]
-        opt = torch.optim.Adam(logits, lr=self.reconfig_lr)
+        opt = make_reconfig_optimizer(logits, lr=self.reconfig_lr, name=self.reconfig_optimizer)
 
         # Match-stored option (annealste only): after match_stored_after steps,
         # snap the running best per-level masks to the closest previous-task mask

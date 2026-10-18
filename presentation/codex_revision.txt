@@ -1,0 +1,179 @@
+10/12/2026
+
+Brain-Inspired Autonomous Exploration and Learning for Self-Improving AGI
+An intelligence that develops through its own experience
+
+# Summary
+    I propose to build an artificial intelligence that develops through its own life: exploring an unfamiliar world, discovering what it can do, and retaining the knowledge and skills that allow it to discover more.
+    A discovery becomes an ability. That ability opens the way to another discovery. As its repertoire grows, the agent can attempt things that were beyond its reach at the beginning.
+
+    I believe that this process of cumulative development is fundamental to naturalistic Artificial General Intelligence.
+    Mastery of an environment requires deeply exploring its scope and mechanics and translating that experience into knowledge and skills that remain available as the world changes.
+    The central challenge is to make this process increasingly autonomous, so that people do not have to choose every lesson, define every task, or continually reconstruct what the agent has forgotten.
+
+    Here, I propose a research program built around two techniques I developed at the Astera Institute specifically to target this vision: meta-learning-based exploration (M2E) and cortex-inspired continual learning through functional task networks (FTN).
+    Both components are implemented. Preliminary agents are already exploring a rich, first-person world and learning from their experience.
+    The next step is to establish whether their discoveries can become a growing repertoire of retained, reusable abilities that make subsequent exploration more intelligent.
+    [link: Watch the current agents explore]
+
+# The missing developmental loop
+    Artificial neural networks provide powerful learning from data, but new training can interfere with previously learned solutions.
+    Reinforcement learning provides a way to learn behavior from its consequences, but the objectives and training conditions are often supplied by people.
+    An agent that is left to develop through a long lifetime must take on more of this work itself: deciding what experience to seek, what to learn from it, and how to retain and use what it learns.
+
+    Current AI demonstrates extraordinary capabilities, including language, reasoning, and increasingly sophisticated tool use.
+    Those capabilities do not by themselves establish this developmental loop.
+    Much of an agent's competence can still depend on training experiences, objectives, and updates organized outside its own life.
+    I want to investigate a complementary foundation for intelligence: an agent that actively acquires a growing part of its competence through first-person experience.
+
+    Consider a simple progression. An agent discovers water, learns to reach it reliably, and then uses that ability to support longer journeys.
+    Those journeys expose it to new resources and obstacles. It learns further behaviors and combines them into more capable ways of acting.
+    Eventually, what was once a difficult sequence of individual actions can become a familiar behavior that the agent uses while reasoning about something larger.
+
+    This is the loop I want to build:
+    Explore -> discover -> learn and retain -> plan with acquired abilities -> explore further.
+
+    A successful agent must grow in both width and depth: encountering a wider range of situations while developing increasingly abstract ways to understand and act upon them.
+    The long-term ambition is to extend that progression toward experimentation, hypothesis testing, and scientific reasoning.
+
+# My contributions so far
+    I designed M2E and FTN to address two closely connected requirements of this process: learning how to explore, and preserving different learned solutions without requiring someone to manage each one by hand.
+    Existing exploration and continual learning research provides valuable tools, but the combination I am targeting places particular demands on autonomy, retention, and adaptation over a changing lifetime.
+    The relevant comparison is how well each approach meets those demands in concrete experiments.
+    [link: Related approaches and the problems this project targets]
+
+    M2E introduces a concise principle with potentially far-reaching implications:
+    Learn behavior that maximizes novelty by remembering past behavior and responding to feedback about what is becoming familiar.
+
+    The agent maintains a memory-based estimate of familiarity and receives that feedback as part of its ongoing experience.
+    It can learn how to explore while adapting immediately to changes in what it has already seen.
+    It also learns from stored experience how to reach promising frontiers, rather than depending entirely on what happens to be interesting in the next action.
+    This gives exploration a starting point before the agent has learned an accurate predictive model of its world.
+    As such a model improves, its uncertainty can provide another source of information about what would be useful to investigate.
+    [link: How M2E uses memory and novelty feedback]
+
+    Novelty alone is not the final objective. An agent can encounter unfamiliar images without acquiring useful abilities, and unpredictable events can remain surprising without teaching it much.
+    The important test is whether exploration leads to knowledge and behavior that the agent can deliberately use, retain, and build upon.
+
+    FTN addresses the retention and recovery of learned solutions.
+    Its design draws on cortical connectivity, cellular complexity, population activity, and evidence for relatively stable patterns of neural activity.
+    How does the brain preserve so much across a lifetime while continuing to learn?
+    What if each artificial cell were a complex, trainable unit, and populations of such cells could rapidly reorganize to meet the needs of a situation?
+
+    FTN represents different learned functions through different selections of shared neural resources.
+    These selections form overlapping subnetworks: different solutions can retain distinct resources while also sharing components that support transfer.
+    A network can therefore represent solutions that would conflict if they had to occupy exactly the same resources.
+    Examples from the current situation provide evidence for recovering an appropriate subnetwork, without necessarily requiring a supplied task label.
+    A compact optimization procedure adapts these selections to recover learned functions and explore new combinations.
+    [link: FTN demonstrations of retention, recovery, and transfer]
+
+    Both methods are intended to reduce the manual organization of learning.
+    Their scope and limitations must be established experimentally, including where they fail, where they require additional structure, and how their benefits scale.
+    They also leave room for different underlying neural architectures, including models for perception, prediction, and behavior.
+
+# From exploration to cumulative capability
+    I am currently testing agents in Globo, a Minecraft-like world with terrain, animals, resources, hazards, and opportunities for interaction.
+    Each agent learns from a sequential stream of its own experience, with independent runs used to compare methods and world conditions.
+    The preliminary experiments compare memory-driven exploration with approaches that use a learned world model to pursue uncertain outcomes.
+    They also investigate using FTN within the world model to support continual learning.
+    Videos, spatial discovery curves, achievement records, and model reconstructions make the behavior and learning process available for inspection.
+    [link: Phase 0 preliminary experiments, results, and limitations]
+
+    These experiments establish a working platform, but they do not yet demonstrate the full developmental loop.
+    Covering more ground is different from learning to accomplish something reliably.
+    Predicting an observation is different from knowing how to produce a desired outcome.
+    The next stage will make those distinctions central to the design and evaluation.
+
+    I will use FTN to investigate the retention of useful behaviors discovered through exploration.
+    A trajectory that reaches a promising situation can become the starting point for learning a reusable behavior: a way to reach that situation from an appropriate context.
+    The agent must then learn when that behavior is applicable, how to recover it, and whether it is worth executing now.
+
+    This separates two things that should change at different rates. The ability to reach a familiar place should remain available, even after that place ceases to be novel.
+    Its current value for exploration should change as the agent discovers what lies there and what can be reached beyond it.
+
+    A higher-level exploration policy can select among these retained behaviors, just as the current policy selects among elementary actions.
+    If this works, sequences of behaviors can themselves become candidates for reusable abilities at a higher level.
+    This is the proposed route toward an increasingly hierarchical system: preserving what has been learned while planning over larger and more meaningful units of behavior.
+    [link: The next experiment—retained behaviors and hierarchical exploration]
+
+# Research plan and funding
+    I am seeking [funding amount] over [duration] to develop and test this autonomous learning loop.
+    The support will fund [research personnel], [compute and infrastructure], and [other project costs].
+    The intended funding arrangement is [research support or investment structure].
+    [link: Budget, timeline, team, and institutional arrangements]
+
+    The program will proceed through concrete demonstrations:
+
+    1. Sustained exploration.
+       Establish repeatable comparisons across several world conditions, measuring new discoveries and diagnosing when exploration stagnates.
+
+    2. Acquired and retained abilities.
+       Show that the agent can deliberately reproduce useful outcomes and retain those abilities while learning new ones.
+       Compare FTN with alternatives under comparable training and resource budgets.
+
+    3. Cumulative advantage.
+       Test whether previously acquired abilities make later discoveries faster or enable outcomes that the same explorer could not otherwise reach within a comparable experience budget.
+
+    4. Composition and transfer.
+       Test whether the agent can combine retained behaviors and adapt them to unfamiliar conditions.
+       Use these results to determine when broader environments and, eventually, physical robots are justified.
+
+    These milestones make the central hypothesis testable.
+    If the agent cannot reliably recover its learned behaviors, or if retaining them does not improve subsequent learning, the proposed loop has not yet been demonstrated.
+    Those outcomes will guide changes to the architecture rather than being obscured by a single overall score.
+
+    The near-term deliverable is a convincing demonstration of cumulative capability, supported by reproducible experiments and inspectable behavior.
+    The ambition beyond it is AGI that increasingly organizes its own development.
+
+# Contributions to Technology
+    A successful demonstration would open a different path toward intelligent autonomy: systems that acquire useful competence through experience and carry it forward into unfamiliar situations.
+    Even before the full AGI ambition is resolved, better exploration, retained adaptive skills, and reusable behavior could have practical value.
+
+    Robotics is a particularly important long-term direction.
+    An agent that can learn unfamiliar physical tasks and retain their components could reduce the need for people to separately curate demonstrations and training procedures for every new skill.
+    Transfer from simulation to physical experience is itself a major research challenge, and will be treated as an experimental milestone.
+
+    We can also investigate a different role for language models in broader agentic systems: connecting language and prior knowledge to an agent's own perception, actions, and developing understanding of the world.
+    This project does not require abandoning existing advances in world modeling, planning, or reasoning.
+    It asks how to place them within a system whose capabilities continue to develop through experience.
+
+    If this process can scale, its implications extend far beyond games and motor control.
+    An agent that learns to perform increasingly complex experiments could eventually pursue scientific questions, invent technologies, and propose explanations grounded in its own investigations.
+    I see science and engineering as possible extensions of the same progression from curiosity to acquired ability to deliberate experimentation.
+    Establishing the early stages of that progression is the purpose of this program.
+
+# Contributions to Neuroscience
+    FTN also offers a computational hypothesis about how distributed neural resources might preserve different learned functions while remaining available for new learning.
+    Its mechanisms are motivated by cortical organization, including the possibility that complex cellular units and overlapping populations support both specialization and transfer.
+
+    This connection should produce more than a biological analogy.
+    I will examine what the model predicts about interference between learned behaviors, their recovery in different contexts, and the overlap between the populations that support them.
+    Those predictions can help define experiments that distinguish the account from alternatives.
+    [link: Biological motivation and prospective neuroscience tests]
+
+    FTN's activity visualizations make shared and distinct patterns of resource use visible.
+    In the current display, a spatial ordering algorithm groups co-active units for inspection; the resulting clusters are a visualization of learned relationships, not by themselves evidence that cortical columns have emerged.
+
+    M2E similarly provides a computational approach to curiosity: learning how to seek information while adapting to what has already become familiar.
+    Natural exploration can become increasingly organized around environmental regularities, useful interventions, and questions worth testing.
+    Understanding how that progression can arise in an artificial agent may contribute to our theories of learning and exploration in the brain.
+
+# Safety and experimental control
+    Any successful AGI program must anticipate the consequences of increasingly autonomous learning and action.
+    Grounding an agent in first-person experience does not by itself make it trustworthy, and a specified intrinsic drive does not guarantee that its behavior will serve human goals.
+    The relationship between what we reward, what the agent learns, and what it actually does must remain an explicit object of study.
+
+    Current experiments take place in simulated worlds with a limited set of available actions.
+    Runs are monitored, their behavior and progress are logged, and checkpoints allow learning to be paused and resumed.
+    I will keep expansion into external tools, broader environments, or physical systems subject to separate capability and safety evaluations.
+    [link: Experimental boundaries, monitoring, and safety plan]
+
+    As the agent acquires new capabilities, the program must develop more specific tests for unwanted behavior and more specific conditions for intervention.
+    Resource limits and human oversight are useful controls, but neither is a complete safety argument.
+    Further stages of the research will require correspondingly stronger evidence and safeguards.
+
+# The larger objective
+    I want to investigate whether exploration and continual learning can become the foundation of an intelligence that develops through its own life.
+    The decisive step is an agent whose discoveries become retained abilities, and whose abilities make further discoveries possible.
+    If that loop can sustain itself and deepen, it offers a route from elementary action toward increasingly capable abstraction, planning, and inquiry.
+    This proposal is an attempt to make that possibility concrete, observable, and testable.

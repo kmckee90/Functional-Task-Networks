@@ -83,6 +83,7 @@ the residual topologies alone.
 import math
 
 import torch
+from reconfig_optimizer import make_reconfig_optimizer, validate_reconfig_optimizer
 import torch.nn as nn
 import torch.nn.functional as F
 
@@ -99,7 +100,10 @@ from ftn import (
 )
 
 
-class StackFTN(nn.Module):
+from overlap_regularizer import OverlapRegularizer
+
+
+class StackFTN(OverlapRegularizer, nn.Module):
     """Chained (or weight-tied recurrent) ParallelMLP blocks with a per-layer
     kWTA mask.
 
@@ -194,6 +198,7 @@ class StackFTN(nn.Module):
         k: int = 128,
         reconfig_steps: int = 30,
         reconfig_lr: float = 0.3,
+        reconfig_optimizer: str = "Adam",
         reconfig_sample_size: int = 2048,
         reconfig_algorithm: str = "annealste",   # "annealste" or "fast"
         reconfig_init_sd: float = 1e-5,
@@ -208,8 +213,15 @@ class StackFTN(nn.Module):
         mask_lateral_polyak: float = 0.0,
         mask_lateral_noise_sd: float = 0.0,
         torus: bool = False,
+        overlap_mode: str = "seen_logits",
+        overlap_lambda: float = 0.0,
+        overlap_threshold: float = 0.5,
+        overlap_temperature: float = 0.2,
+        reconfig_entropy_coef: float = 0.0,
     ):
         super().__init__()
+        self.configure_overlap(overlap_mode, overlap_lambda, overlap_threshold, overlap_temperature)
+        self.configure_entropy(reconfig_entropy_coef)
         assert hidden_size == square_dim**2, (
             f"hidden_size (units per layer) {hidden_size} must equal square_dim**2 "
             f"{square_dim**2} so each layer's mask shares the FTN grid / viz."
@@ -266,6 +278,7 @@ class StackFTN(nn.Module):
         self.k = k
         self.reconfig_steps = reconfig_steps
         self.reconfig_lr = reconfig_lr
+        self.reconfig_optimizer = validate_reconfig_optimizer(reconfig_optimizer)
         self.reconfig_sample_size = reconfig_sample_size
         self.reconfig_algorithm = reconfig_algorithm
         self.reconfig_init_sd = reconfig_init_sd
@@ -519,6 +532,7 @@ class StackFTN(nn.Module):
         n_steps != n_stack.
         """
         n_layers = self.n_stack if n_steps is None else int(n_steps)
+        reference = self._overlap_reference(n_layers * self.layer_size)
         n = min(self.reconfig_sample_size, x.shape[0])
         x, y = x[:n], y[:n]
 
@@ -528,7 +542,7 @@ class StackFTN(nn.Module):
             .requires_grad_(True)
             for _ in range(n_layers)
         ]
-        opt = torch.optim.Adam(logits, lr=self.reconfig_lr)
+        opt = make_reconfig_optimizer(logits, lr=self.reconfig_lr, name=self.reconfig_optimizer)
 
         # Match-stored option (annealste only): after match_stored_after steps,
         # snap the running best per-layer masks to the closest previous-task mask
@@ -545,21 +559,22 @@ class StackFTN(nn.Module):
 
         def _cand_loss(cand: torch.Tensor) -> float:
             with torch.no_grad():
-                return self.loss(
+                return self._with_overlap(self._reconfig_task_loss(
                     self._forward_stack(x, self._split(cand), detach=True), y
-                ).item()
+                ), torch.cat(logits), reference).item()
 
         best, best_loss = None, math.inf
         for i in range(self.reconfig_steps):
             masks = [self._step_mask(lg, i, anneal) for lg in logits]
-            loss = self.loss(self._forward_stack(x, masks, detach=True), y)
+            loss = self._with_overlap(self._reconfig_task_loss(self._forward_stack(x, masks, detach=True), y), torch.cat(logits), reference)
+            scored = [m.detach().clone() for m in masks] if self._regularized_search(reference) and anneal else None
             opt.zero_grad()
             loss.backward()
             opt.step()
             with torch.no_grad():
                 if loss.item() < best_loss:
                     best_loss = loss.item()
-                    best = [kwta(lg.detach(), self.k) for lg in logits]
+                    best = scored if scored is not None else [kwta(lg.detach(), self.k) for lg in logits]
                 if do_match and not swapped and (i + 1) >= self.match_stored_after:
                     cur = (
                         best if best is not None
@@ -640,6 +655,7 @@ class StackFTN(nn.Module):
         they are trained in the normal forward/backward pass. The match-stored
         recall, if enabled, snaps m_0 onto a stored first mask (see _recall_first).
         """
+        reference = self._overlap_reference()
         n = min(self.reconfig_sample_size, x.shape[0])
         x, y = x[:n], y[:n]
 
@@ -648,7 +664,7 @@ class StackFTN(nn.Module):
             .detach()
             .requires_grad_(True)
         )
-        opt = torch.optim.Adam([logits], lr=self.reconfig_lr)
+        opt = make_reconfig_optimizer([logits], lr=self.reconfig_lr, name=self.reconfig_optimizer)
 
         do_match = (
             self.match_stored
@@ -661,20 +677,26 @@ class StackFTN(nn.Module):
         def _cand_loss(m0: torch.Tensor) -> float:
             with torch.no_grad():
                 masks = self._propagate_mask(m0, detach=True)
-                return self.loss(self._forward_stack(x, masks, detach=True), y).item()
+                scores = torch.cat([logits] + [F.linear(previous, self.mask_transition.weight.detach(), self.mask_transition.bias.detach()) for previous in masks[:-1]])
+                return self._with_overlap(self._reconfig_task_loss(self._forward_stack(x, masks, detach=True), y), scores, reference).item()
 
         best, best_loss = None, math.inf
         for i in range(self.reconfig_steps):
             m0 = self._step_mask(logits, i, anneal)
             masks = self._propagate_mask(m0, detach=True)
-            loss = self.loss(self._forward_stack(x, masks, detach=True), y)
+            scores = torch.cat([logits] + [
+                F.linear(previous, self.mask_transition.weight.detach(),
+                         self.mask_transition.bias.detach())
+                for previous in masks[:-1]]) if reference is not None else torch.cat(masks)
+            loss = self._with_overlap(self._reconfig_task_loss(self._forward_stack(x, masks, detach=True), y), scores, reference)
+            scored = m0.detach().clone() if self._regularized_search(reference) and anneal else None
             opt.zero_grad()
             loss.backward()
             opt.step()
             with torch.no_grad():
                 if loss.item() < best_loss:
                     best_loss = loss.item()
-                    best = kwta(logits.detach(), self.k)
+                    best = scored if scored is not None else kwta(logits.detach(), self.k)
                 if do_match and not swapped and (i + 1) >= self.match_stored_after:
                     ref = best if best is not None else kwta(logits.detach(), self.k)
                     best = self._recall_first(ref, stored, _cand_loss)
@@ -695,6 +717,8 @@ class StackFTN(nn.Module):
         Each stage optimizes one layer's logits with all earlier masks frozen,
         scoring against the prefix output sum_{j<=l} readout_j(z_j * m_j).
         """
+        reference = self._overlap_reference()
+        entry_mask = self.m.detach().clone()
         n = min(self.reconfig_sample_size, x.shape[0])
         x, y = x[:n], y[:n]
 
@@ -705,19 +729,26 @@ class StackFTN(nn.Module):
                 .detach()
                 .requires_grad_(True)
             )
-            opt = torch.optim.Adam([logits], lr=self.reconfig_lr)
+            opt = make_reconfig_optimizer([logits], lr=self.reconfig_lr, name=self.reconfig_optimizer)
 
             best, best_loss = None, math.inf
             for i in range(self.reconfig_steps):
                 mask_l = self._step_mask(logits, i, anneal)
-                loss = self.loss(self._forward_prefix(x, chosen, mask_l), y)
+                # Score overlap of the complete candidate: chosen prefix,
+                # current layer, and still-unchanged reference suffix.
+                loss = self._reconfig_task_loss(self._forward_prefix(x, chosen, mask_l), y)
+                if reference is not None:
+                    prefix = torch.zeros_like(entry_mask[:len(chosen)*self.layer_size])
+                    suffix = torch.zeros_like(entry_mask[(len(chosen)+1)*self.layer_size:])
+                    loss = self._with_overlap(loss, torch.cat([prefix, logits, suffix]), reference)
+                scored = mask_l.detach().clone() if self._regularized_search(reference) and anneal else None
                 opt.zero_grad()
                 loss.backward()
                 opt.step()
                 with torch.no_grad():
                     if loss.item() < best_loss:
                         best_loss = loss.item()
-                        best = kwta(logits.detach(), self.k)
+                        best = scored if scored is not None else kwta(logits.detach(), self.k)
 
             with torch.no_grad():
                 if best is None:
@@ -816,4 +847,3 @@ class StackFTN(nn.Module):
         else:
             masks = self._split(self.m)[:k]
         return self._forward_stack(x, masks, detach=False)
-

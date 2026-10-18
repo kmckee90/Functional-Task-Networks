@@ -1,0 +1,6 @@
+{
+  "historical_comparison": "No training log or end-of-topic evaluation reliably associated with checkpoints_bayes_qa_ic was found. July logs and October 8 route-repair validation scores concern older checkpoints; do not interpret differences against those as forgetting.",
+  "interpretation": "Measures retained cached-Q&A fit versus the unadapted base, not a historical forgetting delta or held-out/free-generation accuracy.",
+  "settings": "Checkpoint state restores H2304 K256 rank1, final quarter of layers, lateral_steps2/kernel9/polyak.93/noise0/torusFalse. Remaining settings from current serving config: Qwen3.6-27B, alpha64, direct routing, semantic_weight2, margin.5, semantic_floor.3/gap.25, anchors2; exact resolved config in protocol.json.",
+  "checkpoint_modified": false
+}

@@ -1,0 +1,27 @@
+Root /base/ seen-atom logit regularizer
+
+    loss = task_loss + output_entropy_term + lambda * mean_i(logit_i * seen_i)
+
+seen_i is1 if mask position i was active in ANY archived training mask, else0.
+Each position counts once. The mean divides by ALL mask positions, not the
+number of seen atoms. Raw mask logits are used without sigmoid, clipping or
+conversion to hard masks. Positive lambda pushes seen logits downward; the
+term may become negative. Existing model-specific logit constraints remain.
+
+RECONFIG_OVERLAP_LAMBDA is the coefficient; Default0 disables it.
+RECONFIG_OVERLAP_MODE is now "seen_logits". Legacy "seen_mass", "bump", and
+"gated" selectors are accepted but all use the new mean-logit formula.
+Threshold and temperature fields are unused. User coefficients are preserved.
+
+Candidate scoring uses the current search logits, including when comparing
+stored hard masks (which have no archived logits). In staged searches, frozen
+mask-only positions without logits contribute zero; active positions use raw
+logits. Recurrent mask transitions use their detached-weight raw scores.
+
+Both replay and no-replay retain distinct training masks after weight updates.
+Replay-buffer eviction does not remove archive entries. Evaluation/search never
+adds masks; root evaluation uses the regularizer too. The archive persists in
+state_dict and survives FTN expansion. Old checkpoints without an archive start
+empty. Custom loops must call record_training_mask() after weight updates.
+
+Only /base/ changed; projects/bayesian_adv remains unchanged.

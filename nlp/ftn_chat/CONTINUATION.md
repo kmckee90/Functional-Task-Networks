@@ -1,5 +1,75 @@
 # FTN-Chat: live prompt-routed expert-knowledge chat demo — continuation doc
 
+## Current handoff (2026-09-23)
+
+**Read this section and `README.md` first. The older design notes below are
+historical and describe earlier models, training, hardware, and commands.**
+
+- Working directory: `nlp/ftn_chat`. Existing `ftn-chat` actl pod in namespace
+  `obelisk` has eight H200 GPUs. Edit source here; run training and GPU checks
+  on the pod. Do not start another pod or run this model locally.
+- Current backbone is frozen Qwen3-8B. A shared 1024-atom rank-1 LoRA bank
+  targets the last quarter of decoder layers; the exact-k mask activates 128
+  atoms. `bayes_configurer.py` implements persistent logits, short per-batch
+  posterior updates, and a longer reset/refit after reactive prompt-NLL change
+  detection. `train.py` uses context distillation and `mask_replay.py` uses
+  sparse, randomly stored examples with their training masks. The app exposes
+  mask search and detector controls. See `config.py` and `README.md` for current
+  settings and commands.
+- The user's old base FTN checkpoint under
+  `/home/dev/ftn_chat_state/checkpoints` must be preserved. For BayesLoRA
+  training, use a separate `FTN_CKPT_DIR`, such as
+  `~/ftn_chat_state/checkpoints_bayes`. This handoff's benchmarks used fresh
+  in-memory models and did not read or write training checkpoints.
+- Most recent work: benchmarked the *actual stateful training step* with
+  batch size 16, posterior search, teacher, student, optimizer, and replay
+  bookkeeping. Steady steps on 1/2/4/8 H200s took approximately
+  2.26/2.35/2.39/2.37 s; first changepoint steps approximately
+  6.5/7.2/7.5/7.6 s. The model-parallel splits added communication overhead.
+  `Config.model_parallel=False` now places the model and bank on one H200 by
+  default; setting it `True` restores balanced sharding. The posterior,
+  detector, replay, optimizer, and effective batch size were not changed.
+- One-GPU peak memory was about 50 GB for sampled batches and 103 GB for a
+  synthetic batch near the configured token limits. Disabling gradient
+  checkpointing caused OOM; leave it enabled. SDPA attention and sparse
+  fixed-mask bank compute did not improve the full step in short checks, so
+  eager attention and the original dense bank path remain. The sparse
+  experiment was removed. `bench_train_devices.py` reproduces the placement
+  benchmark without touching checkpoints.
+- Follow-up 40-step comparison on `base_ftn`, including replay: the last five
+  steps averaged 2.238 s on one H200 versus 2.321 s across all eight. Both
+  runs stored two replay entries, and the initial changepoint step took 6.524
+  versus 7.528 s. The one-GPU run peaked at 54.94 GB. The default remains
+  one-GPU model placement; eight-GPU sharding is available for larger models.
+- End-to-end smoke on the pod: `train.py --fresh --tasks base_ftn explorer
+  --epochs 1 --steps 2` saved a separate Bayes checkpoint under
+  `/tmp/ftn_chat_bayes_benchmark_20260923`; `app.py` loaded its bank, refs,
+  and posterior and served HTTP 200 on port 7860. The temporary GUI process
+  was stopped. This is a plumbing check, not a quality evaluation.
+- Current pod Q&A cache has `base_ftn.json` and `explorer.json`, but no
+  `rl_mt10.json`. To train all registered tasks, first run
+  `uv run python qa_synth.py rl_mt10` on the pod. Alternatively, train the two
+  ready tasks with `--tasks base_ftn explorer`. Use the separate
+  `FTN_CKPT_DIR=~/ftn_chat_state/checkpoints_bayes` for the actual run; do not
+  overwrite the user's old base checkpoint directory.
+- Storage audit (2026-09-23): moved existing synthesized Q&A from the excluded
+  workspace `data_cache/` to `/home/dev/ftn_chat_state/data_cache/qa/` on the
+  home PVC. `Config.data_cache` now defaults there and accepts
+  `FTN_DATA_CACHE_DIR`. Verified both existing Q&A caches load (440 and 679
+  triples). Checkpoints use `/home/dev/ftn_chat_state/...`; Hugging Face model
+  downloads use `/home/dev/.cache/huggingface/hub`. The generated actl sync
+  config explicitly excludes `.venv/`, `data_cache/`, `checkpoints*/`, and
+  `*.pt`; `.actlignore` also excludes logs. No training process was running
+  during the cache move.
+- Verified on the pod: Python compile check and app load/posterior update with
+  one-GPU placement. The remaining useful check is a full BayesLoRA training
+  run to measure sustained throughput, memory, and quality with the new
+  placement. Short benchmarks do not establish final training quality.
+- The working tree contains unrelated changes across the parent repository.
+  Do not reset or clean it wholesale. `git diff --check` at repo scope reports
+  existing trailing whitespace in `base/projects/bayesian_adv/config.py`,
+  unrelated to this project.
+
 **Status:** v2 REDESIGN (2026-07-19) — code complete, retraining required
 (`--fresh`; the old bank is shape-incompatible). Older sections below describe
 v1 and are historical.

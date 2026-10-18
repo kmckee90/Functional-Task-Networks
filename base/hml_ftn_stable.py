@@ -42,6 +42,7 @@ import math
 from typing import List, Optional
 
 import torch
+from reconfig_optimizer import make_reconfig_optimizer, validate_reconfig_optimizer
 import torch.nn as nn
 import torch.nn.functional as F
 
@@ -270,7 +271,10 @@ class HMLCell(nn.Module):
         return torch.tanh(h).to(linear_term.dtype)
 
 
-class HMLFTN(nn.Module):
+from overlap_regularizer import OverlapRegularizer
+
+
+class HMLFTN(OverlapRegularizer, nn.Module):
     """Recurrent multilinear FTN with one kWTA mask per recurrent level."""
 
     def __init__(
@@ -290,6 +294,7 @@ class HMLFTN(nn.Module):
         k: int = 128,
         reconfig_steps: int = 30,
         reconfig_lr: float = 0.3,
+        reconfig_optimizer: str = "Adam",
         reconfig_sample_size: int = 2048,
         reconfig_algorithm: str = "annealste",
         reconfig_init_sd: float = 1e-5,
@@ -310,6 +315,11 @@ class HMLFTN(nn.Module):
         linear_gain_bound: float = 2.0,
         linear_bias_bound: Optional[float] = 1.0,
         reconfig_temperature: float = 1.0,
+        overlap_mode: str = "seen_logits",
+        overlap_lambda: float = 0.0,
+        overlap_threshold: float = 0.5,
+        overlap_temperature: float = 0.2,
+        reconfig_entropy_coef: float = 0.0,
         reconfig_noise_floor: float = 0.05,
         reconfig_grad_clip: Optional[float] = 5.0,
         reconfig_logit_clip: Optional[float] = 8.0,
@@ -317,6 +327,8 @@ class HMLFTN(nn.Module):
         reconfig_eval_interval: int = 1,
     ):
         super().__init__()
+        self.configure_overlap(overlap_mode, overlap_lambda, overlap_threshold, overlap_temperature)
+        self.configure_entropy(reconfig_entropy_coef)
 
         if hidden_size != square_dim**2:
             raise ValueError(
@@ -354,6 +366,7 @@ class HMLFTN(nn.Module):
         self.k = int(k)
         self.reconfig_steps = int(reconfig_steps)
         self.reconfig_lr = float(reconfig_lr)
+        self.reconfig_optimizer = validate_reconfig_optimizer(reconfig_optimizer)
         self.reconfig_sample_size = int(reconfig_sample_size)
         self.reconfig_algorithm = reconfig_algorithm
         self.reconfig_init_sd = float(reconfig_init_sd)
@@ -533,6 +546,7 @@ class HMLFTN(nn.Module):
 
     @torch.enable_grad()
     def _search_simultaneous(self, x, y, anneal: bool) -> List[torch.Tensor]:
+        reference = self._overlap_reference()
         n = min(self.reconfig_sample_size, x.shape[0])
         x, y = x[:n], y[:n]
 
@@ -550,7 +564,7 @@ class HMLFTN(nn.Module):
             for _ in range(self.n_stack)
         ]
         self._sanitize_logits(logits)
-        opt = torch.optim.Adam(logits, lr=self.reconfig_lr)
+        opt = make_reconfig_optimizer(logits, lr=self.reconfig_lr, name=self.reconfig_optimizer)
 
         do_match = (
             anneal
@@ -568,7 +582,7 @@ class HMLFTN(nn.Module):
         def _cand_loss(cand: torch.Tensor) -> float:
             with torch.no_grad():
                 pred = self._forward_stack(x, self._split(cand), detach=True)
-                value = self.loss(pred, y)
+                value = self._with_overlap(self._reconfig_task_loss(pred, y), torch.cat(logits), reference)
                 return float(value.detach().float().item())
 
         # Track the actual deterministic hard-mask objective from the beginning.
@@ -579,7 +593,7 @@ class HMLFTN(nn.Module):
             opt.zero_grad(set_to_none=True)
             masks = [self._step_mask(lg, step, anneal) for lg in logits]
             pred = self._forward_stack(x, masks, detach=True)
-            loss = self.loss(pred, y)
+            loss = self._with_overlap(self._reconfig_task_loss(pred, y), torch.cat(logits), reference)
 
             if not torch.isfinite(loss.detach()):
                 # Do not let one pathological support pass poison Adam state.

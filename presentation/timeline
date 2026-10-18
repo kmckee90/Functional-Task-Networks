@@ -1,0 +1,108 @@
+Plan:
+
+I will develop Nascent, an agent with exploration and continual learning ability, and deploy it to naturalistic, open-world environments (Globo, Minecraft, real robots). The agents will run for long lifetimes and accumulate knowledge and innovations as a result of their own internal drive toward discovery. The central goal of this project is to perfect the feedback loop between exploration and learning that causes flexible representation and reasoning to naturally emerge. Nascent will be compatible with state-of-the-art foundation models, planning, and reasoning systems where applicable and necessary, but it will avoid becoming bottlenecked on the specific limitations of those existing techniques in favor of emergent, autonomous, and brain-like neural solutions.
+
+I aim to demonstrate emergent scientific behavior and reasoning in an autonomous, embodied agent by 2028.
+In 2027, I will focus on the development flywheel, pushing capabilities forward while building a team.
+By then, I will have established the autonomous foundations: an agent that trains and scales itself.
+Q1 will focus on accelerating the prototype by including complementary novelty rewards and interfacing foundation models.
+Q2 will focus on obtaining achievements on Globo, bridging success to other domains, and charting a path toward emergent science. 
+Q3 aims to further hasten its technological discoveries, including introducing multi-agent cooperation.
+Q4 will focus on demonstrating primitive reasoning behaviors like hypothesis testing and rule induction.
+
+In short, the agent's self-improvement loop is the foundational framework.
+Subsequent work just makes its job easier and faster, including improvements to its ability to represent, plan, and even communicate with other agents and humans.
+
+
+Previously:
+
+Summer 2024 - Released M2E paper with maze experiments showing it beats Go-Explore
+
+September 2025 - First positive findings on early FTN prototypes
+
+June 2026 - Presented complete FTN results with continual learning in:
+    - Classification
+    - Reinforcement learning
+    - Behavior cloning (robotics)
+    - Simple NLP challenges
+
+Oct 2026 - Present
+    - Scalable variational-bayes FTN formulation: Image Diffusion, LLMs
+    - M2E beats Plan2Explore on Globo
+    - FTN beats TTT on continual learning
+
+Dec 2026: Foundations
+    - First set of complete FTN-M2E prototypes on Globo demonstrating reliable improvement over M2E due to FTN.
+        - Simple policy-FTN architectures (current)
+        - Model-free planning via a latent environment graph and options
+        - Incorporating DreamerV3 model's novelty signal
+    - Establish consistent Globo benchmarks and scoreboard: achievements, spatial coverage, survival times.
+    - Hiring
+
+2027: The capabilities flywheel
+Q1 2027: March: Acceleration
+    - Demonstrate
+        - Clear utilization of multiple novelty signals: Density, prediction error, reconstruction error 
+        - Integration of external rewards
+        - Efficient world-model training
+            - ViT / video DiT integration
+        - VLM-assisted exploration - using embeddings for context and novelty.
+    - Hiring
+
+Q2 2027: June: Achievements
+    - Demonstrate
+        - Advanced skills: tool usage, block construction
+        - Advanced survival: egg laying
+        - Improved survival times
+    - Outline paths to higher novelty: more abstract novel achievements
+    - Outline path to emergent science
+    - Hiring
+
+Q3 2027: September: Cooperation
+    - Aims: First steps executing on path to higher forms of novelty and emergent science
+    - Multi-agent experiments: cultural evolution, social learning
+        - Try to speed up tech discovery via multiple interacting agents.
+        - Inter-agent communication: Native vs LLM-assisted.
+
+Q4 2027: December: Science
+    - Aims: Demonstrate basic agent testing hypotheses, learning rules / theories of its open world.
+
+2028 and beyond: 
+    - Expand applications
+    - Plans for managing safety
+    - Interpretatability
+
+
+Resources and Personnel:
+
+Hardware
+This project will require a sizable compute and token budget.
+Self-development and continual learning means agents will eventually run continuously for weeks to months.
+Exploration is also inherently a highly variable process.
+To reliably establish an improvement to performance, we will need to perform several long runs of competing models over many seeds
+(e.g., [link: globo project page][text 6 seeds reveal reliable improvement of FTN-M2E over M2E]).
+For a point of reference, the experiments done for this proposal used no more than 12 GPUs at any point.
+
+Personnel
+AI coding has been indispensible for moving quickly and incorporating modules.
+Interfacing the original Dreamer code with a new environment used to take days.
+Now it takes 5 minutes.
+The role of humans has therefore moved away from coding and toward the insightful thinking that AI coders still cannot do.
+
+My priorities for building a team thus include reseachers that can overcome theoretical obstacles, thinking broadly but practically about the core uncertainties of the project. In particular, FTN is based on a broad picture of how many cortical motifs likely interact, translated into machine learning.
+That is the level of translation that I will look for in candidates. Second, I may need engineers with specific industry domain experience, e.g., post-training language and video models. 
+Bleeding-edge areas of machine learning in the industry still require human expertise over agentic coding.
+In 2027, I aim to hire a minimum of 2, maximum of 6 people.
+A team of 3 or 4 can move very quickly and coordinate tightly, with a couple extra spots for headroom as the project expands in its first year.
+
+I am also interested in having rigorous but high-level neuroscience input: What does the brain do generally? What does cortical and hippocampal activity actually look like, compared to what our models do?  
+FTN is based on a broad picture of how many cortical motifs likely interact, translated into machine learning.
+That is the strategy that will work best going forward.
+I anticipate productive collaboration with Astera's Neuroscience team on these questions.
+ 
+
+
+
+
+
+

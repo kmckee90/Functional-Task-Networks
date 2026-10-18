@@ -1,0 +1,40 @@
+
+explorer composites
+random, last frames after 1:25
+
+
+
+Multiple FTN globo agents:
+    - Autoencoder FTN: Simply train an FTN autoencoder: x -> parallel mlp -> x.
+    - M2E-FTN. Replace the entire trainable feed-forward paths: 
+        - Conv2d -> FTN(flatten(z))->out
+        - Convolutional FTN -> linear(flatten(z)). 
+        
+
+
+
+
+Edits to project pages:
+
+"M2E explores further than Dreamer and Plan2Explore in Globo, learning directly from what becomes familiar as it moves through the world."
+to
+"M2E explores further and faster than Dreamer and Plan2Explore in Globo by learning and changing its exploration strategies in real-time."
+
+
+video caption:
+
+Exploring the world of Globo
+M2E learns natural behaviors, studies details of the environment, and picks up skills like climbing and fighting, all without external reward.
+
+
+Revised body:
+
+Globo is a rich, open-ended world where an agent can wander, climb, encounter wildlife, and survive. We give our explorer no destinations or task rewards. Its incentive is to find experiences that are still unfamiliar.
+
+The recording shows wandering, surveying from a hill, following a cliff edge, climbing a tree, and fighting a wolf. These behaviors emerge along the way to seeking novel experiences, without any external instructions or reward.
+
+Metalearn2Explore (M2E) uses memory density as both a reward and immediate feedback. It immediately starts to make progress while a predictive model would still be learning what the world looks like. The agent responds to its changing experience within each lifetime, and carries its learning forward when it respawns.
+
+
+
+

@@ -1,0 +1,52 @@
+{
+  "time": 1792079293.7175877,
+  "pod": "globo2",
+  "trials": [
+    {
+      "name": "phase2_conv_s19",
+      "pod": "globo2",
+      "model": "M2E+convFTN",
+      "gpu": 0,
+      "seed": 19,
+      "spawn": "12.0,39.1,120.0",
+      "phase": "phase2",
+      "status": "paused",
+      "attempts": 3,
+      "achievements": true,
+      "render_size": 256,
+      "software_renderer": true,
+      "weight": 0.0,
+      "visitation": true,
+      "model_free_only": true,
+      "scaled": true,
+      "reservoir_variant": "tuned_v1",
+      "mf_replay_dtype": "float16",
+      "m2e_ftn": "conv",
+      "pid": 789296,
+      "retry_after": 1792039815.502795
+    },
+    {
+      "name": "phase2_conv_s101",
+      "pod": "globo2",
+      "model": "M2E+convFTN",
+      "gpu": 1,
+      "seed": 101,
+      "spawn": "16.0,58.1,118.0",
+      "phase": "phase2",
+      "status": "paused",
+      "attempts": 4,
+      "achievements": true,
+      "render_size": 256,
+      "software_renderer": true,
+      "weight": 0.0,
+      "visitation": true,
+      "model_free_only": true,
+      "scaled": true,
+      "reservoir_variant": "tuned_v1",
+      "mf_replay_dtype": "float16",
+      "m2e_ftn": "conv",
+      "pid": 1268461,
+      "retry_after": 1792054271.268614
+    }
+  ]
+}

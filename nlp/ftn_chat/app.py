@@ -1,8 +1,8 @@
 """ChatFTN live demo: chat + animated mask heatmap.
 
-On each user message we (1) reconfigure the atom-bank mask on the prompt by
-perplexity (recording each step), (2) animate the mask as it locates the expert
-subspace, then (3) stream the answer generated under that mask. The mask is
+On each user message we (1) update persistent BayesLoRA mask logits on prompt
+perplexity using the same reactive rule as training, (2) animate the sampled
+mask, then (3) stream the answer generated under that mask. The mask is
 colored by which domain reference claims each active atom, so you can watch the
 "expert" light up.
 
@@ -34,7 +34,8 @@ import registry
 import torch
 from config import CFG, DOMAIN_LABELS
 from model import build, load_bank
-from perplexity_configurer import PerplexityConfigurer
+from bayes_configurer import BayesianPerplexityConfigurer
+from input_routing import InputRoutingArchive
 from transformers import StoppingCriteria, StoppingCriteriaList, TextIteratorStreamer
 
 # Colors come from the registry, so newly-added tasks are colored automatically.
@@ -73,6 +74,23 @@ def _seed_all():
         torch.cuda.manual_seed_all(CFG.seed)  # every CUDA device
 
 
+def _load_refs(cfg):
+    """Prefer usage refs, falling back when an older bank's map is incompatible."""
+    for name in ("refs_usage.pt", "refs.pt"):
+        path = cfg.ckpt_dir / name
+        if not path.exists():
+            continue
+        refs = torch.load(path, map_location="cpu", weights_only=True)
+        shapes = {key: tuple(value.shape) for key, value in refs.items()}
+        if any(shape != (cfg.H,) for shape in shapes.values()):
+            print(f"  WARNING: ignoring {path}: reference shapes {shapes} "
+                  f"do not match checkpoint H={cfg.H}.")
+            continue
+        print(f"  loaded refs from {name}")
+        return {key: value.float() for key, value in refs.items()}
+    return {key: torch.zeros(cfg.H) for key in cfg.domains}
+
+
 def _load():
     torch.set_default_device("cuda" if torch.cuda.is_available() else "cpu")
     # Force deterministic GPU kernels — by default cuDNN/cuBLAS pick fast but
@@ -90,15 +108,7 @@ def _load():
     # Prefer usage-weighted refs (refs_usage.pt) so a neuron shared by several
     # tasks blends their colors by relative usage; fall back to the binary
     # top-k refs.pt. See rebuild_refs_usage.py.
-    refs_p = CFG.ckpt_dir / "refs_usage.pt"
-    if not refs_p.exists():
-        refs_p = CFG.ckpt_dir / "refs.pt"
-    try:
-        refs = torch.load(refs_p, map_location="cpu")
-        refs = {k: v.float() for k, v in refs.items()}
-        print(f"  loaded refs from {refs_p.name}")
-    except FileNotFoundError:
-        refs = {k: torch.zeros(CFG.H) for k in CFG.domains}
+    refs = _load_refs(CFG)
     # Inference: no gradient checkpointing (reconfig keeps a small graph itself)
     # and re-enable the KV cache for fast generation.
     model.gradient_checkpointing_disable()
@@ -148,6 +158,10 @@ def _sync_cfg_to_ckpt():
     bank_p = CFG.ckpt_dir / "bank.pt"
     if state_p.exists():
         state = json.loads(state_p.read_text())
+        for name in ("lateral_steps", "lateral_kernel", "lateral_polyak",
+                     "lateral_noise_sd", "torus"):
+            if name in state.get("lateral", {}):
+                setattr(CFG, name, state["lateral"][name])
         if state.get("k") is not None:
             CFG.k = int(state["k"])
         if state.get("H") is not None:
@@ -167,7 +181,22 @@ def _sync_cfg_to_ckpt():
 _parse_cli()
 _sync_cfg_to_ckpt()
 MODEL, TOK, CTRL, WRAPPERS, REFS = _load()
-CFGR = PerplexityConfigurer(CFG, CTRL)
+detector_state = None
+state_p = CFG.ckpt_dir / "state.json"
+if state_p.exists():
+    saved_state = json.loads(state_p.read_text())
+    if saved_state.get("detector_objective") == "prompt_nll":
+        detector_state = saved_state.get("reactive")
+CFGR = BayesianPerplexityConfigurer(CFG, CTRL, detector_state)
+posterior_p = CFG.ckpt_dir / "posterior.pt"
+if posterior_p.exists():
+    CFGR.load_state_dict(torch.load(posterior_p, map_location="cpu", weights_only=True))
+    print(f"  loaded mask posterior from {posterior_p}")
+ROUTER = InputRoutingArchive(CFG, TOK, MODEL)
+routing_p = CFG.ckpt_dir / "routing.pt"
+if routing_p.exists():
+    ROUTER.load_state_dict(torch.load(routing_p, map_location="cpu", weights_only=True))
+    print(f"  loaded {len(ROUTER.routes)} input routes from {routing_p}")
 DEV = next(
     MODEL.parameters()
 ).device  # event handler runs off-thread; place inputs explicitly
@@ -254,19 +283,23 @@ SYSTEM_PROMPT = "You are a helpful assistant. Answer concisely and accurately."
 MAX_NEW_TOKENS = 512
 
 
-def _animate(frames_iter, history, final_img_ref, gamma=1.0):
-    """Consume a configurer iterate() generator, yielding (history, image) per
+def _animate(frames_iter, history, final_img_ref, gamma=1.0, route_status="Bayes search"):
+    """Consume a configurer iterate() generator, yielding (history, image, status) per
     frame so the search animates. The image is always just the CURRENT mask.
     Returns the final mask. final_img_ref is a 1-element list so the caller sees
     the latest image after the generator finishes."""
     mask = None
-    for fr in frames_iter:
-        mask = fr
-        final_img_ref[0] = render(fr, gamma)
-        yield history, final_img_ref[0]
-        time.sleep(0.02)
-        if STOP_EVENT.is_set():
-            break
+    try:
+        for fr in frames_iter:
+            mask = fr
+            final_img_ref[0] = render(fr, gamma)
+            yield history, final_img_ref[0], route_status
+            time.sleep(0.02)
+            if STOP_EVENT.is_set():
+                mask = None
+                break
+    finally:
+        frames_iter.close()  # rollback an interrupted posterior update
     return mask
 
 
@@ -274,17 +307,26 @@ def respond(
     message,
     history,
     temperature,
-    reconfig_steps,
-    lateral_steps,
-    lateral_polyak,
+    stable_steps,
+    cp_steps,
     reconfig_lr,
+    cp_lr,
+    mask_temperature,
+    cp_temperature,
+    kl_weight,
+    prior_decay,
+    reactive_sd,
+    reactive_ema,
     k,
     reconfig_every,
-    mid_steps,
-    init_a,
-    init_b,
     gamma,
     enable_thinking,
+    input_routing,
+    route_margin,
+    route_semantic_weight,
+    route_mode,
+    route_refine_steps,
+    route_refine_kl,
 ):
     STOP_EVENT.clear()  # fresh request; ignore any prior Stop
     history = history + [
@@ -293,51 +335,79 @@ def respond(
     ]
     k = int(k)
     reconfig_every = int(reconfig_every)  # 0 => reconfigure once, never mid-rollout
-    mid_steps = int(mid_steps)
-    init_a, init_b = float(init_a), float(init_b)
-    lateral_polyak = float(lateral_polyak)
     gamma = float(gamma)
 
-    # Phase 1: reconfigure on the bare prompt, animating the search LIVE — each
-    # frame is one real forward pass. Search depth, smoothing, LR, and active-atom
-    # count k come from the GUI. This initial search must NOT warm-start from the
-    # previous prompt's mask, so init_a is forced to 0 (pure b*noise init); the
-    # `a` slider only warm-starts the mid-rollout reconfigs in Phase 2.
+    search = dict(k=k, steps=int(stable_steps), changepoint_steps=int(cp_steps),
+                  lr=float(reconfig_lr), changepoint_lr=float(cp_lr),
+                  temperature=float(mask_temperature),
+                  changepoint_temperature=float(cp_temperature),
+                  kl_weight=float(kl_weight), prior_decay=float(prior_decay),
+                  reactive_sd=float(reactive_sd), reactive_ema=float(reactive_ema))
+
     ids = TOK(message, return_tensors="pt")["input_ids"].to(DEV)
     final_img_ref = [render(CTRL.mask, gamma)]
     mask = None
-    gen = _animate(
-        CFGR.iterate(
-            MODEL,
-            ids,
-            steps=int(reconfig_steps),
-            reconfig_lr=float(reconfig_lr),
-            lateral_steps=int(lateral_steps),
-            lateral_polyak=lateral_polyak,
-            k=k,
-            init_mask=None,
-            init_a=0.0,
-            init_b=init_b,
-        ),
-        history,
-        final_img_ref,
-        gamma,
-    )
-    try:
-        while True:
-            yield next(gen)
-    except StopIteration as stop:
-        mask = stop.value
+    routed = False
+    route_status = "Bayes search"
+    if input_routing and ROUTER.routes and k == CFG.k:
+        match, info = ROUTER.match(message, k=k, margin=route_margin,
+                                   semantic_weight=route_semantic_weight)
+        if match is not None:
+            routed = True
+            route_logits = ROUTER.routes[info["task"]]["logits"]
+            if route_mode == "Refine":
+                route_status = (f"Refining **{info['task']}** mask "
+                                f"({int(route_refine_steps)} prompt steps)")
+                mask = yield from _animate(
+                    CFGR.iterate(MODEL, ids, **search,
+                                 routed_prior=route_logits,
+                                 routed_steps=int(route_refine_steps),
+                                 routed_kl_weight=float(route_refine_kl)),
+                    history, final_img_ref, gamma, route_status,
+                )
+                if mask is not None:
+                    route_status = (f"Refined **{info['task']}** mask "
+                                    f"({CFGR.last_stats['steps']} steps; "
+                                    f"prompt NLL {CFGR.last_stats['nll']:.3f})")
+                    yield history, final_img_ref[0], route_status
+            else:
+                mask = match.to(CTRL.mask.device)
+                CTRL.k = k
+                CTRL.set_mask(mask)
+                CFGR.mask_logits.copy_(route_logits.to(CFGR.mask_logits.device))
+                # A retrieved route starts a fresh dwell regime. Give a
+                # mid-rollout update a baseline under this exact mask.
+                with torch.no_grad():
+                    fitted = float(CFGR._nll(MODEL, ids, torch.ones_like(ids)))
+                CFGR.detector.mean, CFGR.detector.var, CFGR.detector.since = fitted, 0.0, 0
+                route_status = (f"Retrieved **{info['task']}** mask "
+                                f"(margin {info['margin']:.2f}; prompt NLL {fitted:.3f})")
+                final_img_ref[0] = render(mask, gamma)
+                yield history, final_img_ref[0], route_status
+        else:
+            route_status = f"Bayes search: route {info['reason']}"
+    elif input_routing:
+        route_status = ("Bayes search: routing masks were repaired for k=" + str(CFG.k)
+                        if ROUTER.routes else
+                        "Bayes search: no routing archive in checkpoint")
+    if not routed:
+        mask = yield from _animate(
+            CFGR.iterate(MODEL, ids, **search),
+            history,
+            final_img_ref,
+            gamma,
+            route_status,
+        )
 
     if mask is None or STOP_EVENT.is_set():
         if mask is not None:
             CTRL.set_mask(mask)
-            yield history, render(mask, gamma)
+            yield history, render(mask, gamma), route_status
         return
 
     # Phase 2: generate under the located mask. If reconfig_every > 0 we decode
-    # in chunks of that many tokens and, between chunks, re-run mid_steps of
-    # reconfiguration on the FULL sequence so far (prompt + rollout) — the expert
+    # in chunks of that many tokens and update the posterior on the full
+    # sequence so far (prompt + rollout) — the expert
     # subspace tracks the answer as it grows. reconfig_every == 0 keeps the old
     # single-shot behaviour (decode straight through under the initial mask).
     CTRL.set_mask(mask)
@@ -345,6 +415,8 @@ def respond(
         {"role": "system", "content": SYSTEM_PROMPT},
         {"role": "user", "content": message},
     ]
+    # The 27B default prefix already opens <think>. Token bans cannot disable
+    # that mode; let the model's template open/close it according to the toggle.
     enc = TOK.apply_chat_template(
         msgs,
         add_generation_prompt=True,
@@ -389,7 +461,7 @@ def respond(
         for tok_text in streamer:
             partial += tok_text
             history[-1] = {"role": "assistant", "content": partial}
-            yield history, final_img_ref[0]
+            yield history, final_img_ref[0], route_status
             if STOP_EVENT.is_set():
                 break
         out = result.get("out")
@@ -407,31 +479,16 @@ def respond(
         if STOP_EVENT.is_set() or eos_hit or gained < chunk or reconfig_every <= 0:
             break
 
-        # Mid-rollout reconfiguration on prompt + rollout-so-far, warm-started
-        # from the current mask per the a/b sliders. Animate it, then resume.
-        gen = _animate(
-            CFGR.iterate(
-                MODEL,
-                cur_ids,
-                steps=mid_steps,
-                reconfig_lr=float(reconfig_lr),
-                lateral_steps=int(lateral_steps),
-                lateral_polyak=lateral_polyak,
-                k=k,
-                init_mask=CTRL.mask,
-                init_a=init_a,
-                init_b=init_b,
-            ),
+        # Mid-rollout uses the same detector and posterior as a new prompt.
+        mask = yield from _animate(
+            CFGR.iterate(MODEL, cur_ids, **search),
             history,
             final_img_ref,
             gamma,
+            route_status,
         )
-        try:
-            while True:
-                yield next(gen)
-        except StopIteration as stop:
-            if stop.value is not None:
-                mask = stop.value
+        if mask is None or STOP_EVENT.is_set():
+            break
         CTRL.set_mask(mask)
 
 
@@ -456,14 +513,15 @@ def _legend_html():
 
 
 def main():
+    website = os.environ.get('FTN_WEBSITE_MODE') == '1'
     with gr.Blocks(title="ChatFTN") as demo:
         gr.Markdown(
             "### ChatFTN — prompt-routed expert knowledge\n"
             "Mask colors: " + _legend_html()
         )
-        with gr.Row():
-            with gr.Column(scale=3):
-                chat = gr.Chatbot(height=520)  # gradio 6: messages format only
+        with gr.Row(elem_id='chat-layout'):
+            with gr.Column(scale=3,min_width=280):
+                chat = gr.Chatbot(height=430 if website else 520,show_label=not website)
                 with gr.Row():
                     box = gr.Textbox(
                         scale=8,
@@ -474,17 +532,43 @@ def main():
                     # Hidden for now: re-seeding doesn't reliably reproduce
                     # output yet. Keep the wiring; flip visible=True to restore.
                     seed_btn = gr.Button("🌱 Reset seed", scale=1, visible=False)
-            with gr.Column(scale=2):
+            with gr.Column(scale=2,min_width=260):
                 mask_img = gr.Image(
-                    label="atom mask  m  (expert subspace)  +  per-network prevalence",
-                    height=380,
+                    value=render(CTRL.mask) if website else None,
+                    label="Neural assemblies · domain activity" if website else "atom mask  m  (expert subspace)  +  per-network prevalence",
+                    height=330 if website else 380,interactive=False,
                 )
-                with gr.Accordion("Controls", open=False):
+                route_status = gr.Markdown("Bayes search")
+                with gr.Accordion("Controls", open=False,visible=not website):
+                    input_routing = gr.Checkbox(
+                        value=website,
+                        label="Use repaired input routes when confident",
+                    )
+                    route_margin = gr.Slider(
+                        0.0, 4.0, value=CFG.input_route_margin, step=0.05,
+                        label="Minimum route score margin",
+                    )
+                    route_semantic_weight = gr.Slider(
+                        0.0, 8.0, value=CFG.input_route_semantic_weight, step=0.1,
+                        label="Question semantic similarity weight",
+                    )
+                    route_mode = gr.Radio(
+                        ["Direct", "Refine"], value="Direct",
+                        label="Matched route: apply directly or refine on prompt",
+                    )
+                    route_refine_steps = gr.Slider(
+                        1, 120, value=CFG.input_route_refine_steps, step=1,
+                        label="Route refinement steps",
+                    )
+                    route_refine_kl = gr.Slider(
+                        0.0, 10.0, value=CFG.input_route_refine_kl, step=0.1,
+                        label="Route refinement KL to retrieved logits",
+                    )
                     # Per-message thinking toggle. Initial state honors the
                     # --no-thinking CLI flag (ENABLE_THINKING); flipping it here
                     # takes effect on the next message with no restart.
                     thinking = gr.Checkbox(
-                        value=ENABLE_THINKING,
+                        value=False if website else ENABLE_THINKING,
                         label="Enable thinking (model reasons before answering)",
                     )
                     temperature = gr.Slider(
@@ -494,36 +578,45 @@ def main():
                         step=0.05,
                         label="LLM temperature (answer sampling)",
                     )
-                    reconfig_steps = gr.Slider(
-                        1,
-                        100,
-                        value=CFG.reconfig_steps,
-                        step=1,
-                        label="Reconfig steps (mask search depth)",
+                    stable_steps = gr.Slider(
+                        1, 20, value=CFG.bayes_reconfig_steps, step=1,
+                        label="Stable prompt steps",
                     )
-                    # Default = CFG.lateral_steps (0 = plain KWTA, matching the
-                    # base Large/NoReplay/Reactive_Low config); raise the slider
-                    # to turn SmoothKWTA blob coherence on live.
-                    lateral_steps = gr.Slider(
-                        0,
-                        10,
-                        value=CFG.lateral_steps,
-                        step=1,
-                        label="Lateral smoothing steps (0 = plain KWTA)",
-                    )
-                    lateral_polyak = gr.Slider(
-                        0.0,
-                        1.0,
-                        value=CFG.lateral_polyak,
-                        step=0.05,
-                        label="Lateral polyak (lower = stronger smoothing pull)",
+                    cp_steps = gr.Slider(
+                        1, 120, value=CFG.bayes_changepoint_reconfig_steps, step=1,
+                        label="Changepoint steps",
                     )
                     reconfig_lr = gr.Slider(
-                        0.02,
-                        1.0,
-                        value=CFG.reconfig_lr,
-                        step=0.02,
-                        label="Reconfig learning rate (mask logits)",
+                        0.01, 1.0, value=CFG.bayes_reconfig_lr, step=0.01,
+                        label="Stable mask learning rate",
+                    )
+                    cp_lr = gr.Slider(
+                        0.01, 1.0, value=CFG.bayes_changepoint_reconfig_lr,
+                        step=0.01, label="Changepoint mask learning rate",
+                    )
+                    mask_temperature = gr.Slider(
+                        0.1, 10.0, value=CFG.bayes_temperature, step=0.1,
+                        label="Stable mask temperature",
+                    )
+                    cp_temperature = gr.Slider(
+                        0.1, 10.0, value=CFG.bayes_changepoint_temperature,
+                        step=0.1, label="Changepoint mask temperature",
+                    )
+                    kl_weight = gr.Slider(
+                        0.0, 10.0, value=CFG.bayes_kl_weight, step=0.1,
+                        label="Stable KL weight",
+                    )
+                    prior_decay = gr.Slider(
+                        0.0, 1.0, value=CFG.bayes_prior_decay, step=0.05,
+                        label="Stable prior retention",
+                    )
+                    reactive_sd = gr.Slider(
+                        0.0, 10.0, value=CFG.reactive_sd, step=0.1,
+                        label="Change threshold (EMA standard deviations)",
+                    )
+                    reactive_ema = gr.Slider(
+                        0.0, 0.99, value=CFG.reactive_ema, step=0.01,
+                        label="Change detector EMA",
                     )
                     k_atoms = gr.Slider(
                         8,
@@ -535,30 +628,9 @@ def main():
                     reconfig_every = gr.Slider(
                         0,
                         64,
-                        value=16,
+                        value=0,
                         step=1,
-                        label="Mid-rollout reconfig every N tokens (0 = off)",
-                    )
-                    mid_steps = gr.Slider(
-                        1,
-                        60,
-                        value=3,
-                        step=1,
-                        label="Mid-rollout reconfig steps (per re-search)",
-                    )
-                    init_a = gr.Slider(
-                        0.0,
-                        1.0,
-                        value=0.01,
-                        step=0.05,
-                        label="Mask init: a · current mask (mid-rollout only)",
-                    )
-                    init_b = gr.Slider(
-                        0.0,
-                        1.0,
-                        value=0.0035,
-                        step=0.05,
-                        label="Mask init: b · noise",
+                        label="Mid-rollout update every N tokens (0 = off)",
                     )
                     gamma = gr.Slider(
                         0.2,
@@ -577,19 +649,28 @@ def main():
                 box,
                 chat,
                 temperature,
-                reconfig_steps,
-                lateral_steps,
-                lateral_polyak,
+                stable_steps,
+                cp_steps,
                 reconfig_lr,
+                cp_lr,
+                mask_temperature,
+                cp_temperature,
+                kl_weight,
+                prior_decay,
+                reactive_sd,
+                reactive_ema,
                 k_atoms,
                 reconfig_every,
-                mid_steps,
-                init_a,
-                init_b,
                 gamma,
                 thinking,
+                input_routing,
+                route_margin,
+                route_semantic_weight,
+                route_mode,
+                route_refine_steps,
+                route_refine_kl,
             ],
-            [chat, mask_img],
+            [chat, mask_img, route_status],
             show_progress="hidden",
         )
         submit_event.then(lambda: "", None, box)
@@ -605,7 +686,11 @@ def main():
         f"\nServing on 127.0.0.1:{CFG.port} — forward with e.g. "
         f"`actl pod exec --port {CFG.port}` and open http://localhost:{CFG.port}\n"
     )
-    demo.queue().launch(server_name="127.0.0.1", server_port=CFG.port)
+    demo.queue().launch(server_name=os.environ.get('FTN_SERVER_NAME','127.0.0.1'),
+        server_port=CFG.port,root_path=os.environ.get('FTN_ROOT_PATH') or None,
+        theme=gr.themes.Base(primary_hue='emerald',neutral_hue='slate',font=['system-ui','sans-serif']) if website else None,
+        css=Path(__file__).with_name('site.css').read_text() if website else None,
+        footer_links=[] if website else None)
 
 
 if __name__ == "__main__":

@@ -1,4 +1,4 @@
-"""Headless routing de-risk for FTN-Chat (the crux gate).
+"""Headless routing check under the persistent BayesLoRA mask rule.
 
 Builds a reference mask per domain (reconfigure on that domain's support pool),
 then for every held-out chunk reconfigures and asks which domain reference it
@@ -12,13 +12,15 @@ After training:
 from __future__ import annotations
 
 import argparse
+import json
+from pathlib import Path
 
 import torch
 
 from config import CFG, DOMAIN_LABELS
 from data import build_domains
 from model import build, load_bank
-from perplexity_configurer import PerplexityConfigurer
+from bayes_configurer import BayesianPerplexityConfigurer
 
 
 def overlap(a: torch.Tensor, b: torch.Tensor, k: int) -> float:
@@ -57,7 +59,17 @@ def main():
     model.eval()
 
     doms = build_domains(CFG, tok)
-    cfgr = PerplexityConfigurer(CFG, ctrl)
+    ckpt_dir = Path(args.ckpt).expanduser().resolve().parent
+    state_p = ckpt_dir / "state.json"
+    detector = None
+    if not args.untrained and state_p.exists():
+        state = json.loads(state_p.read_text())
+        if state.get("detector_objective") == "prompt_nll":
+            detector = state.get("reactive")
+    cfgr = BayesianPerplexityConfigurer(CFG, ctrl, detector)
+    posterior_p = ckpt_dir / "posterior.pt"
+    if not args.untrained and posterior_p.exists():
+        cfgr.load_state_dict(torch.load(posterior_p, map_location="cpu", weights_only=True))
     keys = list(doms.keys())
 
     print("\nBuilding domain reference masks...")

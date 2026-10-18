@@ -1,0 +1,50 @@
+{
+  "fps": 24,
+  "duration": 152.58333333333334,
+  "title_seconds": 4,
+  "black_transition_seconds": 0.25,
+  "clips": [
+    {
+      "file": "3k_wander.mp4",
+      "source_start": 0,
+      "source_end": null,
+      "start": 4.0,
+      "end": 14.666666666666666
+    },
+    {
+      "file": "6k_obs.mp4",
+      "source_start": 15,
+      "source_end": 30,
+      "start": 14.916666666666666,
+      "end": 29.916666666666668
+    },
+    {
+      "file": "7k_look-seek.mp4",
+      "source_start": 0,
+      "source_end": null,
+      "start": 30.166666666666668,
+      "end": 72.83333333333333
+    },
+    {
+      "file": "327k_wolf-run.mp4",
+      "source_start": 0,
+      "source_end": null,
+      "start": 73.08333333333333,
+      "end": 81.75
+    },
+    {
+      "file": "339k_find-wolf.mp4",
+      "source_start": 15,
+      "source_end": null,
+      "start": 82.0,
+      "end": 109.66666666666667
+    },
+    {
+      "file": "drown.mp4",
+      "source_start": 0,
+      "source_end": null,
+      "start": 109.91666666666667,
+      "end": 152.58333333333334
+    }
+  ]
+}

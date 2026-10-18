@@ -1,0 +1,23 @@
+# Isolated CPython 3.11; CUDA 12 wheels run on the CUDA 13-capable host driver.
+jax[cuda12]==0.4.33
+torch==2.6.0
+numpy==1.26.4
+ninjax==3.6.3
+elements==3.22.4
+portal==3.8.1
+granular==0.23.4
+optax==0.2.5
+chex==0.1.90
+av==18.1.0
+pillow
+imageio
+pygame==2.6.1
+ruamel.yaml
+gymnasium==0.29.1
+craftium @ https://github.com/mikelma/craftium/releases/download/v0.0.1/craftium-0.0.1-cp311-cp311-manylinux_2_28_x86_64.whl
+einops
+jaxtyping
+colored_traceback
+tqdm
+google-resumable-media
+ipdb

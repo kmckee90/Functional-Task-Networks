@@ -18,7 +18,6 @@ import shutil
 
 import gymnasium as gym
 import numpy as np
-import torch
 from gymnasium.spaces import MultiDiscrete
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -371,6 +370,7 @@ def make_globo_env(
 
 def obs_to_chw(obs: np.ndarray, device=None) -> torch.Tensor:
     """craftium (H, W, 3) uint8 -> torch (3, H, W) float in [0,1]."""
+    import torch
     t = torch.as_tensor(np.asarray(obs), dtype=torch.float32, device=device) / 255.0
     return t.permute(2, 0, 1).contiguous()
 

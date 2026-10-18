@@ -1,0 +1,1 @@
+These lua source files were copied from `minetest/builtin/**/*.lua`. By having them present, the Lua LSP understands the definitions and stops raising warnings about additions like `string.split` and `table.copy`.

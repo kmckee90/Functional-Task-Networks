@@ -32,9 +32,11 @@ import tasks
 import utils
 import viz
 from ftn import BayesFTN, FTN
+from lora_ftn import LoRAFTN
 from bayes_lora_ftn import BayesLoRAFTN
 from bayes_lora_rnn_ftn import BayesLoRARNNFTN
 from bayes_stack_ftn import BayesRNNResidualFTN
+from input_conditioned import InputConditionedRouting
 
 # =============================================================================
 # Replay buffer
@@ -238,7 +240,9 @@ def replay_step(ftn, replay_buffer):
         return
     stored = torch.stack(list(replay_buffer.masks))
     corrs = (stored * ftn.m).sum(-1) / ftn.m.sum()
-    keep = (corrs > 0.2) & (corrs <= 0.8)
+    keep = (corrs > Config.REPLAY_OVERLAP_LOW) & (
+        corrs <= Config.REPLAY_OVERLAP_HIGH
+    )
     overlap = torch.where(keep)[0]
     if len(overlap) == 0:
         return
@@ -338,6 +342,8 @@ def train(
                         and r_since >= r_warmup
                         and detector_loss > r_mean + r_sd * sd
                     )
+                    if hasattr(ftn, "ic_novelty"):
+                        changepoint = changepoint or ftn.ic_novelty(x)
                     if changepoint:
                         ftn.reconfigure_changepoint(x, y)
                         n_block_changepoints += 1
@@ -365,6 +371,9 @@ def train(
                     reconfig = (i == 0) if every == 0 else (i % every == 0)
                     pred = ftn(x, y) if reconfig else ftn(x)
                     loss = ftn.loss(pred, y)
+
+                if hasattr(ftn, "ic_observe"):
+                    ftn.ic_observe(x)
 
                 # ---- store a few batches for replay ----
                 if i < Config.N_SAMPLE_PER_TASK:
@@ -399,6 +408,9 @@ def train(
                 loss_history.append(loss_smooth)
             # =============== end inner training loop ============================
 
+            if hasattr(ftn, "ic_repair_from_replay"):
+                ftn.ic_repair_from_replay(replay_buffer)
+
             if time_block and torch.cuda.is_available():
                 torch.cuda.synchronize()
             block_wall_s = time.perf_counter() - block_t0
@@ -406,6 +418,8 @@ def train(
             if animator:
                 animator.record_task(task, ftn.m, suffix, snapshot=snapshot)
             per_task_losses[task].extend(loss_history)
+            if save_viz:
+                viz.save_loss_plot(per_task_losses, suffix, out_dir=out_dir)
             if reactive:
                 print(
                     f"  [{suffix}] task {task}: "
@@ -421,7 +435,15 @@ def train(
             if Config.EVAL_BACKWARDS:
                 prospective = Config.EVAL_PROSPECTIVE
                 eval_set = list(task_indices) if prospective else list(seen_tasks)
-                bw = evaluate_backwards(ftn, data_gen, eval_set)
+                if hasattr(ftn, "ic_entries"):
+                    # Different routing policies consume different mask-search
+                    # RNG during eval. Preserve the subsequent training stream.
+                    devices = ([torch.cuda.current_device()]
+                               if torch.cuda.is_available() else [])
+                    with torch.random.fork_rng(devices=devices):
+                        bw = evaluate_backwards(ftn, data_gen, eval_set)
+                else:
+                    bw = evaluate_backwards(ftn, data_gen, eval_set)
                 losses = {t: bw[t]["loss"] for t in eval_set}
                 accs = {t: bw[t]["acc"] for t in eval_set}
                 loss_str = " ".join(
@@ -461,8 +483,6 @@ def train(
                 )
                 block_order += 1
 
-        if snapshot and save_viz:
-            viz.save_loss_plot(per_task_losses, suffix, out_dir=out_dir)
         if animator:
             animator.maybe_save_gifs(epoch, suffix)
 
@@ -492,7 +512,7 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--architecture",
-        choices=["base", "bayes", "bayes_lora", "bayes_rnn_residual", "bayes_lora_rnn"],
+        choices=["base", "lora", "bayes", "bayes_lora", "bayes_rnn_residual", "bayes_lora_rnn"],
         default=None,
         help="Override Config.ARCHITECTURE.",
     )
@@ -603,6 +623,7 @@ if __name__ == "__main__":
     # the single source of truth for the model's input width.
     architectures = {
         "base": FTN,
+        "lora": LoRAFTN,
         "bayes": BayesFTN,
         "bayes_lora": BayesLoRAFTN,
         "bayes_rnn_residual": BayesRNNResidualFTN,
@@ -613,23 +634,40 @@ if __name__ == "__main__":
             f"Unknown ARCHITECTURE={Config.ARCHITECTURE!r}; expected one of "
             f"{sorted(architectures)}"
         )
+    ic_enabled = getattr(Config, "IC_ENABLED", False)
+    if ic_enabled and Config.ARCHITECTURE not in (
+            "bayes", "bayes_lora", "bayes_lora_rnn"):
+        raise ValueError(
+            "InputConditioned requires Bayes, BayesLoRA, or BayesLoRARNN"
+        )
+    if ic_enabled and Config.IC_AE_RANK > data_gen.total_input_dim:
+        raise ValueError("IC_AE_RANK cannot exceed the model input dimension")
     # Per-architecture constructor parameters. The three Bayesian variants share
     # the same persistent-posterior hyperparameters (BAYES_FTN_PARS); only the
     # backbone bundle differs (ParallelMLP / LoRA atom bank / recurrent cell).
     pars_by_arch = {
         "base": dict(Config.FTN_PARS),
+        "lora": dict(Config.LORA_PARS),
         "bayes": {**Config.FTN_PARS, **Config.BAYES_FTN_PARS},
         "bayes_lora": {**Config.LORA_FTN_PARS, **Config.BAYES_FTN_PARS},
         "bayes_rnn_residual": {**Config.RNN_FTN_PARS, **Config.BAYES_FTN_PARS},
         "bayes_lora_rnn": {**Config.LORA_RNN_FTN_PARS, **Config.BAYES_FTN_PARS},
     }
     ftn_pars = dict(pars_by_arch[Config.ARCHITECTURE])
-    ftn = architectures[Config.ARCHITECTURE](
+    model_class = architectures[Config.ARCHITECTURE]
+    if ic_enabled:
+        model_class = type(
+            f"InputConditioned{model_class.__name__}",
+            (InputConditionedRouting, model_class), {},
+        )
+    ftn = model_class(
         input_size=data_gen.total_input_dim,
         output_size=data_gen.output_dim,
         hidden_size=Config.HIDDEN_SIZE,
         **ftn_pars,
     )
+    if ic_enabled:
+        ftn.configure_input_routing(Config)
     optimizer = torch.optim.Adam(
         [p for p in ftn.parameters() if p.requires_grad], lr=Config.TRAIN_LR
     )
@@ -637,6 +675,8 @@ if __name__ == "__main__":
         maxlen=Config.REPLAY_MAXLEN,
         batch_size=Config.REPLAY_BATCH_SIZE,
     )
+    if Config.RECONFIG_MATCH_STORED and hasattr(ftn, "set_stored_masks_ref"):
+        ftn.set_stored_masks_ref(replay.masks)
 
     if Config.RECONFIG_REACTIVE:
         print(
@@ -653,15 +693,32 @@ if __name__ == "__main__":
             )
     else:
         print(f"Reconfig: every={Config.RECONFIG_EVERY} (0 = per task block)")
-    print(
-        "Evaluation mask search: stateless zero-logit | "
-        f"steps={Config.EVAL_RECONFIG_STEPS} "
-        f"lr={Config.EVAL_RECONFIG_LR} "
-        f"restarts={Config.EVAL_RECONFIG_RESTARTS}"
-    )
+    if ic_enabled:
+        print(
+            f"Evaluation input routing: {Config.IC_EVAL_STRATEGY} | "
+            f"support={Config.IC_SUPPORT_SIZE} rank={Config.IC_AE_RANK} "
+            f"replay_repair={Config.IC_REPLAY_REPAIR}"
+        )
+        if Config.IC_REPLAY_REPAIR:
+            rows_per_domain = Config.N_SAMPLE_PER_TASK * min(
+                Config.T, Config.REPLAY_BATCH_SIZE or Config.T)
+            needed = Config.IC_REPAIR_FIT_ROWS + Config.IC_REPAIR_VALIDATION_ROWS
+            if rows_per_domain < needed:
+                print(
+                    f"Input routing: only {rows_per_domain} replay rows per "
+                    f"task block, below {needed} required for mask repair"
+                )
+    else:
+        print(
+            "Evaluation mask search: stateless zero-logit | "
+            f"steps={Config.EVAL_RECONFIG_STEPS} "
+            f"lr={Config.EVAL_RECONFIG_LR} "
+            f"restarts={Config.EVAL_RECONFIG_RESTARTS}"
+        )
     print(
         f"Replay: {Config.N_REPLAY_SAMPLES}/step "
-        f"(buffer {Config.REPLAY_MAXLEN} x {Config.REPLAY_BATCH_SIZE} rows)"
+        f"(buffer {Config.REPLAY_MAXLEN} x {Config.REPLAY_BATCH_SIZE} rows, "
+        f"overlap=({Config.REPLAY_OVERLAP_LOW}, {Config.REPLAY_OVERLAP_HIGH}])"
     )
 
     # Chance-level cross-entropy baseline for classification: log(n_classes).
@@ -688,7 +745,12 @@ if __name__ == "__main__":
         collector=collector,
         save_viz=SAVE_VIZ,
     )
-    mtl_eval = evaluate_tasks(ftn, data_gen, list(range(Config.N_TASK)))
+    if ic_enabled:
+        devices = [torch.cuda.current_device()] if torch.cuda.is_available() else []
+        with torch.random.fork_rng(devices=devices):
+            mtl_eval = evaluate_tasks(ftn, data_gen, list(range(Config.N_TASK)))
+    else:
+        mtl_eval = evaluate_tasks(ftn, data_gen, list(range(Config.N_TASK)))
 
     # Scalar metrics log (always written): continual-learning accuracies from
     # the collector plus post-hoc cost/structure metrics on the trained model.
@@ -716,6 +778,14 @@ if __name__ == "__main__":
         "avg_mask_overlap_pct": avg_mask_overlap_pct,
     }
     metric_fields.update(collector.summary())
+    if ic_enabled:
+        metric_fields.update({f"ic_{key}": value
+                              for key, value in ftn.ic_stats.items()})
+        metric_fields["ic_entries"] = len(ftn.ic_entries)
+        metric_fields["ic_repair_before_loss"] = (
+            float(np.mean(ftn.ic_repair_before)) if ftn.ic_repair_before else None)
+        metric_fields["ic_repair_after_loss"] = (
+            float(np.mean(ftn.ic_repair_after)) if ftn.ic_repair_after else None)
     metrics_path = os.path.join(OUT_DIR, f"metrics{RUN_TAG}.txt")
     metrics_mod.write_metrics(metrics_path, metric_fields)
     print(f"Metrics written to {metrics_path}")

@@ -71,3 +71,9 @@ nohup.out
 *.gif
 *.csv
 *.pdf
+
+*artifacts*
+
+metrics*
+
+outputs/

@@ -35,10 +35,11 @@ def banked_layer_range(n_layers: int, layer_frac: float) -> tuple[int, int]:
 
 
 def _shard_plan(cfg: Config):
-    """device_map for the backbone. With rank-1 atoms the bank is small
-    (~0.25GB/layer), so an even split of the backbone across all GPUs is the
-    right layout — "balanced" also stays architecture-agnostic (no module-name
-    assumptions for hybrid DeltaNet stacks). Returns None for single-GPU."""
+    """Keep the stateful trainer on one GPU when it fits; shard if requested."""
+    if torch.cuda.device_count() == 0:
+        return None
+    if not cfg.model_parallel:
+        return 0
     return "balanced" if torch.cuda.device_count() > 1 else None
 
 
@@ -51,12 +52,16 @@ def build(cfg: Config):
 
     device_map = _shard_plan(cfg)
     model = AutoModelForCausalLM.from_pretrained(
-        cfg.model_name, dtype=dtype, attn_implementation="eager",
+        cfg.model_name, dtype=dtype, attn_implementation=cfg.attn_implementation,
         device_map=device_map,
     )
+    # Freeze the entire backbone before adding trainable atoms. Freezing only
+    # the banked layers leaves the earlier transformer blocks accumulating
+    # gradients that the LoRA optimizer neither uses nor clears.
+    model.requires_grad_(False)
     if device_map is not None:
         devs = {str(p.device) for p in model.parameters()}
-        print(f"  backbone sharded across {len(devs)} GPUs: {sorted(devs)}")
+        print(f"  backbone placed on {len(devs)} GPU(s): {sorted(devs)}")
     model.gradient_checkpointing_enable(
         gradient_checkpointing_kwargs={"use_reentrant": False}
     )

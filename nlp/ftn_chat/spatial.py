@@ -9,6 +9,38 @@ from __future__ import annotations
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
+
+
+@torch.no_grad()
+def lateral_kwta(logits: torch.Tensor, k: int, cfg) -> torch.Tensor:
+    """Exact-k selection followed by the legacy SmoothKWTA lateral dynamics.
+
+    Keep continuous lateral activity between passes; threshold only at the
+    end. Callers supply their own straight-through gradient for mask search.
+    Disabled smoothing consumes no random numbers or convolution work.
+    """
+    mask = kwta(logits, k)
+    steps, polyak = int(cfg.lateral_steps), float(cfg.lateral_polyak)
+    if steps <= 0 or polyak >= 1.0:
+        return mask
+    kernel = int(cfg.lateral_kernel)
+    if kernel < 1 or kernel % 2 == 0:
+        raise ValueError("lateral_kernel must be a positive odd integer")
+    if not 0 <= polyak <= 1 or cfg.lateral_noise_sd < 0:
+        raise ValueError("lateral_polyak must be in [0, 1] and noise nonnegative")
+    activity = mask.float().reshape(1, 1, cfg.grid_dim, cfg.grid_dim)
+    weight = torch.ones((1, 1, kernel, kernel), device=activity.device,
+                        dtype=activity.dtype)
+    pad = kernel // 2
+    for _ in range(steps):
+        padded = F.pad(activity, (pad, pad, pad, pad),
+                       mode="circular" if cfg.torus else "constant")
+        smoothed = F.conv2d(padded, weight)
+        if cfg.lateral_noise_sd > 0:
+            smoothed += torch.randn_like(smoothed) * cfg.lateral_noise_sd
+        activity = polyak * activity + (1 - polyak) * smoothed
+    return kwta(activity.flatten(), k).to(logits.dtype)
 
 
 def kwta(x: torch.Tensor, k: int) -> torch.Tensor:

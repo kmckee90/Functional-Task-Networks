@@ -46,9 +46,10 @@ import math
 
 import torch
 import torch.nn as nn
+from overlap_regularizer import OverlapRegularizer
 
 
-class BayesMaskReconfig:
+class BayesMaskReconfig(OverlapRegularizer):
     """Mixin implementing BayesFTN's persistent-posterior mask inference.
 
     Mix in *before* nn.Module in the MRO. The subclass registers ``self.m``
@@ -75,9 +76,14 @@ class BayesMaskReconfig:
         bayes_changepoint_prior_decay: float = 0.0,
         bayes_changepoint_stochastic_mask: bool = True,
         sample_type: str = "gumbel",
+        overlap_mode: str = "bump",
+        overlap_lambda: float = 0.0,
+        overlap_threshold: float = 0.5,
+        overlap_temperature: float = 0.2,
     ):
         """Validate and store the variational hyperparameters and register the
         persistent ``mask_logits`` buffer. Mirrors BayesFTN.__init__."""
+        self.configure_overlap(overlap_mode, overlap_lambda, overlap_threshold, overlap_temperature)
         if bayes_reconfig_steps < 1:
             raise ValueError("bayes_reconfig_steps must be at least 1")
         if bayes_temperature <= 0:
@@ -206,12 +212,15 @@ class BayesMaskReconfig:
         x, y = x[:n], y[:n]
 
         prior_logits = (prior_decay * self.mask_logits).detach().clone()
+        reference = self._overlap_reference()
         logits = nn.Parameter(prior_logits.clone())
         opt = torch.optim.Adam([logits], lr=lr)
 
         task_value = kl_value = objective_value = float("nan")
         best_loss, best_mask, best_logits = float("inf"), None, None
         best_kl = best_objective = float("nan")
+        best_selection = float("inf")
+        overlap_value = best_overlap = 0.0
         for i in range(steps):
             if self.sample_type == "annealste":
                 sm = torch.sigmoid(logits)
@@ -233,8 +242,13 @@ class BayesMaskReconfig:
             task = self.loss(pred, y)
             kl = self._kl_to_prior(logits, prior_logits, temperature)
             objective = task + kl_weight * kl
+            penalty = self._overlap_penalty(mask, reference)
+            objective = self._with_overlap(objective, mask, reference)
+            selection = self._with_overlap(task, mask, reference)
 
-            if self.bayes_reconfig_take_best and task.item() < best_loss:
+            if self.bayes_reconfig_take_best and selection.item() < best_selection:
+                best_selection = selection.item()
+                best_overlap = penalty.detach().item()
                 best_loss = task.item()
                 best_mask = mask.detach().clone()
                 best_logits = logits.detach().clone()
@@ -247,6 +261,7 @@ class BayesMaskReconfig:
             task_value = task.detach().item()
             kl_value = kl.detach().item()
             objective_value = objective.detach().item()
+            overlap_value = penalty.detach().item()
 
         if self.bayes_reconfig_take_best:
             self.mask_logits.copy_(best_logits)
@@ -254,6 +269,7 @@ class BayesMaskReconfig:
             task_value = best_loss
             kl_value = best_kl
             objective_value = best_objective
+            overlap_value = best_overlap
         else:
             self.mask_logits.copy_(logits.detach())
             self.m.copy_(
@@ -264,6 +280,7 @@ class BayesMaskReconfig:
             "task_loss": task_value,
             "kl": kl_value,
             "objective": objective_value,
+            "overlap_penalty": overlap_value,
             "prior_decay": prior_decay,
             "steps": steps,
         }

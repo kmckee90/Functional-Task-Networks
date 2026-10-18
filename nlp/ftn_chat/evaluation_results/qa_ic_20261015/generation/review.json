@@ -1,0 +1,224 @@
+{
+  "reviewer": "Assistant qualitative review against cached reference and source; not an independent or blinded judge",
+  "rubric": {
+    "correct": "Answers the requested factual content without a material contradiction",
+    "partial": "Some requested facts correct, but an important omission or factual error remains",
+    "incorrect": "Wrong key fact, hallucination, or failure to answer an answerable question",
+    "unscorable": "Reference/source insufficient or ambiguous; excluded from correctness denominator"
+  },
+  "rows": [
+    {
+      "task": "base_ftn",
+      "index": 365,
+      "base": "incorrect",
+      "ic": "incorrect",
+      "reason": "Expected periodic/per-block/reactive; base invents CPU scheduler choices and IC abstains."
+    },
+    {
+      "task": "base_ftn",
+      "index": 908,
+      "base": "correct",
+      "ic": "correct",
+      "reason": "Both explain the square grid and H=square_dim^2."
+    },
+    {
+      "task": "base_ftn",
+      "index": 276,
+      "base": "incorrect",
+      "ic": "incorrect",
+      "reason": "Expected 30 reconfiguration steps; base says 1 and IC says 0."
+    },
+    {
+      "task": "base_ftn",
+      "index": 580,
+      "base": "incorrect",
+      "ic": "incorrect",
+      "reason": "Expected bypass of lateral smoothing at polyak=1; base confuses FTN with FastText and IC claims maximal smoothing."
+    },
+    {
+      "task": "base_ftn",
+      "index": 367,
+      "base": "partial",
+      "ic": "partial",
+      "reason": "Correct temperature direction, but both conflate sampling one-hot labels with training on soft labels and add unsupported objectives."
+    },
+    {
+      "task": "base_ftn",
+      "index": 714,
+      "base": "partial",
+      "ic": "partial",
+      "reason": "Identify a cooldown, but invent wall-clock timers instead of the approximately 1/(1-EMA) batch suppression window."
+    },
+    {
+      "task": "explorer",
+      "index": 1146,
+      "base": "partial",
+      "ic": "partial",
+      "reason": "Mention detachment among speculative alternatives but omit multiplication by (1-restart); neither recalls the complete operation."
+    },
+    {
+      "task": "explorer",
+      "index": 656,
+      "base": "correct",
+      "ic": "correct",
+      "reason": "Both correctly state reservoir RNN weights remain fixed; library attributions are unsupported but do not change the requested fact."
+    },
+    {
+      "task": "explorer",
+      "index": 1166,
+      "base": "correct",
+      "ic": "correct",
+      "reason": "Both give the dictionary mapping str to Any; IC exactly matches built-in dict syntax."
+    },
+    {
+      "task": "base_ftn",
+      "index": 988,
+      "base": "incorrect",
+      "ic": "incorrect",
+      "reason": "Expected parallel per-unit MLPs plus linear readout; base invents multimodal feature fusion, IC abstains."
+    },
+    {
+      "task": "base_ftn",
+      "index": 598,
+      "base": "incorrect",
+      "ic": "incorrect",
+      "reason": "Reference/source specify TORUS=True; both answer no."
+    },
+    {
+      "task": "explorer",
+      "index": 1295,
+      "base": "incorrect",
+      "ic": "incorrect",
+      "reason": "Expected dones_idx[start_idx]; both invent multiplication by batch size."
+    },
+    {
+      "task": "base_ftn",
+      "index": 792,
+      "base": "partial",
+      "ic": "partial",
+      "reason": "Explain local gradient enabling and detached weights but do not clearly identify optimization of mask logits as the purpose."
+    },
+    {
+      "task": "base_ftn",
+      "index": 321,
+      "base": "incorrect",
+      "ic": "incorrect",
+      "reason": "Expected TORUS=True; both say disabled, and IC invents a source comment."
+    },
+    {
+      "task": "explorer",
+      "index": 1760,
+      "base": "correct",
+      "ic": "correct",
+      "reason": "Both explain brute-force distances and linear scaling in memory size; base output cuts off only after stating the core answer."
+    },
+    {
+      "task": "explorer",
+      "index": 1675,
+      "base": "unscorable",
+      "ic": "unscorable",
+      "reason": "Question has a false premise: mask construction uses bounded tensor comparisons, not out-of-bounds indexing; reference is internally inconsistent. Excluded."
+    },
+    {
+      "task": "rl_mt10",
+      "index": 616,
+      "base": "incorrect",
+      "ic": "incorrect",
+      "reason": "Expected current NumPy ring buffer versus separate per-phase self.past dictionaries with actor/critic masks; both invent a single binary current/archive flag."
+    },
+    {
+      "task": "rl_mt10",
+      "index": 2125,
+      "base": "correct",
+      "ic": "correct",
+      "oracle": "correct",
+      "reason": "All correctly state smoothing is disabled at lateral_steps=0, despite IC selecting base_ftn."
+    },
+    {
+      "task": "rl_mt10",
+      "index": 646,
+      "base": "unscorable",
+      "ic": "unscorable",
+      "reason": "Reference explicitly says function implementation is absent and purpose cannot be determined. Excluded from factual correctness denominator."
+    },
+    {
+      "task": "rl_mt10",
+      "index": 1231,
+      "base": "unscorable",
+      "ic": "unscorable",
+      "reason": "Reference explicitly says the annealer implementation is absent and exact impact cannot be determined. Excluded from factual correctness denominator."
+    },
+    {
+      "task": "explorer",
+      "index": 350,
+      "base": "partial",
+      "ic": "correct",
+      "reason": "Base gets EMA/squared distance but invents demonstration-following reward. IC gives squared distance to kth neighbor and novelty normalization, despite hedging."
+    },
+    {
+      "task": "explorer",
+      "index": 866,
+      "base": "correct",
+      "ic": "partial",
+      "reason": "Base explains correct scaling/update. IC gives the formula but incorrectly calls this beta typically .999, reversing the intended slow-update convention."
+    },
+    {
+      "task": "explorer",
+      "index": 1562,
+      "base": "incorrect",
+      "ic": "incorrect",
+      "reason": "Expected scaling by 255; both request source rather than recalling the answer."
+    },
+    {
+      "task": "rl_mt10",
+      "index": 1911,
+      "base": "partial",
+      "ic": "correct",
+      "oracle": "partial",
+      "reason": "IC correctly states unchanged mask and gives matching mixing formula; base and oracle mix contradictory conventions. IC minor computed-versus-skipped detail does not change the requested mask outcome."
+    },
+    {
+      "task": "explorer",
+      "index": 898,
+      "base": "incorrect",
+      "ic": "incorrect",
+      "oracle": "partial",
+      "reason": "The actual forward implements epsilon-greedy. Base and IC deny that; oracle identifies epsilon-greedy but invents discrete Q-value action selection."
+    },
+    {
+      "task": "rl_mt10",
+      "index": 695,
+      "base": "incorrect",
+      "ic": "correct",
+      "reason": "Base invents action logging; IC correctly identifies backing up and restoring m_a around evaluation, although it calls the mask internal state."
+    },
+    {
+      "task": "rl_mt10",
+      "index": 1400,
+      "base": "partial",
+      "ic": "correct",
+      "reason": "Expected ou and simple. Base gives ou and normal; IC names both supported options."
+    },
+    {
+      "task": "rl_mt10",
+      "index": 1396,
+      "base": "incorrect",
+      "ic": "partial",
+      "reason": "Expected uniform-random actions. IC gets the distribution but invents exploration_noise=\"uniform\" instead of the supported simple option; base suggests Gaussian noise."
+    },
+    {
+      "task": "rl_mt10",
+      "index": 911,
+      "base": "incorrect",
+      "ic": "incorrect",
+      "reason": "Both deny mask-aware replay management, missing archived mask-pair chunks and overlap filtering."
+    },
+    {
+      "task": "rl_mt10",
+      "index": 1014,
+      "base": "incorrect",
+      "ic": "incorrect",
+      "reason": "Expected cache marker, environment name, and transition count; base gives generic cache messages and IC invents a filename message."
+    }
+  ]
+}

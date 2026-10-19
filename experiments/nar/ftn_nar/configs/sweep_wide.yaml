@@ -1,0 +1,7 @@
+# dev sweep: wider atoms (64) for the harder non-smooth edge operators
+data: {id_val_count: 256, id_test_count: 512, ood_count: 256}
+configurer: {eval_restarts: 2}
+loss: {final_value: 4.0, trace_value: 2.0}
+optimizer: {minimum_learning_rate: 1.0e-6}
+model:
+  atom_width: 64

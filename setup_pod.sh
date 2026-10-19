@@ -11,9 +11,9 @@
 # After this, bare `uv run python <script>` picks the correct interpreter in
 # every project — no `-p` / `--python` flag needed:
 #
-#   uv run python base/run_experiments.py            # 3.12  (root project)
-#   uv run python rl/robotics/train_mt10_expert.py   # 3.12  (root project)
-#   cd globo_explorer && uv run python train.py      # 3.11  (craftium)
+#   uv run python ftn/run_experiments.py            # 3.12  (root project)
+#   uv run python experiments/rl/robotics/train_mt10_expert.py   # 3.12  (root project)
+#   cd Globo/experiments/original_explorer && uv run python train.py      # 3.11  (craftium)
 #
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -38,18 +38,18 @@ fi
 unset UV_PYTHON   # take effect for the rest of this script too
 
 # --- 2. Root project (Python 3.12) ------------------------------------------
-# base/run_experiments.py, rl/robotics/train_mt10_expert.py, explorer/*, etc.
+# ftn/run_experiments.py, rl/robotics/train_mt10_expert.py, m2e/*, etc.
 ( cd "$HERE" && uv sync )
 
 # --- 3. globo_explorer (Python 3.11 + craftium system libs) -----------------
-bash "$HERE/globo_explorer/setup_pod.sh"
+bash "$HERE/Globo/experiments/original_explorer/setup_pod.sh"
 
 cat <<'EOF'
 
 [setup_pod] done. Open a fresh shell (or `unset UV_PYTHON` in this one), then:
-    uv run python base/run_experiments.py            # 3.12
-    uv run python rl/robotics/train_mt10_expert.py   # 3.12
-    cd globo_explorer && uv run python train.py      # 3.11
+    uv run python ftn/run_experiments.py            # 3.12
+    uv run python experiments/rl/robotics/train_mt10_expert.py   # 3.12
+    cd Globo/experiments/original_explorer && uv run python train.py      # 3.11
 
 After `actl pod commit`, the image carries the system libs + the UV_PYTHON fix,
 so:

@@ -1,0 +1,11 @@
+# Discovery config + lean operator (no latent into operator scalar paths) + rounding.
+steps_per_task: 8000
+n_eval_support_sets: 5
+data: {support_size: 16, query_batch_size: 32, support_candidate_pool: 256,
+       id_val_count: 256, id_test_count: 512, ood_count: 256}
+configurer: {inner_steps: 12, eval_restarts: 4}
+loss: {final_value: 4.0, trace_value: 2.0}
+optimizer: {minimum_learning_rate: 1.0e-6}
+model:
+  op_latent: false
+  round_register: true

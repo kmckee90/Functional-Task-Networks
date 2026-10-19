@@ -1,0 +1,13 @@
+# End-to-end smoke: tiny step counts, reduced eval sets. Not a result.
+steps_per_task: 30
+checkpoint_interval: 20
+boundary_eval_count: 64
+n_eval_support_sets: 2
+data:
+  id_val_count: 64
+  id_test_count: 64
+  ood_count: 32
+configurer:
+  eval_restarts: 2
+model:
+  hard_attention_warmup_steps: 10

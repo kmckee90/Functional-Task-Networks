@@ -1,0 +1,44 @@
+[project]
+name = "functional_task_networks"
+version = "0.1.0"
+description = ""
+requires-python = "==3.12.*"
+dependencies = [
+    # torch+cuDNN are pinned to a cu124-matched set. The uv cache is SHARED across all
+    # projects on this box (UV_CACHE_DIR=/data/.cache/uv), so a torch/cuda churn elsewhere
+    # (e.g. globo_explorer pulling a cu13 build) can poison the cached nvidia-cudnn-cu12
+    # blob: metadata says 9.1.0.70 but binaries are a wrong build -> every conv2d dies with
+    # "cuDNN error: CUDNN_STATUS_NOT_INITIALIZED" (cudaGetDeviceCount != cudaSuccess) even
+    # though plain CUDA matmuls work. A plain `uv sync`/reinstall just re-hardlinks the bad
+    # blob. Fix: `uv cache clean nvidia-cudnn-cu12` then reinstall with
+    # `--refresh-package nvidia-cudnn-cu12 --reinstall-package nvidia-cudnn-cu12`.
+    "torch==2.4.0",
+    "torchvision==0.19.0",
+    "torchaudio==2.4.0",
+    "numpy",
+    "matplotlib",
+    "tqdm",
+    # m2e/ (torch_explorer) experiment_* scripts
+    "pillow>=11.1.0",
+    # ftn/ (func_net_spatial) synthetic task experiment visualizations
+    "imageio",
+]
+
+[project.optional-dependencies]
+cuda = ["jax[cuda12]>=0.4.33"]
+
+
+[tool.uv]
+index-strategy = "unsafe-first-match"
+
+[[tool.uv.index]]
+url = "https://download.pytorch.org/whl/cu124"
+
+[[tool.uv.index]]
+url = "https://storage.googleapis.com/jax-releases/jax_cuda_releases.html"
+
+[tool.ruff]
+lint.ignore = ["F401"]
+
+[tool.ruff.format]
+docstring-code-line-length = 120

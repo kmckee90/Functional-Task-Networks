@@ -21,7 +21,7 @@ dependencies = [
     "matplotlib",
     "tqdm",
     "metaworld>=3.0.0",
-    # explorer/ (torch_explorer) experiment_* scripts
+    # m2e/ (torch_explorer) experiment_* scripts
     "gymnasium>=1.0.0",
     "gym>=0.26.2",
     "ale-py>=0.10.1",
@@ -29,7 +29,7 @@ dependencies = [
     "pillow>=11.1.0",
     "pygame>=2.6.1",
     "dm-control",
-    # base/ (func_net_spatial) synthetic task experiment visualizations
+    # ftn/ (func_net_spatial) synthetic task experiment visualizations
     "imageio",
 ]
 

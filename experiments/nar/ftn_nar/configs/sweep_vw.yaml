@@ -1,0 +1,6 @@
+# dev sweep: heavier value losses
+data: {id_val_count: 256, id_test_count: 512, ood_count: 256}
+configurer: {eval_restarts: 2}
+loss:
+  final_value: 4.0
+  trace_value: 2.0

@@ -1,0 +1,61 @@
+__pycache__
+wandb
+
+.DS_store
+samples
+results
+pretrained_models
+
+# Downloaded datasets and prepared image copies (at any experiment depth).
+data/
+datasets/
+data_cache/
+row_cache/
+raw/
+images/
+real/
+imagenet/
+imagenette*/
+lfw/
+lfw_funneled/
+lfw-deepfunneled/
+vggface2/
+VGGFace2/
+pubfig/
+sit_state/
+hf/
+.cache/huggingface/
+
+# Download archives and encoded datasets / latent caches.
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.tar.bz2
+*.tar.xz
+*.7z
+*.pt
+*.pth
+*.npy
+*.npz
+*.parquet
+*.arrow
+*.h5
+*.hdf5
+*.lmdb
+
+# Experiment artifacts include dataset contact sheets and image copies.
+artifacts/
+
+# Pod runtime products; keep source and small reproducibility manifests tracked.
+.venv/
+venv/
+checkpoints/
+runs/
+*.ckpt
+*.safetensors
+*.bin
+*.log
+
+# Generated validation record, not an experiment definition.
+continual/ic4_recall/recovery_verification.json

@@ -1,0 +1,8 @@
+# Development/discovery settings (design 21.3 budget controls):
+# reduced eval-set sizes and 2 restarts; full training schedule.
+data:
+  id_val_count: 256
+  id_test_count: 512
+  ood_count: 256
+configurer:
+  eval_restarts: 2

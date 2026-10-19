@@ -1,0 +1,20 @@
+{
+  "question": "Can a shared Bayes LoRA FTN atom bank post-train sequential image domains, retain learned domains, and recover useful masks by the original mask inference machinery?",
+  "status": "Protocol recorded before continual training",
+  "backbone": "Official ImageNet pretrained SiT-XL/2 256x256; frozen; original class embeddings retained",
+  "data": "Imagenette2-320, ten classes with original ImageNet labels",
+  "domains": ["photo (never post-trained)", "monochrome", "posterize 2 bits with 1.5x saturation", "inverted blurred edge sketch"],
+  "per_domain_splits": {"train": 2560, "support": 80, "test": 400},
+  "split_note": "Disjoint original source images across train/support/test; same source-image identities paired across styles. Support/test come from Imagenette validation split.",
+  "bank": {"H": 64, "k": 16, "rank": 1, "alpha": 4.0, "b0_scale": 0.01, "bias_bank": true},
+  "targets": ["all 28 blocks: attention qkv/proj and MLP fc1/fc2"],
+  "inference": "Unchanged bayesian_adv/bayes_reconfig.py; 2 persistent updates, beta=1, T=3, Adam lr=.3; 30-step loss-triggered change-point refits; cold evaluation starts at zero, 30 steps, T=1, one restart, final deterministic top-k (take_best=False)",
+  "training": {"steps_per_domain": 1500, "batch": 16, "lr": 0.0001, "optimizer": "Adam; reset moments per block as original runner", "label_dropout": 0.1, "ema": false, "precision": "bfloat16 autocast, float32 parameters and losses"},
+  "budget_note": "Increased planned 600 to original method's 1500 updates per block after GPU throughput benchmark, before substantive training; smoke uses only two updates per domain for API verification.",
+  "replay": {"batches_stored_per_block": 32, "images_per_batch": 4, "batches_replayed_per_step": 1, "overlap_low_exclusive": 0.2, "overlap_high_inclusive": 0.8, "loss_weight": 1.0, "mask": "stored mask; updates all its active atoms"},
+  "evaluations": {"support_budgets": [4, 40], "query_images": 200, "protocols": ["cold", "stored final-training mask", "current mask", "random mask", "zero-mask base"], "rng": "fixed paired noise, times and search seeds; evaluation restores training RNG and mask state", "generation": "20 images per domain/stage, fixed seeds/classes, Heun 50 steps, original CFG=4 implementation"},
+  "runs": ["replay and no-replay paired at seeds 123/124/125", "ordinary LoRA matched active rank at seed123", "replay reversed domain order at seed123"],
+  "optional_input_prior": "Implemented fixed PCA keys on pooled clean latents and retrieved logits; direct/refine/fallback variants. Off for primary runs; evaluate diagnostically if cold recall fails.",
+  "limitations": ["Controlled synthetic style domains, not independent real-world domain corpora", "Known block schedule resets optimizer but does not force mask boundaries", "Frozen base recovery alone is not evidence of learned-domain retention", "Velocity MSE and qualitative grids require generated-distribution checks for image-quality claims", "Bank capacity and replay budget reduced from toy defaults for transformer compute; mechanism preserved"],
+  "reporting": "Report failures and negative results. Separate adaptation, atom retention, mask recovery, and prospective performance relative to each domain's initial baseline. No test examples or test-loss tuning in training or inference."
+}

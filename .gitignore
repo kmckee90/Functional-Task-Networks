@@ -22,7 +22,7 @@ checkpoints_*/
 results/
 figures/
 images/
-configs/
+# Experiment configurations are source, not generated artifacts.
 gifs/
 data_cache/
 expert_data/
@@ -72,8 +72,57 @@ nohup.out
 *.csv
 *.pdf
 
-*artifacts*
+*artifacts*/
 
-metrics*
+metrics*.json
+metrics*.jsonl
+metrics*.csv
 
 outputs/
+
+# Independent upstream checkouts and the separately published website.
+# Our extracted experiment source lives under experiments/.
+/SiT/
+/ViZDoom/
+/experiments/sit/sit/
+/experiments/doom/vizdoom/
+/clrs/
+/experiments/clrs/clrs/
+/nlp/nanoGPT/
+/experiments/nlp/nanoGPT/
+/proposal_githubio/
+/nascent/proposal_githubio/
+# E2E remains an explicitly deferred integration; see docs/refactoring/README.md.
+/e2e/
+/experiments/e2e/
+
+# Additional generated media, datasets, replay, and caches.
+*.jpg
+*.jpeg
+*.webp
+*.webm
+*.avi
+*.mov
+*.wav
+*.mp3
+*.pkl
+*.pickle
+*.parquet
+*.arrow
+*.h5
+*.hdf5
+*.lmdb
+*.wad
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+datasets/
+replay/
+replay_buffer/
+tensorboard/
+.cache/
+/experiments/doom/wad/
+/exploration_results/
+/docs/
+/nascent/

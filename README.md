@@ -19,23 +19,45 @@ functional_task_networks/
 │                             transfer + backward recall, "both" variants)
 │                           • vis_ftn.py / viz_latents*.py — binary-mask EMA
 │                             rasters (purple↔blue) and latent demos
-├── base/                 base synthetic continual-learning experiments
+├── ftn/                  core FTN and continual-learning experiments
 │   │                     (classification / regression / MNIST knowledge
 │   │                     transfer; primary lineage = func_net_kt)
 │   └── streams_project_c/  real-world concept-drift streams (ELEC2, energy)
-├── rl/                   reinforcement-learning applications
-│   ├── robotics/         FTN-DDPG on MetaWorld MT10 + grid DQN/PPO
-│   ├── atari/            FTN-DQN (PyTorch)
-│   └── atari_jax/        FTN-DQN (JAX)
-├── nlp/                  natural-language / transformer + LoRA applications
-│   ├── ftn_lora/         FTN-LoRA: bank of LoRA atoms on a frozen LLM
-│   ├── ftn_chat/         live perplexity-routed expert-chat demo app
-│   └── lora_mux/         LoRA-multiplexing style-transfer experiments
+├── m2e/                  original M2E explorers, environments, and experiments
+├── Globo/                shared Craftium game, WarpCraft alternative, and experiments
+│   ├── craftium/game/    authoritative Lua game source
+│   ├── warpcraft/explorer/ inactive JAX explorer
+│   └── experiments/     current globo_dreamer and original explorer
+├── experiments/
+│   ├── rl/               FTN-DDPG robotics and Atari DQN (PyTorch/JAX)
+│   ├── nlp/              FTN-LoRA, expert chat, and LoRA multiplexing
+│   ├── nar/              neural algorithmic reasoning experiments
+│   ├── options/          option learning and planning prototypes
+│   ├── sit/              continual diffusion experiments + sit dependency
+│   ├── doom/             FTN-M2E agent + vizdoom dependency
+│   ├── clrs/             experiment notes + clrs dependency
+│   ├── e2e/              independent E2E experiment repository
+│   └── ftn_robotics/     independent robotics experiment repository
 └── manuscripts/          papers (arxiv / neurips / icml formatted LaTeX)
     └── spatial_drafts/   earlier func_net_spatial drafts (v4/v5, ICML, CATS)
 ```
 
 ## Modularity
+
+The `functional-task-networks` pod syncs this entire repository's source to
+`/home/dev/repo_source`. Start/reconnect it with `bash connect.sh` locally
+(defaults to a small CPU profile; pass `--profile` when compute is needed).
+Generated data, checkpoints and media are excluded. The retained environment is
+`/home/dev/workspace/.venv/bin/python`; the old checkout is preserved.
+For example, on the pod:
+
+```bash
+PYTHON=/home/dev/workspace/.venv/bin/python bash /home/dev/repo_source/ftn/run.sh ftn/run_experiments.py --help
+PYTHON=/home/dev/workspace/.venv/bin/python bash /home/dev/repo_source/m2e/run.sh experiment_dm_control.py --help
+```
+
+M2E uses this same repo-wide workspace. Its connect helper delegates to the root
+helper. Project-specific pods can still sync their own folders independently.
 
 `src/` holds the genuinely shared core. Each application folder is a
 **self-contained subproject** that currently keeps its own working copy of the
@@ -51,10 +73,11 @@ superset of the eval-matrix plots.
 
 Anything an experiment produces is written into **organized, git-ignored**
 folders: `output/`, `checkpoints/`, `results/`, `figures/`, `images/`,
-`configs/`, `gifs/`. None of these are committed (see `.gitignore`). Source,
+`gifs/`. New generated files are ignored (see `.gitignore`); existing tracked
+publication assets remain tracked. Source configuration directories are retained. Source,
 small config/table assets, and LaTeX live in git; generated data does not.
 
-> **Note (follow-up):** `rl/robotics` already routes its artifacts into
+> **Note (follow-up):** `experiments/rl/robotics` already routes its artifacts into
 > `output/{results,images,configs}/`. Other subprojects still write to their
 > historical `results/` and `figures/` folders (git-ignored); pointing them at a
 > single `output/` root is a straightforward later cleanup.

@@ -1,0 +1,8 @@
+**/craftium_globo_env/
+**/craftium_play_env/
+**/__pycache__/
+**/.venv/
+**/runs/
+**/artifacts/
+# Game textures, sounds and packaging assets are source, not generated results.
+!craftium/game/**

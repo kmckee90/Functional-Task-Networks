@@ -1,0 +1,32 @@
+{
+  "SiT": {
+    "url": "https://github.com/willisma/SiT.git",
+    "commit": "cbde832a40b153ccc79603412409da9c9b0c568c",
+    "checkout": "experiments/sit/sit",
+    "experiment": "experiments/sit"
+  },
+  "ViZDoom": {
+    "url": "https://github.com/Farama-Foundation/ViZDoom.git",
+    "commit": "50297d2fe6cb8c5c1e9f7f617659a2f5ca9e56ce",
+    "python_package": "vizdoom==1.3.2",
+    "checkout": "experiments/doom/vizdoom",
+    "experiment": "experiments/doom"
+  },
+  "clrs": {
+    "url": "https://github.com/google-deepmind/clrs.git",
+    "commit": "9f77b53b8fcfb3452f4de13219daa99268045977",
+    "checkout": "experiments/clrs/clrs",
+    "experiment": "experiments/clrs"
+  },
+  "nanoGPT": {
+    "url": "https://github.com/karpathy/nanoGPT.git",
+    "commit": "3adf61e154c3fe3fca428ad6bc3818b27a3b8291",
+    "checkout": "experiments/nlp/nanoGPT"
+  },
+  "e2e": {
+    "url": "https://github.com/zycyc/e2e.git",
+    "head_at_inventory": "d42a62585f212571249e5469043faf8e948411fa",
+    "checkout": "experiments/e2e",
+    "status": "Moved intact, including working tree and staged changes; HEAD alone does not reproduce these experiments."
+  }
+}

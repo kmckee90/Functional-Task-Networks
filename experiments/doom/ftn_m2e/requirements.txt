@@ -1,0 +1,6 @@
+vizdoom==1.3.2
+av==19.0.1
+pillow==12.3.0
+numpy==2.5.4
+scipy==1.18.1
+# PyTorch 2.6.0+cu126 comes from the pod's /app/.venv (H200 validated).

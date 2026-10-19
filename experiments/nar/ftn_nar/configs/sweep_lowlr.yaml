@@ -1,0 +1,5 @@
+# dev sweep: lower floor LR
+data: {id_val_count: 256, id_test_count: 512, ood_count: 256}
+configurer: {eval_restarts: 2}
+optimizer:
+  minimum_learning_rate: 1.0e-6

@@ -1,0 +1,8 @@
+# Licensed game assets and agent-produced data are never committed.
+wad/
+data/
+checkpoints/
+replay/
+logs/
+runs/
+*.jsonl

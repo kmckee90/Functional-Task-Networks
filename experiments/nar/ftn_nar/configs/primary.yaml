@@ -1,0 +1,36 @@
+# Frozen primary configuration.
+#
+# Hyperparameters tuned only on the dev fold (MIN_ADD, seeds 0-1) + seen-task
+# validation, per design 15.5. Deviations from the doc's section-24 defaults, with
+# the measurement that justified each (all on the SINGLE_TASK specialist gate 17.2):
+#
+#   loss beta 1/1024 -> 1/16384 : with beta=1/1024 the SmoothL1 quadratic region has
+#       vanishing gradient at MAE~0.3/node, pinning node accuracy at ~86%. Sharper
+#       beta reaches >99% node / >95% exact.
+#   final_value 1 -> 4, trace_value 0.5 -> 2 : value is the exact-match target; the
+#       default weights let pointer/reached losses dominate.
+#   minimum_learning_rate 3e-5 -> 1e-6 : the 3e-5 floor re-perturbs a converged
+#       executor late in each block (accuracy oscillates); annealing to ~0 lets it
+#       settle.
+#   steps_per_task 2000 -> 8000 : specialist exact-graph accuracy vs steps ->
+#       ADD/SUB clear 95% by ~4k, but the non-smooth MAX_EDGE/MIN_EDGE extenders
+#       need ~10-12k (0.83@4k, 0.89@6k, 0.98@12k). 8000 is the compromise; edge
+#       folds sit at ~0.94-0.96, additive folds saturate.
+steps_per_task: 8000
+n_eval_support_sets: 10
+data:
+  support_size: 16
+  query_batch_size: 32
+  support_candidate_pool: 256
+  id_val_count: 512
+  id_test_count: 1024
+  ood_count: 512
+configurer:
+  inner_steps: 12
+  train_restarts: 1
+  eval_restarts: 4
+loss:
+  final_value: 4.0
+  trace_value: 2.0
+optimizer:
+  minimum_learning_rate: 1.0e-6

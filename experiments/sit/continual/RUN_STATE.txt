@@ -1,0 +1,172 @@
+SiT continual-learning experiment, started 2026-09-29 (pod UTC date Sep 30)
+
+User authorized implementation, training on all 8 pod GPUs, analysis, and a
+clear honest report with demos and backward/prospective xfer matrices. No code
+execution on the laptop; local source edits and file reads only. Use actl sync,
+not manual source uploads. The original Bayes LoRA idea must not be tuned into
+a guaranteed success. Input-conditioned priors are optional diagnostics.
+
+CURRENT TASK COMPLETE: All SD5/SD3/SD1 runs finished training and generation.
+All six lower-threshold workers exit0; reactive_finished.json confirms audits
+and reports complete. Independent sweep audit passed. Combined artifacts:
+artifacts/reactive_sweep/report.html and xfer_thresholds.png.
+Final SD3 KID (mono/poster/sketch): cold4 .01512/.01816/.09890;
+cold40 .01454/.02111/.01151; ICrefine4 .01698/.02048/.01507.
+Image quality thus supports IC+refinement more than MSE alone suggested,
+and qualifies cold4: good earlier-style retention, weaker sketch generation.
+SD3 CP counts11/10/16; SD1 counts218/217/221, bank almost fully used eachblock.
+Historical handoff below is retained; its pending-status statements are stale.
+
+User requested BayesLoRAReactiveLow, same experiment,
+with/without IC, to test replay-free learning of disjoint masks.
+LATEST STEERING: User asked whether changepoint detection was an issue and
+explicitly authorized lowering the SD threshold. SD5 training is complete:
+all3 seeds only initial CP; masks identical across blocks; old styles forgotten.
+User-authorized SD3/SD1 sweep now launched via reactive_sweep_launch (PID8286).
+Seeds123 start on GPUs6/7 while SD5 quality uses0-5. Remaining seeds124/125
+wait for SD5 quality completion then run on0-3. Each of6 runs gets same1500
+steps/domain, sourceLR3e-4, no replay/repair, paired cold/IC evaluation.
+Only --reactive-sd changes. Status reactive_sweep_status.json, per-run logs
+bayes_reactive_low_sd{1,3}_s{123,124,125}.log under /home/dev/sit_state.
+Original SD5 final means: ICdirect mono .90164 poster .96560 sketch .70335;
+cold40 mono .71103 poster .73769 sketch .70388; cold4sketch .74651.
+Thus cold recovers mostly frozen-base behavior on old domains, not adaptation.
+New verification accepts --sweep; reactive_report accepts --sd 1 or --sd 3.
+SD5 quality and independent audit now COMPLETE/PASSED. First sketch batches
+were 4.567/4.311/1.924 sigma above EMA (seeds123/124/125), below SD5.
+All six lower-threshold jobs are now active; SD5 GPUs released.
+reactive_progress.py gives compact read-only sweep progress on the pod.
+reactive_finish.py waits for all6 then audits and generates per-threshold and
+combined reports; completion marker /home/dev/sit_state/reactive_finished.json.
+Detached finalizer PID9403 (PPID1); log reactive_finish.log. Both supervisor
+and finalizer confirmed alive. Do not relaunch them while they are active.
+First completed SD3 seed123: 11 total CPs (4/4/3 per block); no CP within
+first50 batches of either transition. Final cold40 mono .70534, poster .71664,
+sketch .70480; ICdirect mono .76822, poster .97534. This is provisional one-seed
+evidence, not the aggregate conclusion. SD1 has ~75 CPs in first domain in
+each seed and uses all64 atoms within a block. All6 jobs remain healthy.
+Automatic final output: artifacts/reactive_sweep/report.html and
+artifacts/reactive_sweep/xfer_thresholds.png. Review completed aggregate and
+sample images after reactive_finished.json appears; report script includes
+numeric outcome interpretation, all thresholds/seeds, and audit links.
+Remaining: monitor lower thresholds; build all reports and
+combined comparison/xfer, inspect images, deliver all outcomes honestly.
+Read source config: stable1step/lr0/deterministic, original stochastic30step
+change-point reset; SD5 EMA.9, exact ceil warmup11, inherited train lr3e-4.
+Source snapshot copied byte-identically; SHA256
+740f6eecd786b73c17433aae53c7339abb19a6e6d26e22946c315017b8135a7b.
+User explicitly confirmed keeping the SiT64/k16/r1 bank while applying
+exact reactive settings and the source training LR (async answer received). Protocol
+explicitly records the architecture adaptation; do not call it literal config.
+Three seed123/124/125 training jobs launched detached under reactive_launch.
+Supervisor7524; status /home/dev/sit_state/reactive_status.json; logs
+/home/dev/sit_state/bayes_reactive_low_s123/124/125.log. Training GPUs0/1/2;
+then reactive_quality splits generation onto0-5. No replay stored, no repair.
+IC train prior and novelty off, so evaluate cold4/cold40/IC direct/refine4 on
+same trained weights. IC keeps prior SiT PCA rank8/threshold.5/known-block
+archive adaptation, not source toy rank2/.1/change-point archive schedule.
+New scripts reactive_low_check.py (passed), reactive_launch.py,
+reactive_quality.py, reactive_report.py. Report includes frozen-base and
+initial-adapter baseline rows, detector plots, mask-overlap audits.
+Independent audit script reactive_verify.py passed for original SD5.
+It checks detector decisions, stable masks, no replay, baseline fallback,
+inactive atom invariance and boundary z-scores. Final interpretation pending.
+
+PREVIOUS FOLLOW-UP COMPLETE: User requested input-conditioned mask repair.
+Implemented InputPrior.repair_from_replay and run.py --ic-repair.
+repair_launch supervisor completed three existing replay seeds successfully;
+status /home/dev/sit_state/repair_status.json, logs repair_123/124/125.log.
+Mask-only maintenance at each frozen block checkpoint, carrying repairs;
+32 unique replay fit +32 validation images, 100 steps x3 restarts, take_best.
+No weights or original training outputs changed. A first evaluation attempt
+was restarted to pair router-miss fallback search seeds across methods.
+Contract and independent result checks passed; all GPUs idle.
+Final poster MSE raw .9504 -> repaired .7266 (cold40 .7236).
+Monochrome .7262 -> .7125 (cold40 .7094); sketch .7080 unchanged.
+Poster KID .0946 -> .0195 (cold40 .0327); monochrome .0200 -> .0172.
+8/9 repairs accepted; deterministic refinement leaves masks unchanged.
+Some repaired samples still show style errors; novelty routing is unresolved.
+Verified all fit/validation images came from stored training replay, disjoint
+from each other and evaluation data; old baselines reproduced exactly.
+48 quality records, 33 unique 200-image sets (6,600 generated images).
+Full follow-up report + matched demo + xfer: artifacts/repair/report.html.
+Regenerate on pod:
+python -m continual.repair_verify
+python -m continual.repair_report
+
+ORIGINAL STUDY STATUS: All eight training/quality workers completed with exit code 0.
+Three optional frozen-final-model inference diagnostics also completed.
+All eight GPUs are idle; pod and persistent data are preserved.
+Results: partial success, not zero forgetting. Cold inference recovers useful
+earlier styles despite stale saved masks. Replay preserves ~81% of poster's
+initial loss gain vs ~25% without replay, but is not better on every metric.
+Four-reference sketch inference is weaker than forty-reference inference.
+Unrepaired PCA input priors retrieve the correct learned-domain entry but
+its stale mask is poor; deterministic refinement did not change the mask.
+Original reactive detector fired only at initialization, missing boundaries.
+Final report and interactive demo: continual/artifacts/report.html and demo.html.
+Raw lifecycle matrices, KID, diagnostics and mask audit are in artifacts/.
+Independent completion audit passed: 36,000 updates, 64 quality records,
+12,800 metric-generation images, no exact byte duplicates across data splits.
+Audit details: artifacts/verification.json. Re-run: python -m continual.verify_results
+
+Pod: actl pod exec sit -n obelisk -- sh -lc '...'
+Remote source: /home/dev/workspace
+Runtime: /home/dev/sit_state/env/bin/python (system torch 2.9.0+cu126)
+Persistent data/checkpoints/logs: /home/dev/sit_state
+Local source: SiT/continual/
+Generated, automatically synced report artifacts: SiT/continual/artifacts/
+
+Detached supervisor launched successfully with parent PID 1; PID 1306.
+Command: python -u -m continual.launch --steps 1500
+Status: /home/dev/sit_state/supervisor_status.json
+Logs: /home/dev/sit_state/<run_name>.log
+Supervisor runs one worker per GPU; each worker trains then runs quality.py.
+Do not duplicate these jobs. Inspect status/logs first after reconnection.
+
+GPUs 0/1: bayes_replay_s123 / bayes_noreplay_s123
+GPUs 2/3: bayes_replay_s124 / bayes_noreplay_s124
+GPUs 4/5: bayes_replay_s125 / bayes_noreplay_s125
+GPU 6: plain_lora_s123 (matched active rank, fewer total bank parameters)
+GPU 7: bayes_replay_reverse_s123 (sketch -> poster -> monochrome)
+
+See protocol.json for frozen design. 1500 updates/domain, batch16, lr1e-4,
+H64/k16/rank1/alpha4, original reactive detector, 2-step persistent posterior,
+30-step cold/change-point inference. Source Bayesian mixin is byte-identical
+to base/projects/bayesian_adv/bayes_reconfig.py, SHA256
+1bdd3c9a59b870ea413e57202cdc8ac84ec8d77f30455991f5c294c575ecc028.
+Replay stores first32 batches x4 images/domain, selects overlap (.2,.8], one
+replay loss/step under old mask; no gradient restriction to the intersection.
+Original per-block Adam reset retained; no forced mask reset at boundaries.
+
+Data: Imagenette2-320, original ImageNet labels, frozen official SiT-XL/2.
+Four paired image domains: photo (never post-trained), monochrome, poster,
+sketch. 2560 training/80 reference/400 test originals disjoint across splits.
+No test images used for training/inference. VAE mode latents, scale .18215.
+40 reference images (4/class) or 4 references (first4 classes); query200.
+Fixed paired eval noise/times and seeds, restore training RNG and mask state.
+No EMA. Samples: Heun50, original CFG4 behavior, 20 images/domain/stage.
+Quality: CleanFID KID, 200 generated/400 held-out real; all stages for replay/
+no-replay seed123, final stage for other runs; final stored masks also for123.
+
+Completed checks: dense bank matches explicit einsums; inactive atom task
+gradients zero, inactive mask gradients available; mask inference does not
+update atoms; cold inference preserves posterior logits; zero-mask pretrained
+SiT output exactly equals original unwrapped SiT. FP32 bias promotion was
+fixed before primary runs to preserve autocast behavior. Small SiT checks and
+three-block two-step smoke passed. Smoke is not substantive evidence.
+Benchmark: ~.21s/update incl2 posterior steps without replay, ~51.6M trainable.
+Data prep complete, original checkpoint SHA stored in data_manifest.json.
+CleanFID extractor downloaded and verified. A first uv-created venv is
+incomplete and unused; use env/, not venv/.
+
+Rebuild artifacts on the pod in this order:
+python -m continual.artifacts
+python -m continual.summarize
+python -m continual.demo
+python -m continual.finalize_report
+The finalizer adds outcome-led interpretation and checks local HTML links.
+The diagnostics were run on replay seeds123/124/125 with weights frozen.
+No second training run or hyperparameter selection used test outcomes.
+
+All work so far stays in SiT/. Existing unrelated dirty user files untouched.

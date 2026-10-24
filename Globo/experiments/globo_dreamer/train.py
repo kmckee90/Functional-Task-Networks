@@ -32,6 +32,8 @@ def main():
     p.add_argument('--render-size', type=int, choices=(64,256), default=64)
     p.add_argument('--reduced-actions', action='store_true',
                    help='14 actions: idle, movement/look, dig and place; no inventory or sneak')
+    p.add_argument('--inventory-actions', action='store_true',
+                   help='18 actions: the reduced 14 plus selection of inventory slots 1–4')
     p.add_argument('--mf-init-weights', help='Immutable weights-only warm-start file; ignored on own checkpoint resume')
     p.add_argument('--spawn', default='11,5.1,121')
     p.add_argument('--size', default='size12m')
@@ -158,7 +160,7 @@ def main():
     env = Globo(root / 'environment', seed=args.seed if args.world_seed is None else args.world_seed, episode_steps=args.episode_steps,
                 video_every=0 if args.continuous_monitor else args.video_every, spawn=args.spawn,
                 bounded_artifacts=args.continuous_monitor, render_size=args.render_size,
-                reduced_actions=args.reduced_actions)
+                reduced_actions=args.reduced_actions, inventory_actions=args.inventory_actions)
     if args.achievements:env.enable_achievements()
     if args.dreamer_novelty_only:
         env.novelty_fn=lambda image:0.

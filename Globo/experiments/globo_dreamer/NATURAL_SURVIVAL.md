@@ -23,7 +23,7 @@ Artifacts: /mnt/obelisk-shared/kmckee90/globo_natural_survival, outside sync.
 Life retention is controlled live through `life_settings.json` and the monitor's
 `/api/life-settings` endpoint: `minimum_minutes` is a nonnegative integer.
 Default 0 keeps every finalized life. Positive values retain lives strictly
-longer than that many game minutes. Recorder checks at life completion; monitor
-also prunes already finalized shorter videos. Active recordings are untouched.
-Lowering the threshold cannot recover already deleted videos. Event clips and
+longer than that many game minutes. Recorder checks at life completion, including
+lives in progress when the setting changes. Previously saved videos remain
+visible and are never pruned by the monitor. Event clips and
 lifespan/achievement logs are not filtered by this setting.

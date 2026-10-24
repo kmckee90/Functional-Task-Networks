@@ -105,6 +105,7 @@ def launch(pod):
 
 PUBLISH_FILES=('status.json','architecture.json','launch.json','environment/achievements.json',
     'live/survival.json','live/history.jsonl','live/progress.json','live/video.json','live/obs.mp4','live/bw.mp4',
+    'live/obs_display.mp4','live/clip_consolidation.json',
     'live/mask.html','live/mask_video.json','live/clip_consolidation.json','live/visitation.json',
     'live/human.mp4','live/agent_input.mp4','live/recent.mp4','live/mask_status.json','live/goal_status.json','live/active_goal.jpg','live/frontier_goal.jpg','live/offline_goal.mp4','live/events.jsonl')
 

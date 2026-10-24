@@ -379,6 +379,7 @@ def main():
                     if t.get('mf_init_weights'):cmd.extend(['--mf-init-weights',t['mf_init_weights']])
                     if t.get('m2e_ftn'):cmd.extend(['--m2e-ftn',t['m2e_ftn']])
                     if t.get('reduced_actions'):cmd.append('--reduced-actions')
+                    if t.get('inventory_actions'):cmd.append('--inventory-actions')
                     if t.get('m2e_ftn_k'):cmd.extend(['--m2e-ftn-k',str(t['m2e_ftn_k'])])
                     if t.get('frontier_ftn'):cmd.extend(['--frontier-ftn',t['frontier_ftn']])
                     if t.get('plan2explore'):
@@ -432,6 +433,7 @@ def main():
                     if t.get('single_place'):env['GLOBO_SINGLE_PLACE']='1'
                     if t.get('lifetime_v2'):env['GLOBO_LIFETIME_V2']='1'
                     if t.get('block_stack_capacity'):env['GLOBO_BLOCK_STACK_CAPACITY']=str(t['block_stack_capacity'])
+                    if t.get('collected_stack_capacity'):env['GLOBO_COLLECTED_STACK_CAPACITY']=str(t['collected_stack_capacity'])
                     if t.get('frontier_rotation') is False:env['GLOBO_FRONTIER_ROTATION']='0'
                     if t.get('phase')=='phase2':env['GLOBO_CLIP_SETTINGS']='/mnt/obelisk-shared/kmckee90/globo_phase2/clip_settings.json'
                     if t.get('phase')=='phase3':env['GLOBO_CLIP_SETTINGS']='/mnt/obelisk-shared/kmckee90/globo_phase3/clip_settings.json'

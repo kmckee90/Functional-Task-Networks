@@ -72,6 +72,10 @@ minetest.register_tool(
     "main:lay_egg_disabled", {
         description = "Not enough hunger or energy to lay an egg.",
         inventory_image = "lay_egg_disabled.png",
+        on_use = function(itemstack, user)
+            globo.chat_send_player(user:get_player_name(), "Not enough hunger or energy to lay an egg.")
+            return itemstack
+        end,
     }
 )
 
@@ -99,3 +103,9 @@ minetest.register_tool(
         end,
     }
 )
+
+-- Match standalone play: either use button activates abilities, even in air.
+for _, name in ipairs({"main:lay_egg", "main:lay_egg_disabled", "main:sleep"}) do
+    local use = minetest.registered_items[name].on_use
+    minetest.override_item(name, {on_place = use, on_secondary_use = use})
+end

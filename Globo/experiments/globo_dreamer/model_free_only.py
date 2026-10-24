@@ -85,6 +85,8 @@ def train_model_free(args, root, env):
         applet=LiveApplet(args.live_port, location_path=root/'live'/'goal_sightings.sqlite')
     def on_step(transition,worker):
         step.increment()
+        from .video_hud import values
+        transition=dict(transition, **{'log/video_hud':values(env.record)})
         if behavior.agent.capture_input:
             transition=dict(transition, **{'log/human':env.human_frame,
                 'log/m2e_input':behavior.agent.last_input,

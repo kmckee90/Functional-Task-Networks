@@ -56,7 +56,7 @@ class EventCapture:
             for pending in self.pending:self.submit(pending,'life ended before post-event window completed')
             self.pending=[];self.frames.clear();self.last_frame=-1e30;self.life=life
         events=self.triggers.observe(record)
-        frame=(now,step,{k:np.array(row[k],copy=True) for k in ('log/human','log/m2e_ftn_ema','log/offline_goal','log/offline_goal_step') if k in row})
+        frame=(now,step,{k:np.array(row[k],copy=True) for k in ('log/human','log/m2e_ftn_ema','log/offline_goal','log/offline_goal_step','log/video_hud') if k in row})
         self.frames.append(frame)
         for pending in self.pending:pending['rows'].append(frame)
         if events:
@@ -100,18 +100,20 @@ class EventCapture:
         stem=f'{p["event_step"]:012d}_{label}_{time.time_ns()}'
         target=self.root/(stem+'.mp4');tmp=self.root/(stem+'.pending.mp4')
         out=av.open(str(tmp),'w');stream=out.add_stream('libx264',rate=FPS)
-        stream.width=384;stream.height=280;stream.pix_fmt='yuv420p';stream.options={'crf':'18','threads':'1'}
+        from .video_hud import HEIGHT, draw as draw_hud
+        stream.width=384;stream.height=HEIGHT;stream.pix_fmt='yuv420p';stream.options={'crf':'18','threads':'1'}
         rows=sample_frames(p['rows'],p['event_step'])
         event_index=next(i for i,r in enumerate(rows) if r[1]==p['event_step'])
         try:
             for i,(_,step,row) in enumerate(rows):
-                canvas=Image.new('RGB',(384,280),'#171c24');draw=ImageDraw.Draw(canvas)
+                canvas=Image.new('RGB',(384,HEIGHT),'#171c24');draw=ImageDraw.Draw(canvas)
                 canvas.paste(Image.fromarray(row['log/human']).resize((256,256)),(0,24))
                 mask=row['log/m2e_ftn_ema'][p['layout']].reshape(*p['grid'],3)
                 canvas.paste(Image.fromarray(mask).resize((128,128),Image.Resampling.NEAREST),(256,152))
                 if int(row.get('log/offline_goal_step',-1))>=0:
                     canvas.paste(Image.fromarray(row['log/offline_goal']).convert('RGB').resize((128,64),Image.Resampling.NEAREST),(256,52))
                 draw.text((5,5),f'Step {step:,}',fill='white');draw.text((260,5),'Goal / mask',fill='white')
+                draw_hud(canvas,row.get('log/video_hud'))
                 for packet in stream.encode(av.VideoFrame.from_image(canvas)):out.mux(packet)
             for packet in stream.encode():out.mux(packet)
         finally:out.close()

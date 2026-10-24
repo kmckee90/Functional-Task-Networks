@@ -288,14 +288,15 @@ def render(root,rows,step,ftn):
     import av
     from PIL import Image,ImageDraw
     from .env import atomic_json
+    from .video_hud import HEIGHT, draw as draw_hud
     ftn.consolidate()
     out=av.open(str(root/'obs_pending.mp4'),'w');stream=out.add_stream('libx264',rate=6)
     goals=hasattr(ftn,'options')
     offline_goals='log/offline_goal' in rows[0][1]
     width=768 if goals or offline_goals else 512
-    stream.width=width;stream.height=280;stream.pix_fmt='yuv420p'
+    stream.width=width;stream.height=HEIGHT;stream.pix_fmt='yuv420p'
     for n,row in rows:
-        canvas=Image.new('RGB',(width,280),'#171c24')
+        canvas=Image.new('RGB',(width,HEIGHT),'#171c24')
         canvas.paste(Image.fromarray(row['log/human']),(0,24))
         mask=row['log/m2e_ftn_ema'][ftn.layout].reshape(*ftn.grid,3)
         canvas.paste(Image.fromarray(mask).resize((256,256),Image.Resampling.NEAREST),(256,24))
@@ -319,6 +320,7 @@ def render(root,rows,step,ftn):
                 for label,g,y in (('Waypoint',goal,24),('Frontier',final,152)):
                     if g:canvas.paste(Image.open(io.BytesIO(ftn.options[g]['image'])).resize((128,128)),(512,y))
                     draw.text((646,y+8),f'{label} {g}' if g else 'Exploring',fill='white')
+        draw_hud(canvas,row.get('log/video_hud'))
         for packet in stream.encode(av.VideoFrame.from_image(canvas)):out.mux(packet)
     for packet in stream.encode():out.mux(packet)
     out.close();(root/'obs_pending.mp4').replace(root/'obs.mp4')

@@ -134,27 +134,33 @@ All axes extend to the furthest run. Each condition’s mean and bounds stop at 
         parts.append('</div><section id="survival-lifespans"><h2>Survival runs · lifespan after the fork</h2><p>Survival-reward runs only. Each point is one completed life, with no smoothing or averaging. The horizontal axis starts at zero at each survival fork and ends at the furthest of these survival runs; each line extends to its own latest completed life. Game time excludes training time. Ongoing and interrupted lives are excluded.</p>')
         parts.append(fork_charts(survival_trials,SHARED))
         parts.append('</section><div>')
-    parts.append('</div><h2>Current reduced-action runs</h2><p>Videos show the real trajectory, frontier goal and FTN activity. Updated clips overwrite their predecessors.</p><label>Clip length <select id="frames"><option value="64">10.7 s</option><option value="128">21.3 s</option><option value="192">32 s</option><option value="256">42.7 s</option></select></label> <button id="apply">Apply</button> <span id="message"></span>')
+    parts.append('</div><h2>Current agents</h2><p>Videos show the real trajectory, frontier goal and FTN activity. Updated clips overwrite their predecessors.</p><label>Clip length <select id="frames"><option value="64">10.7 s</option><option value="128">21.3 s</option><option value="192">32 s</option><option value="256">42.7 s</option></select></label> <button id="apply">Apply</button> <span id="message"></span>')
     for t in current:
         root = SHARED/'runs'/t['name'];live=root/'live'
         s=read(root/'status.json');e=s.get('environment') or {};v=read(live/'video.json')
         link=OUT/t['name']
         if not link.exists():link.symlink_to(live,target_is_directory=True)
         stamp=v.get('step',0)
+        clip='obs.mp4'
+        if t.get('m2e_ftn'):
+            clip='obs_display.mp4'
+            consolidated=read(live/'clip_consolidation.json')
+            stamp=consolidated.get('step',0)
+            # Frozen older experiments have compact clips at the original path.
+            if not (live/clip).exists() and consolidated.get('revision')==3 and stamp==v.get('step'):
+                clip='obs.mp4'
         parts.append(f'<section><h2>{html.escape(t["model"])} · seed {t["agent_seed"]}</h2><p>{t.get("pod", "")} GPU {t["gpu"]} · {s.get("step",0):,} observations · {e.get("cells_lifetime",0):,} cells · {checked_achievements(e)} achievements · {t["status"]} · status age {max(0,time.time()-s.get("time",time.time())):.0f}s</p><div class="media"><div>')
-        if (live/'obs.mp4').exists():
-            parts.append(f'<video controls playsinline preload="metadata" src="{t["name"]}/obs.mp4?v={stamp}"></video><p>Observation, goal, FTN activity · video through step {stamp:,}.</p>')
+        if (live/clip).exists():
+            parts.append(f'<video controls playsinline preload="metadata" src="{t["name"]}/{clip}?v={stamp}"></video><p>Observation, goal, FTN activity · video through step {stamp:,}.</p>')
         else:parts.append('<p>Collecting the first trajectory video.</p>')
         parts.append(f'</div><div><img src="maps/{t["name"]}.png?v={int(time.time())}" alt="Coverage map"></div></div>')
         parts.append(survival_panel(read(live/'survival.json'))+achievement_checklist(e))
         parts.append(f'<p><a href="{t["name"]}/history.jsonl">Progress history</a> · <a href="{t["name"]}/events.jsonl">Stagnation and achievement events</a></p><details><summary>Configuration and diagnostics</summary><pre>{html.escape(json.dumps(dict(config=t,status=s,progress=read(live/"progress.json")),indent=2))}</pre></details></section>')
     lives=[]
-    from .life_video_retention import prune, threshold
+    from .life_video_retention import threshold
     minimum=threshold(SHARED/'life_settings.json')
-    # Also enforce retention for already-running recorders without restarting
-    # learners. Never touch active recordings or event-triggered clips.
-    for folder in (SHARED/'runs').glob('*/life_videos'):
-        prune(folder,minimum)
+    # The recorder applies the threshold when a new life finishes. Browsing the
+    # monitor must never remove or hide videos that have already been retained.
     for t in current:
         folder=SHARED/'runs'/t['name']/'life_videos'
         if not folder.exists():continue
@@ -162,7 +168,7 @@ All axes extend to the furthest run. Each condition’s mean and bounds stop at 
         if not link.exists():link.symlink_to(folder,target_is_directory=True)
         for path in folder.glob('*.json'):
             info=read(path)
-            if info.get('file') and (minimum==0 or info.get('game_seconds',0)>minimum):lives.append((info['end_step'],t,info))
+            if info.get('file'):lives.append((info['end_step'],t,info))
     death_records={t['name']:read(SHARED/'runs'/t['name']/'live/survival.json').get('deaths',[]) for t in current}
     from .life_events import index as life_event_index, dropdown as life_event_dropdown
     life_event_logs={}
@@ -171,7 +177,7 @@ All axes extend to the furthest run. Each condition’s mean and bounds stop at 
         if not clips_root.exists():clips_root=SHARED/'runs'/t['name']/'event_clips'
         life_event_logs[t['name']]=life_event_index(SHARED/'runs'/t['name'],clips_root)
     if any(t.get('life_capture') for t in current) or lives:
-        parts.append(f'<section id="whole-lives"><h2>Entire-life videos</h2><p>Every observation from spawn to death, with goal and FTN activity, played at 6 FPS. Videos appear after the life ends; interrupted lives are labeled partial.</p><label>Keep lives longer than <input id="life-minutes" type="number" min="0" step="1" value="{minimum//60}"> game minutes (0 = keep all)</label> <button id="life-apply">Apply</button> <span id="life-message"></span><p>Applies to existing finalized videos and future lives. Deleted videos cannot be restored by lowering the threshold.</p>')
+        parts.append(f'<section id="whole-lives"><h2>Entire-life videos</h2><p>Every observation from spawn to death, with goal and FTN activity, played at 6 FPS. Videos appear after the life ends; interrupted lives are labeled partial.</p><label>Keep new lives longer than <input id="life-minutes" type="number" min="0" step="1" value="{minimum//60}"> game minutes (0 = keep all)</label> <button id="life-apply">Apply</button> <span id="life-message"></span><p>Applies only when a new life video finishes recording, including a life currently in progress. Previously saved videos remain available regardless of this setting.</p>')
         for _,t,v in sorted(lives,key=lambda x:x[0],reverse=True):
             src=html.escape(f'lives/{t["name"]}/{v["file"]}',quote=True)
             label='Complete life' if v['complete'] else 'Partial life'
@@ -244,7 +250,7 @@ clipFilters.forEach(el=>el.addEventListener('change',filterSavedClips));
 filterSavedClips();
 fetch('/api/clip-settings').then(r=>r.json()).then(s=>document.getElementById('frames').value=s.frames);
 const lifeApply=document.getElementById('life-apply');
-if(lifeApply)lifeApply.onclick=async()=>{const minutes=Number(document.getElementById('life-minutes').value);if(!Number.isSafeInteger(minutes)||minutes<0){document.getElementById('life-message').textContent='Enter a nonnegative integer.';return;}const r=await fetch('/api/life-settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({minimum_minutes:minutes})});document.getElementById('life-message').textContent=r.ok?'Applied. Existing videos are checked on the next refresh.':'Invalid setting';};
+if(lifeApply)lifeApply.onclick=async()=>{const minutes=Number(document.getElementById('life-minutes').value);if(!Number.isSafeInteger(minutes)||minutes<0){document.getElementById('life-message').textContent='Enter a nonnegative integer.';return;}const r=await fetch('/api/life-settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({minimum_minutes:minutes})});document.getElementById('life-message').textContent=r.ok?'Applied to newly completed recordings. Existing videos are preserved.':'Invalid setting';};
 document.getElementById('apply').onclick=async()=>{const r=await fetch('/api/clip-settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({frames:Number(document.getElementById('frames').value)})});document.getElementById('message').textContent=r.ok?'Applied to upcoming clips.':'Invalid setting';};
 setInterval(()=>{if(![...document.querySelectorAll("video")].some(v=>!v.paused&&!v.ended))location.reload()},60000)</script></body></html>''')
     temp=OUT/'index.tmp';temp.write_text(''.join(parts));temp.replace(OUT/'index.html')

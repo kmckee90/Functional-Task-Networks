@@ -459,16 +459,21 @@ minetest.register_on_respawnplayer(
 )
 
 function globo.player_sleep(player)
+    local meta = player:get_meta()
+    if meta:get_int("sleeping") == 1 then return end
+    if meta:get_int("energy") >= 1000 then
+        globo.chat_send_player(player:get_player_name(), "Already fully rested; sleep when energy is below 1000.")
+        return
+    end
     -- make sure the player isn't in water
     local pos = player:get_pos()
     pos.y = pos.y + 0.5
     local node = minetest.get_node(pos)
     if node.name ~= "air" then
-        globo.chat_send_player(player:get_player_name(), "You cannot sleep here.")
+        globo.chat_send_player(player:get_player_name(), "You cannot sleep here: " .. node.name)
         return
     end
 
-    local meta = player:get_meta()
     meta:set_int("sleeping", 1)
     local ov = player:get_physics_override()
     ov.speed = 0
@@ -520,6 +525,7 @@ function globo.lay_egg(player)
     minetest.get_meta(pos):set_string("owner", player:get_player_name())
     globo.add_nutrient(player, "hunger", -globo.LAY_EGG_HUNGER_COST)
     globo.add_energy(player, -globo.LAY_EGG_ENERGY_COST)
+    globo.chat_send_player(player:get_player_name(), "You laid an egg.")
     return true
 end
 

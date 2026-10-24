@@ -53,6 +53,8 @@ class Globo(embodied.Env):
         self.kwargs = kwargs
         self.lifetime_v2 = os.environ.get('GLOBO_LIFETIME_V2') == '1'
         self.actions = ACTIONS[:14] if kwargs.get('reduced_actions', False) else ACTIONS
+        if kwargs.get('inventory_actions', False):
+            self.actions = ACTIONS[:14] + ACTIONS[16:20]
         if self.lifetime_v2:
             self.actions = list(self.actions)
             self.actions[5] = ('jump', {'jump': 1})
@@ -166,6 +168,17 @@ class Globo(embodied.Env):
         # Craftium has already copied the template into its run directory.
         control = Path(self.engine.mt.run_dir) / 'mods/craftium_env/init.lua'
         with control.open('a') as f:
+            if os.environ.get('GLOBO_COLLECTED_STACK_CAPACITY') == '2':
+                f.write('''
+minetest.register_on_mods_loaded(function()
+ for name, def in pairs(minetest.registered_items) do
+  if name ~= '' and name ~= 'main:sleep' and name ~= 'main:lay_egg'
+     and name ~= 'main:lay_egg_disabled' then
+   minetest.override_item(name, {stack_max=math.min(def.stack_max or 99, 2)})
+  end
+ end
+end)
+''')
             if block_capacity:
                 f.write('''
 minetest.register_on_mods_loaded(function()

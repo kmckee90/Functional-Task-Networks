@@ -15,21 +15,26 @@ EXPERIMENTS=[
  ('inputs','Corrected inputs · checkpoint continuations',ROOT/'globo_input_v2/monitor'),
  ('engine','Corrected engine · fresh runs',ROOT/'globo_engine_v2/monitor'),
  ('lifetime','Continuing lives · discount and update comparison',ROOT/'globo_lifetime_v2/monitor'),
+ ('hard','Hard survival · faster resource depletion',ROOT/'globo_survival_hard_s19/monitor'),
+ ('natural','Natural-cycle hard survival · 14 actions',ROOT/'globo_natural_survival/monitor'),
+ ('abilities','Egg laying and sleep · 18 actions',ROOT/'globo_ability_survival/monitor'),
 ]
 
 def prepare(out):
+    def ensure_link(link,path):
+        try:link.symlink_to(path,target_is_directory=True)
+        except FileExistsError:pass  # Multiple monitors share these directories.
     folder=out/'experiments';folder.mkdir(exist_ok=True)
     for key,_,path in EXPERIMENTS:
-        if key=='lifetime':continue
         link=folder/key
-        if not link.is_symlink() and not link.exists():link.symlink_to(path,target_is_directory=True)
+        ensure_link(link,path)
         # Historical reports use these absolute URLs for phase links and media.
         if key.startswith('phase'):
             alias=out/key
-            if not alias.exists() and not alias.is_symlink():alias.symlink_to(path,target_is_directory=True)
+            ensure_link(alias,path)
 
 def url(key):
-    return '/' if key=='lifetime' else '/experiments/'+key+'/'
+    return '/experiments/'+key+'/'
 
 def decorate(path,body):
     resolved=path.resolve()

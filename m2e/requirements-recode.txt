@@ -1,0 +1,10 @@
+# Dependencies for experiment_recode.py and its local imports.
+# The pod setup reuses CUDA-enabled torch from the container image.
+torch>=2.6
+numpy
+matplotlib
+mlflow
+tqdm
+Pillow
+gymnasium
+pygame

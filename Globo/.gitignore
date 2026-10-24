@@ -6,3 +6,6 @@
 **/artifacts/
 # Game textures, sounds and packaging assets are source, not generated results.
 !craftium/game/**
+
+# Exclude the directory itself so its nested asset allow-rules cannot reinclude it.
+/craftium_play/

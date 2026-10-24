@@ -133,8 +133,13 @@ def publish(pod,phase='phase2',shared=None):
                 from .survival import summary
                 try:atomic(run/'live/survival.json',summary(run))
                 except Exception as exc:print('Survival',t['name'],repr(exc),flush=True)
-                for rel in PUBLISH_FILES:
+                files=list(PUBLISH_FILES)
+                if phase=='lifetime_v2' and pod=='globo1':
+                    files.extend(str(p.relative_to(run)) for p in (run/'event_clips').glob('*')
+                                 if p.suffix in ('.json','.mp4'))
+                for rel in files:
                     src=run/rel;dst=target/rel
+                    if src.resolve()==dst.resolve():continue
                     try:
                         stat=src.stat();signature=(stat.st_mtime_ns,stat.st_size)
                         if signatures.get(str(src))==signature:continue

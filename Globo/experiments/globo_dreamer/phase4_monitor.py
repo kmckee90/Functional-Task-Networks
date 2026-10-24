@@ -25,24 +25,32 @@ def at(rows,step,key):
     i=bisect.bisect_right([r['step'] for r in rows],step)-1
     return rows[i].get(key,0) if i>=0 else 0
 
-def chart(trials,data,key,title,ylabel):
-    xmax=max([1]+[r['step'] for rows in data.values() for r in rows]);ymax=max([1]+[r.get(key,0) for rows in data.values() for r in rows])*1.05
+def chart(trials,data,key,title,ylabel,xmax=None,aggregate=True):
+    xmax=xmax or max([1]+[r['step'] for rows in data.values() for r in rows]);ymax=max([1]+[r.get(key,0) for rows in data.values() for r in rows])*1.05
     def xy(x,y):return 70+655*x/xmax,315-230*y/ymax
     p=[f'<div><h3>{title}</h3><svg class="comparison-chart" data-metric="{key}" data-xmax="{xmax}" data-ymax="{ymax}" viewBox="0 0 760 390" role="img" aria-label="{title}">']
     for i in range(5):
         x,y=xy(xmax*i/4,ymax*i/4)
-        p.append(f'<path d="M70 {y}H725" stroke="#354151"/><text x="60" y="{y+4}" text-anchor="end">{ymax*i/4:,.0f}</text><text x="{x}" y="340" text-anchor="middle">{xmax*i/4:,.0f}</text>')
+        tick=format(ymax*i/4, ',.1f' if key=='lifespan_minutes' else ',.0f')
+        p.append(f'<path d="M70 {y}H725" stroke="#354151"/><text x="60" y="{y+4}" text-anchor="end">{tick}</text><text x="{x}" y="340" text-anchor="middle">{xmax*i/4:,.0f}</text>')
     for t in trials:
         pts=[xy(r['step'],r.get(key,0)) for r in data[t['name']]]
         path=' '.join(('M' if i==0 else 'L')+f'{x:.1f},{y:.1f}' for i,(x,y) in enumerate(pts))
         p.append(f'<path class="curve" data-run="{t["name"]}" d="{path}" fill="none" stroke="{COLORS[t["model"]]}" opacity=".35" stroke-width="1.5"><title>{t["model"]} · pair {t["pair"]}</title></path>')
+    if not aggregate:
+        for t in trials:
+            for r in data[t['name']]:
+                x,y=xy(r['step'],r.get(key,0))
+                p.append(f'<circle class="curve" data-run="{t["name"]}" cx="{x:.2f}" cy="{y:.2f}" r="2.5" fill="{COLORS[t["model"]]}"><title>{t["model"]} · seed {t.get("agent_seed",t.get("pair"))} · step {r["step"]:,} · {r.get(key,0):,.2f}</title></circle>')
     p.append('<g class="aggregate">')
-    complete=all(data[t['name']] for t in trials)
-    if complete:
+    complete=bool(trials) and all(data[t['name']] for t in trials)
+    if complete and aggregate:
         cap=min(data[t['name']][-1]['step'] for t in trials)
         for model,color in COLORS.items():
             group=[data[t['name']] for t in trials if t['model']==model]
+            if not group:continue
             start=max(rs[0]['step'] for rs in group)
+            if start>cap:continue
             xs=sorted({start,cap}|{r['step'] for rs in group for r in rs if start<=r['step']<=cap})
             means=[statistics.mean(at(rs,x,key) for rs in group) for x in xs]
             upper=[xy(x,max(at(rs,x,key) for rs in group)) for x in xs]

@@ -7,7 +7,7 @@ project=${GLOBO_PROJECT:-globo1}
 # so temporary CPU migration sessions do not change the next training allocation.
 case "$project" in
   globo-dreamer|globo_dreamer) project=globo-dreamer; profile=8x ;;
-  globo3) profile=4x ;;
+  globo3|globo-actions) profile=4x ;;
   globo1|globo2|globo4) profile=2x ;;
   *) printf 'Unknown Globo workspace: %s\n' "$project" >&2; exit 1 ;;
 esac

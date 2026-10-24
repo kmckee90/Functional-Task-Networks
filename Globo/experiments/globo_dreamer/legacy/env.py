@@ -251,8 +251,12 @@ def ensure_env_dir(env_dir: str = DEFAULT_ENV_DIR, globo_src: str = DEFAULT_GLOB
     if have_game:
         with open(os.path.join(game_dst, animal_api)) as f:
             cached_api = f.read()
-        if 'tgtobj:get_luaentity().height * 0.6' in cached_api:
+        if ('tgtobj:get_luaentity().height * 0.6' in cached_api or
+                'assert(groups ~= nil)' in cached_api):
             shutil.copyfile(os.path.join(globo_src, animal_api), os.path.join(game_dst, animal_api))
+    if have_game:
+        animal_init = os.path.join("mods", "animals", "init.lua")
+        shutil.copyfile(os.path.join(globo_src, animal_init), os.path.join(game_dst, animal_init))
     climate_conf = os.path.join(game_dst, "mods", "climate", "mod.conf")
     if os.path.isfile(climate_conf):
         with open(climate_conf) as f:

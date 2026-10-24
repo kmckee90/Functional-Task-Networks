@@ -12,20 +12,23 @@ def main():
     children=[];commands={};stopping=[False]
     signal.signal(signal.SIGTERM,lambda *_:stopping.__setitem__(0,True))
     signal.signal(signal.SIGINT,lambda *_:stopping.__setitem__(0,True))
-    root=STATE/'terrain_reference';root.mkdir(parents=True,exist_ok=True)
+    shared=Path(os.environ.get('GLOBO_TERRAIN_SHARED',str(SHARED)))
+    seeds=[int(s) for s in os.environ.get('GLOBO_TERRAIN_SEEDS','19,101').split(',')]
+    port_base=int(os.environ.get('GLOBO_TERRAIN_PORT_BASE','31000'))
+    root=STATE/os.environ.get('GLOBO_TERRAIN_DIRECTORY','terrain_reference');root.mkdir(parents=True,exist_ok=True)
     lock=(root/'worker.lock').open('w');fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
     games=root/'games';games.mkdir(exist_ok=True)
     link=games/'globo'
     if not link.exists():link.symlink_to(Path(__file__).resolve().parents[2]/'craftium/game',target_is_directory=True)
     binary=STATE/'venv/lib/python3.11/site-packages/craftium/luanti/bin/luanti'
-    for seed in (19,101):
+    for seed in seeds:
         world=root/f'seed{seed}';mod=world/'worldmods/terrain_probe';mod.mkdir(parents=True,exist_ok=True)
         (mod/'mod.conf').write_text('name = terrain_probe\ndepends = main\n')
         shutil.copyfile(Path(__file__).with_name('terrain_probe.lua'),mod/'init.lua')
         (world/'world.mt').write_text('gameid = globo\nbackend = sqlite3\nplayer_backend = sqlite3\nauth_backend = sqlite3\nload_mod_terrain_probe = true\n')
-        out=SHARED/'terrain'/str(seed);out.mkdir(parents=True,exist_ok=True)
+        out=shared/'terrain'/str(seed);out.mkdir(parents=True,exist_ok=True)
         config=world/'mapper.conf'
-        config.write_text(f'fixed_map_seed = {seed}\nport = {31000+seed}\nbind_address = 127.0.0.1\nserver_announce = false\nterrain_output = {out}\nnum_emerge_threads = 1\nactive_block_range = 0\nsecure.enable_security = false\nsync_env_mode = false\n')
+        config.write_text(f'fixed_map_seed = {seed}\nport = {port_base+seed}\nbind_address = 127.0.0.1\nserver_announce = false\nterrain_output = {out}\nnum_emerge_threads = 1\nactive_block_range = 0\nsecure.enable_security = false\nsync_env_mode = false\n')
         env=dict(os.environ,MINETEST_GAME_PATH=str(games),CUDA_VISIBLE_DEVICES='',OMP_NUM_THREADS='1')
         with (world/'console.log').open('a') as f:
             child=subprocess.Popen([str(binary),'--server','--gameid','globo','--world',str(world),'--config',str(config)],

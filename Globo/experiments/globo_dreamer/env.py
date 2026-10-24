@@ -51,6 +51,18 @@ class Globo(embodied.Env):
         self.root = runtime_path(root)
         self.seed, self.episode_steps, self.video_every = seed, episode_steps, video_every
         self.kwargs = kwargs
+        self.lifetime_v2 = os.environ.get('GLOBO_LIFETIME_V2') == '1'
+        self.actions = ACTIONS[:14] if kwargs.get('reduced_actions', False) else ACTIONS
+        if self.lifetime_v2:
+            self.actions = list(self.actions)
+            self.actions[5] = ('jump', {'jump': 1})
+        action_names = [name for name, _ in self.actions]
+        action_file = self.root / 'actions.json'
+        if action_file.exists() and json.loads(action_file.read_text()) != action_names:
+            raise ValueError('Cannot change action space when resuming a run')
+        if not action_file.exists() and (self.root / 'lifetime.json').exists() and kwargs.get('reduced_actions'):
+            raise ValueError('Cannot resume a legacy full-action run with reduced actions')
+        atomic_json(action_file, action_names)
         self.render_size = int(kwargs.get('render_size', 64))
         self.human_frame = None
         self.memory = Recode(capacity=memory_size, seed=seed)
@@ -74,7 +86,7 @@ class Globo(embodied.Env):
         self.wall_start = time.time()
         self.start_total = self.total
         self.episode_start = 0
-        self.action_hist = np.zeros(len(ACTIONS), np.int64)
+        self.action_hist = np.zeros(len(self.actions), np.int64)
         self.achievements = None
 
     def enable_achievements(self):
@@ -83,9 +95,10 @@ class Globo(embodied.Env):
 
     @property
     def obs_space(self):
+        from .hud_feedback import NAMES
         return dict(
             image=elements.Space(np.uint8, (64, 64, 3)),
-            body=elements.Space(np.float32, (17,)),
+            body=elements.Space(np.float32, (len(NAMES) if self.lifetime_v2 else 17,)),
             density=elements.Space(np.float32, (1,), 0, 1),
             reward=elements.Space(np.float32),
             is_first=elements.Space(bool), is_last=elements.Space(bool),
@@ -94,11 +107,24 @@ class Globo(embodied.Env):
 
     @property
     def act_space(self):
-        return dict(action=elements.Space(np.int32, (), 0, len(ACTIONS)),
+        return dict(action=elements.Space(np.int32, (), 0, len(self.actions)),
                     reset=elements.Space(bool))
 
     def _start(self):
         from .legacy import env as legacy
+        # Use the pinned input-fixed engine without replacing the wheel's binary
+        # or touching already-running worlds. Missing builds fail explicitly.
+        state_root = Path(os.environ.get('GLOBO_STATE', '/home/dev/globo_dreamer_state'))
+        single_place = self.kwargs.get('human_place_test') or os.environ.get('GLOBO_SINGLE_PLACE') == '1'
+        block_capacity = int(os.environ.get('GLOBO_BLOCK_STACK_CAPACITY', '0'))
+        input_binary = Path(os.environ.get(
+            'GLOBO_INPUT_BINARY', str(state_root / 'engines/input-v2/luanti')))
+        if single_place:
+            input_binary = state_root / 'engines/input-v2-single-place/luanti'
+        if not input_binary.is_file():
+            raise RuntimeError(
+                f'Input-fixed Craftium engine missing: {input_binary}. '
+                'Run globo_dreamer/build_input_engine.py on this pod first.')
         if self.engine is not None:
             old_run=Path(self.engine.mt.run_dir)
             self.engine.close()
@@ -113,10 +139,22 @@ class Globo(embodied.Env):
             env_dir=str(engine_root / 'template'), run_dir_prefix=str(engine_root / 'engine'),
             action_mode='raw', obs_width=self.render_size, obs_height=self.render_size, seed=self.seed,
             spawn=self.kwargs.get('spawn', '8,8,115'), frameskip=8, init_frames=200, max_timesteps=None,
-            move_speed=7.5, move_accel=1000, climb_speed=3, jump_speed=6.5,
-            freeze_daylight=True, clear_sky=True, weather_seed=68,
+            move_speed=float(os.environ.get('GLOBO_MOVE_SPEED','7.5')),
+            move_accel=float(os.environ.get('GLOBO_MOVE_ACCEL','1000')), climb_speed=3, jump_speed=6.5,
+            freeze_daylight=os.environ.get('GLOBO_NATURAL_CYCLE')!='1',
+            clear_sky=os.environ.get('GLOBO_NATURAL_CYCLE')!='1', weather_seed=68,
             invincible=self.kwargs.get('screen_invincible', False),
             extra_minetest_conf={'globo_hud': 'none'})
+        import shutil
+        shutil.copy2(input_binary, Path(self.engine.mt.run_dir) / 'bin/luanti')
+        if os.environ.get('GLOBO_HARD_SURVIVAL')=='1':
+            from .hard_survival_game import apply
+            apply(Path(self.engine.mt.run_dir)/'games/globo')
+        atomic_json(self.root / 'input_protocol.json', dict(
+            version=2, native_frameskip=8, binary=str(input_binary),
+            click_edges=['dig', 'place'], held_through_skip=(['sneak'] if
+                single_place else ['place', 'sneak']),
+            block_stack_capacity=block_capacity, starting_blocks=4 if self.kwargs.get('human_place_test') else 0))
         if os.environ.get('GLOBO_SOFTWARE_RENDERER')=='1':
             # Craftium supplies a minimal child environment, dropping CUDA and
             # Mesa settings from the trainer. Set the renderer explicitly.
@@ -128,6 +166,29 @@ class Globo(embodied.Env):
         # Craftium has already copied the template into its run directory.
         control = Path(self.engine.mt.run_dir) / 'mods/craftium_env/init.lua'
         with control.open('a') as f:
+            if block_capacity:
+                f.write('''
+minetest.register_on_mods_loaded(function()
+ for name, def in pairs(minetest.registered_nodes) do
+  if (def.stack_max or 99) < %d then
+   minetest.override_item(name, {stack_max=%d})
+  end
+ end
+end)
+''' % (block_capacity, block_capacity))
+            if self.kwargs.get('human_place_test'):
+                f.write('''
+minetest.register_on_mods_loaded(function()
+ minetest.override_item('nodes_nature:silt_wet', {stack_max=4})
+end)
+minetest.register_on_joinplayer(function(player)
+ minetest.after(0, function()
+  if player:is_player() then
+   player:get_inventory():set_stack('main', 1, 'nodes_nature:silt_wet 4')
+  end
+ end)
+end)
+''')
             f.write('\n' + Path(__file__).with_name('telemetry.lua').read_text())
             if self.achievements is not None:
                 f.write('\n' + Path(__file__).with_name('achievements.lua').read_text())
@@ -136,9 +197,23 @@ class Globo(embodied.Env):
             if self.kwargs.get('audit_spawn'):
                 f.write('\n' + Path(__file__).with_name('spawn_probe.lua').read_text())
             if self.kwargs.get('find_spawn'):
+                f.write('\nglobo_spawn_scan_ceiling = '+str(int(self.kwargs.get('spawn_scan_ceiling',60)))+'\n')
                 f.write('\n' + Path(__file__).with_name('find_spawn.lua').read_text())
         self.telemetry = Path(self.engine.mt.run_dir) / 'worlds/world/agent_state.json'
         image, info = self.engine.reset()
+        # Rendering can finish Craftium's fixed warmup before the asynchronous
+        # server has joined the player and emitted its first bodily observation.
+        # Advance only startup no-ops until that real observation exists; these
+        # are not policy interactions. Never substitute invented bodily values.
+        deadline = time.monotonic() + 30
+        while not self.telemetry.exists():
+            if time.monotonic() >= deadline:
+                log = Path(self.engine.mt.run_dir) / 'stderr.txt'
+                detail = log.read_text(errors='replace')[-4000:] if log.exists() else ''
+                raise RuntimeError(f'Globo player telemetry did not initialize within 30s. '
+                                   f'Engine log: {log}\n{detail}')
+            image, _, _, _, info = self.engine.step({})
+            time.sleep(0.01)
         self.life += 1
         self.episode_step = 0
         self.episode_start = self.total
@@ -156,7 +231,7 @@ class Globo(embodied.Env):
             image, info = self._start()
             terminal = timeout = False
         else:
-            controls = dict(ACTIONS[aid][1])
+            controls = dict(self.actions[aid][1])
             if 'mouse' in controls:
                 controls['mouse'] = [v * 64 / self.render_size for v in controls['mouse']]
             image, _, terminal, _, info = self.engine.step(controls)
@@ -189,6 +264,9 @@ class Globo(embodied.Env):
             state['wield'] / 9, sum(state['items'].values()) / 100,
             *[v / 99 for v in slots]], np.float32)
         body = np.clip(body, -10, 10)
+        if self.lifetime_v2:
+            from .hud_feedback import encode
+            body = encode(state)
         self.game_time = max(0., float(state['elapsed']) - self.start_game_elapsed)
         pos = np.asarray(info['player_pos']).reshape(-1).tolist()
         cell = (int(np.floor(pos[0] / 4)), int(np.floor(pos[2] / 4)))
@@ -200,7 +278,7 @@ class Globo(embodied.Env):
         record = dict(step=self.total, life=self.life, life_step=self.episode_step,
             game_seconds=self.game_time, wall_seconds=time.time() - self.wall_start,
             density=novelty, memory_size=(self.memory_size_fn() if self.memory_size_fn
-                                        else self.memory.size), action=ACTIONS[aid][0],
+                                        else self.memory.size), action=self.actions[aid][0],
             position=pos, cells_lifetime=len(self.visited), cells_life=len(self.episode_cells),
             terminal=terminal, truncated=bool(timeout), reward=reward, **state)
         record.update(frame_quality(image))
@@ -228,7 +306,7 @@ class Globo(embodied.Env):
         if self.total % 500 == 0 or self.done:
             self.save()
         if self.done:
-            record['action_counts'] = dict(zip([a[0] for a in ACTIONS], self.action_hist.tolist()))
+            record['action_counts'] = dict(zip([a[0] for a in self.actions], self.action_hist.tolist()))
             with (self.root / 'episodes.jsonl').open('a') as f:
                 f.write(json.dumps(record) + '\n')
             self._close_video()

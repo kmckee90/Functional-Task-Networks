@@ -1,0 +1,49 @@
+<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>FTN-M2E live exploration</title><style>
+body{background:#10151e;color:#e8edf5;font:16px system-ui;max-width:1280px;margin:32px auto;padding:0 20px}
+h1{font-size:24px}p{color:#b8c5d8}.panels{display:grid;grid-template-columns:2fr 1fr 2fr;gap:12px;align-items:start}
+figure{margin:0}figcaption{height:28px;font-size:14px}canvas{width:100%;display:block;background:#303642;image-rendering:pixelated}
+.middle{display:grid;gap:0;padding-top:28px}.middle figure{position:relative}.middle figcaption{position:absolute;top:2px;left:3px;height:auto;font-size:10px;background:#10151ecc;padding:2px}.middle canvas{aspect-ratio:1}
+#status,#mapnote{font-size:14px;font-variant-numeric:tabular-nums}.legend{font-size:13px}
+</style></head><body><h1>FTN-M2E: live exploration</h1>
+<div class="panels">
+<figure><figcaption>Observation</figcaption><canvas id="obs" width="256" height="256"></canvas></figure>
+<div class="middle"><figure><figcaption>Frontier goal</figcaption><canvas id="goal" width="128" height="128"></canvas></figure>
+<figure><figcaption>FTN mask / recent activity</figcaption><canvas id="mask" width="128" height="128"></canvas></figure></div>
+<figure><figcaption>Coverage · north (+Z) up</figcaption><canvas id="map" width="512" height="512"></canvas></figure>
+</div><p id="status">Connecting to the running agent...</p><p id="mapnote">Loading cached terrain...</p>
+<p class="legend">Map: orange/red = repeated visits · white = recent trail and heading · blue = spawn · <span style="color:#39ff14">▲</span> = goal observed here.<br>
+The triangle marks the observer’s location when the goal image was seen, not the current location of an animal or object.<br>
+FTN: white = active neurons · purple = recent activity. The map is for viewing only.</p>
+<script>
+const $=id=>document.getElementById(id), source=new Image(), terrain=new Image();
+let mapState=null, goalState=null, heat=document.createElement('canvas'), heatKey='', terrainVersion=0;
+heat.width=heat.height=512; source.src='/stream';
+source.onerror=()=>setTimeout(()=>source.src='/stream?t='+Date.now(),2000);
+function crop(id,x,y,w,h){const c=$(id),g=c.getContext('2d');g.imageSmoothingEnabled=false;g.clearRect(0,0,c.width,c.height);g.drawImage(source,x,y,w,h,0,0,c.width,c.height)}
+function frames(){if(source.naturalWidth){crop('obs',0,24,256,256);crop('mask',256,24,256,256);
+const g=$('goal').getContext('2d');g.fillStyle='#10151e';g.fillRect(0,0,128,128);g.imageSmoothingEnabled=false;g.drawImage(source,512,88,256,128,0,32,128,64);}}
+setInterval(frames,100);
+function drawMap(){if(!mapState?.bounds)return;const s=mapState,c=$('map'),g=c.getContext('2d'),b=s.bounds;
+const xy=(x,z)=>[(x-b[0])/(b[1]-b[0])*512,(b[3]-z)/(b[3]-b[2])*512];
+g.fillStyle='#303642';g.fillRect(0,0,512,512);g.imageSmoothingEnabled=false;
+if(terrain.naturalWidth)g.drawImage(terrain,0,0,512,512);
+const key=JSON.stringify(b)+':'+Math.floor(Date.now()/10000);
+if(key!==heatKey){heatKey=key;const h=heat.getContext('2d');h.clearRect(0,0,512,512);
+const peak=Math.max(1,...Object.values(s.counts));
+for(const [cell,n] of Object.entries(s.counts)){const [x,z]=cell.split(',').map(Number),a=Math.log1p(n)/Math.log1p(peak),p=xy(x*4,(z+1)*4),q=xy((x+1)*4,z*4);
+h.fillStyle=`rgba(255,${Math.round(220-170*a)},40,${(80+150*a)/255})`;h.fillRect(p[0],p[1],q[0]-p[0],q[1]-p[1]);}}
+g.drawImage(heat,0,0);g.strokeStyle='#faf8e8';g.lineWidth=1.5;g.beginPath();let life=null;
+for(const [,x,z,l] of s.recent){const p=xy(x,z);if(l!==life)g.moveTo(...p);else g.lineTo(...p);life=l;}g.stroke();
+if(s.spawn){const [x,,z]=s.spawn,p=xy(x,z);g.strokeStyle='#70cfff';g.lineWidth=2;g.strokeRect(p[0]-4,p[1]-4,8,8)}
+if(s.position){const [x,,z]=s.position,p=xy(x,z);g.fillStyle='white';g.strokeStyle='black';g.beginPath();g.arc(...p,4,0,Math.PI*2);g.fill();g.stroke();g.strokeStyle='white';g.beginPath();g.moveTo(...p);g.lineTo(p[0]-16*Math.sin(s.yaw),p[1]-16*Math.cos(s.yaw));g.stroke();}
+if(goalState?.goal_position){const [x,,z]=goalState.goal_position,p=xy(x,z);g.beginPath();g.moveTo(p[0],p[1]-9);g.lineTo(p[0]+8,p[1]+7);g.lineTo(p[0]-8,p[1]+7);g.closePath();g.fillStyle='#39ff14';g.strokeStyle='#000';g.lineWidth=3;g.fill();g.stroke();}
+$('mapnote').textContent=`Map position: step ${s.step.toLocaleString()} · Coverage: step ${s.coverage_step.toLocaleString()} · ${Math.round(b[1]-b[0])} m across · Terrain tiles ${s.terrain_ready}/${s.terrain_requested}. `+(s.terrain_ready<s.terrain_requested?'Gray areas have no cached terrain yet.':'');}
+async function pollMap(){try{const r=await fetch('/map',{cache:'no-store'});mapState=await r.json();
+if(mapState.generated!==terrainVersion){terrainVersion=mapState.generated;terrain.src='/terrain.png?v='+terrainVersion;}drawMap();}catch(e){}finally{setTimeout(pollMap,1500)}}
+terrain.onload=drawMap;pollMap();
+async function pollStatus(){try{const s=await(await fetch('/status',{cache:'no-store'})).json();
+goalState=s;drawMap();$('goal').title=s.goal_position?`Goal observed at step ${s.goal_observed_step}, life ${s.goal_observed_life}`:'No recorded location for this goal (older memory).';
+$('status').textContent=s.step===undefined?'Starting...':`Step ${s.step.toLocaleString()} | ${s.action} | DQN updates ${s.updates.toLocaleString()} | Cells ${s.cells} | Frame age ${s.age_seconds.toFixed(1)}s`;
+}catch(e){$('status').textContent='Stream disconnected; retrying...'}finally{setTimeout(pollStatus,1000)}}pollStatus();
+</script></body></html>

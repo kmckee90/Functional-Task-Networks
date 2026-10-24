@@ -152,6 +152,9 @@ class Hyperparameters:
     polyak_beta: float = 1.0
     lr: float = 3e-4
     gamma: float = 0.9
+    # OCP goal-buffer target: (1 - a) * TD target + a * empirical return.
+    a: float = 0.0
+    returns_gamma: float = 0.99
     memory_length: int = 20000
     goal_memory_length: int = 20000
     sample_memory_length: int = 3000
@@ -222,6 +225,10 @@ def main(args):
     cfgdict = asdict(cfg)
     cfgdict.update(asdict(Hyperparameters()))
     cfgdict["device"] = args.device
+    for name in ("a", "returns_gamma"):
+        value = getattr(args, name, None)
+        if value is not None:
+            cfgdict[name] = value
 
 
     env = ContinuousMaze(
@@ -278,7 +285,7 @@ def main(args):
             mlflow.set_tag("MLFLow test on explorer", "checking out mlflow")
             mlflow.log_params(cfgdict)
 
-        for ep in tqdm(range(NUM_EPISODES+1)):
+        for ep in range(NUM_EPISODES+1):
             if not cfg.maze_config.reset and ep > 0:
                 last_pos = env.pos
             obs, _ = env.reset(seed=0)
@@ -430,10 +437,12 @@ if __name__ == "__main__":
     parser.add_argument("-a", "--algo", default="RDDPG_Dual", help="Algorithm")
     parser.add_argument("--seed", type=int, help="Random seed")
     parser.add_argument("--device", default="cuda", help="CUDA or CPU")
+    parser.add_argument("--a", type=float, default=None, help="OCP goal-replay Monte Carlo weight in [0, 1] (default: 0)")
+    parser.add_argument("--returns_gamma", type=float, default=None, help="Discount for empirical goal returns in [0, 1] (default: 0.9)")
     parser.add_argument("-r", "--render", action="store_true", default=False, help="Render with pygame")
     parser.add_argument("-l", "--log", action="store_true", default=False, help="Enable logging.")
     parser.add_argument("-v", "--verbose", action="store_true", default=False, help="Enable verbose logging.")
-    parser.add_argument("-e", "--experiment_name", default="RDDPG sparse reward attainment", help="Experiment name for mlflow")
+    parser.add_argument("-e", "--experiment_name", default="RDDPG Refinements", help="Experiment name for mlflow")
     parser.add_argument("-n", "--run_name", default=None, help="Run name for mlflow")
     parser.add_argument("--notes", default="", help="Extra labeling for the run")
     parser.add_argument("--gif", default=None, help="Produce animated gif of given filename.")

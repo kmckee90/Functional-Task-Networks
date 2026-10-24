@@ -176,6 +176,7 @@ class GloboExplorerDQN:
         device: str | torch.device = "cpu",
         seed: int = 0,
         model_feedback: bool = False,
+        body_feedback_size: int = 0,
     ):
         self.device = torch.device(device)
         if action_groups is not None:
@@ -217,7 +218,9 @@ class GloboExplorerDQN:
 
         self.model_feedback = model_feedback
         self._model_feedback = 0.
-        self.feedback_size = sum(self.head_sizes) + 1 + num_novelty_bins + int(model_feedback)
+        self.body_feedback_size = body_feedback_size
+        self._body_feedback = torch.zeros(body_feedback_size, device=self.device)
+        self.feedback_size = sum(self.head_sizes) + 1 + num_novelty_bins + int(model_feedback) + body_feedback_size
 
         # ----- frozen reservoir front-end -----
         self.feedback_to_channel = FeedbackToChannel(self.feedback_size, in_h, in_w, seed=seed + 1).to(self.device)
@@ -286,6 +289,8 @@ class GloboExplorerDQN:
         oh = torch.cat(ohs).reshape(1, -1)
         rew = torch.tensor([[self._prev_reward]], device=self.device, dtype=torch.float32)
         parts = [oh, rew, novelty_bins.reshape(1, -1)]
+        if self.body_feedback_size:
+            parts.append(self._body_feedback.reshape(1,-1))
         if self.model_feedback:
             parts.append(torch.tensor([[self._model_feedback]], device=self.device))
         return torch.cat(parts, dim=1)

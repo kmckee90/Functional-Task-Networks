@@ -35,7 +35,7 @@ def summary(root,status=None):
     if status is None:
         try:status=json.loads((root/'status.json').read_text())
         except (OSError,ValueError):status={}
-    e=status.get('environment',{});deaths,timeouts,available=completed(root)
+    e=status.get('environment') or {};deaths,timeouts,available=completed(root)
     def stats(rs):
         return {unit:dict(mean=statistics.mean(r[unit] for r in rs),median=statistics.median(r[unit] for r in rs),
                 best=max(r[unit] for r in rs)) if rs else None for unit in ('seconds','observations')}
@@ -55,6 +55,52 @@ def duration(value):
     if value is None:return '—'
     value=max(0,round(value));h,value=divmod(value,3600);m,s=divmod(value,60)
     return f'{h}h {m:02d}m {s:02d}s' if h else f'{m}m {s:02d}s' if m else f'{s}s'
+
+def comparison_data(trials, shared, cap, extend=True, raw=False):
+    """Use only completed-life rolling statistics available by the shared cap."""
+    data={}
+    for t in trials:
+        try:s=json.loads((Path(shared)/'runs'/t['name']/'live/survival.json').read_text())
+        except (OSError,ValueError):s={}
+        rows=[dict(step=r['step'],lifespan_minutes=r['seconds' if raw else 'mean_seconds']/60,
+                   lifespan_observations=r['observations' if raw else 'mean_observations'])
+              for r in s.get('deaths' if raw else 'trend',[]) if 0 < r['step'] <= cap]
+        if extend and rows and rows[-1]['step'] < cap:rows.append(dict(rows[-1],step=cap))
+        data[t['name']]=rows
+    return data
+
+def fork_charts(trials,shared,xmax=None):
+    """Independent post-fork seed traces, without the exploration cohort's cap."""
+    colors=['#ff6e82','#8cbcff','#7de1bf','#ffbd66','#d695ff','#d5e76c','#ff96d3','#65d4e8'];series=[];local_endpoints=[]
+    for i,t in enumerate(trials):
+        try:s=json.loads((Path(shared)/'runs'/t['name']/'live/survival.json').read_text())
+        except (OSError,ValueError):s={}
+        fork=t['fork_step']
+        local_endpoints.append(max(0,s.get('step',fork)-fork))
+        rows=[dict(step=r['step'] if xmax else r['step']-fork,minutes=r['seconds']/60,frames=r['observations'])
+              for r in s.get('deaths',[]) if r['step']>fork]
+        series.append((t,colors[i%len(colors)],rows))
+    parts=['<p>'+ ' · '.join(f'<span style="color:{color}">{html.escape(t["model"])} · seed {t["agent_seed"]}</span>' for t,color,_ in series)+'</p><div class="charts">']
+    absolute=bool(xmax)
+    xmax=xmax or max([1]+local_endpoints+[r['step'] for _,_,rows in series for r in rows])
+    for key,title in [('minutes','Individual lifespan (game minutes)'),('frames','Individual lifespan (agent interactions)')]:
+        ymax=max([1]+[r[key] for _,_,rows in series for r in rows])
+        xy=lambda x,y:(70+655*x/xmax,315-230*y/ymax)
+        parts.append(f'<div><h3>{title}</h3><svg viewBox="0 0 760 390" role="img" aria-label="Survival runs: {title}">')
+        for i in range(5):
+            x,y=xy(xmax*i/4,ymax*i/4)
+            parts.append(f'<path d="M70 {y}H725" stroke="#354151"/><text x="60" y="{y+4}" text-anchor="end">{ymax*i/4:,.1f}</text><text x="{x}" y="340" text-anchor="middle">{xmax*i/4:,.0f}</text>')
+        for t,color,rows in series:
+            path=' '.join(('M' if i==0 else 'L')+f'{xy(r["step"],r[key])[0]:.2f},{xy(r["step"],r[key])[1]:.2f}' for i,r in enumerate(rows))
+            parts.append(f'<path d="{path}" stroke="{color}" stroke-width="3" fill="none"><title>Seed {t["agent_seed"]}</title></path>')
+            for row in rows:
+                x,y=xy(row['step'],row[key]);parts.append(f'<circle cx="{x}" cy="{y}" r="3" fill="{color}"><title>Seed {t["agent_seed"]} · step {row["step"]:,} · {row[key]:,.2f}</title></circle>')
+        parts.append('<text x="400" y="375" text-anchor="middle">'+('Total training observations' if absolute else 'Observations since survival fork')+'</text></svg></div>')
+    parts.append('</div>')
+    for t,_,rows in series:
+        if not rows:parts.append(f'<p>Seed {t["agent_seed"]}: waiting for its first completed life.</p>')
+    return ''.join(parts)
+
 
 def chart(series):
     """series: (run name, label, color, summary); gaps never become fabricated zeros."""

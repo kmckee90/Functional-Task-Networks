@@ -33,6 +33,7 @@ import tasks
 import utils
 import viz
 from ftn import FTN
+from decorrelation_regularizer import weight_training_forward
 
 # =============================================================================
 # Replay buffer
@@ -337,6 +338,12 @@ def entropy_tests(ftn, data_gen, task_indices, suffix, out_dir="artifacts"):
     return acc_mean, acc_std, share_mean
 
 
+def training_forward(ftn, x, y=None, m=None):
+    """Weight-training prediction and penalty; evaluation uses ftn directly."""
+    return weight_training_forward(
+        ftn, x, y, m=m, coefficient=Config.DECORRELATION_COEF)
+
+
 def replay_step(ftn, replay_buffer):
     """Accumulate gradients on stored batches whose masks overlap the current one."""
     if len(replay_buffer) == 0:
@@ -351,8 +358,8 @@ def replay_step(ftn, replay_buffer):
     for idx in overlap[choice]:
         x_r, y_r = replay_buffer.get(idx.item())
         m_r = replay_buffer.masks[idx.item()]
-        r_pred = ftn(x_r, m=m_r)
-        ftn.loss(r_pred, y_r).backward()
+        r_pred, penalty = training_forward(ftn, x_r, m=m_r)
+        (ftn.loss(r_pred, y_r) + penalty).backward()
 
 
 def _sample_noise(n, d, distribution, scale):
@@ -422,9 +429,9 @@ def noise_probe_step(ftn, probe_buffer):
     for idx in overlap[choice]:
         x_n, y_n = probe_buffer.get(idx.item())
         m_r = probe_buffer.masks[idx.item()]
-        pred = ftn(x_n, m=m_r)  # full stored mask, exactly like replay
+        pred, penalty = training_forward(ftn, x_n, m=m_r)
         # MSE (not ftn.loss): y_n is a generated continuous output, not a label.
-        F.mse_loss(pred, y_n).backward()
+        (F.mse_loss(pred, y_n) + penalty).backward()
 
 
 # =============================================================================
@@ -537,7 +544,7 @@ def train(
                         ftn._reconfig(x, y)
                         n_block_reconfigs += 1
                         r_since = 0
-                    pred = ftn(x)
+                    pred, penalty = training_forward(ftn, x)
                     loss = ftn.loss(pred, y)
                     li_r = loss.item()
                     sd = float(np.sqrt(max(r_var, 0.0)))
@@ -549,7 +556,7 @@ def train(
                         ftn._reconfig(x, y)
                         n_block_reconfigs += 1
                         r_since = 0
-                        pred = ftn(x)
+                        pred, penalty = training_forward(ftn, x)
                         loss = ftn.loss(pred, y)
                         li_r = loss.item()
                     # EMA of loss mean/variance under the trained mask (the
@@ -567,7 +574,7 @@ def train(
                     # =False in ftn/). Otherwise predict with the current mask.
                     every = Config.RECONFIG_EVERY
                     reconfig = (i == 0) if every == 0 else (i % every == 0)
-                    pred = ftn(x, y) if reconfig else ftn(x)
+                    pred, penalty = training_forward(ftn, x, y if reconfig else None)
                     loss = ftn.loss(pred, y)
 
                 if i < Config.N_SAMPLE_PER_TASK:
@@ -577,7 +584,7 @@ def train(
                     print(f"TASK {task} INITIAL_LOSS: {loss.item()}")
 
                 optimizer.zero_grad()
-                loss.backward()
+                (loss + penalty).backward()
                 replay_step(ftn, replay_buffer)
                 if Config.NOISE_PROBE:
                     noise_probe_step(ftn, probe_buffer)

@@ -1,0 +1,30 @@
+Neuron-output decorrelation for weight training
+
+DECORRELATION_COEF defaults to 0.0 (no computation or behavior change).
+Append one preset to --config:
+  DecorrelationWeak        0.001
+  DecorrelationMedium      0.01
+  DecorrelationStrong      0.1
+  DecorrelationVeryStrong  1.0
+
+Weight objective: task_loss + DECORRELATION_COEF * mean_{i>j}(corr(z_i,z_j)^2).
+Each neuron contributes its scalar backbone output across batch examples.
+All neurons participate, before dropout, lateral smoothing, or masking.
+Correlation centers each neuron across examples and normalizes its L2 norm
+(clamped at 1e-8). Constant neurons contribute zero correlation. Batches with
+fewer than two samples or populations with fewer than two neurons return zero.
+Half-precision outputs are promoted to float32 for the calculation.
+
+Applied to current-task, replay, and noise-probe weight updates in
+run_experiments.py. Mask search and evaluation losses are unchanged; reactive
+reconfiguration and logged task losses still use only the task loss.
+
+Supports base/quad and ParallelMLP-based stack/rnn/wave architectures. For
+multiple layers or unrolled steps, concatenate scalar populations on the
+neuron axis, including correlations across layers/steps. LoRA/HML architectures
+raise an explicit error when enabled. Direct callers can use
+decorrelation_regularizer.weight_training_forward for the same objective.
+Memory/time for the correlation matrix scales quadratically with neuron count.
+
+Run checks on the base actl pod:
+  python -m unittest test_decorrelation_regularizer -v

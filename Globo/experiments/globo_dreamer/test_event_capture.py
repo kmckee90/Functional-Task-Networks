@@ -30,12 +30,13 @@ class CaptureTest(unittest.TestCase):
             row={'log/human':np.zeros((256,256,3),np.uint8),'log/m2e_ftn_ema':np.zeros((4,3),np.uint8),
                  'log/offline_goal':np.zeros((16,32),np.uint8),'log/offline_goal_step':np.int64(1)}
             for i in range(201):
-                record=self.record(i/10,0,achievement_delta={'place_block':1} if i==100 else {})
+                record=self.record(i/10,0,achievement_delta={'kill_other':1} if i==100 else {})
                 cap.observe(row,record,i)
             cap.close()
             files=list(Path(directory).glob('*.mp4'));self.assertEqual(len(files),1)
             with av.open(str(files[0])) as f:self.assertEqual(sum(1 for _ in f.decode(video=0)),161)
             meta=json.loads(files[0].with_suffix('.json').read_text())
+            self.assertEqual(meta['events'][0]['kind'], 'kill_other')
             self.assertEqual(meta['event_at_seconds'],80/6);self.assertEqual(meta['padding_after'],0)
             rows=[(i*i/10,i,{}) for i in range(201)]
             selected=sample_frames(rows,100)
@@ -46,5 +47,11 @@ class CaptureTest(unittest.TestCase):
     def test_short_context_is_not_frozen(self):
         rows=[(i,i,{}) for i in range(10)]
         self.assertEqual(sample_frames(rows,5),rows)
+
+    def test_all_kill_categories(self):
+        t=Triggers();t.observe(self.record(0,0))
+        for i,key in enumerate(('kill_wolf','kill_cow','kill_other','kill_gazelle'),1):
+            out=t.observe(self.record(i,0,achievement_delta={key:1}))
+            self.assertEqual(out[0]['kind'],key)
 
 if __name__=='__main__':unittest.main()

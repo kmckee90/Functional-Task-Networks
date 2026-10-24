@@ -1190,7 +1190,11 @@ function animals.hq_eat_carcass(self, prty, carcass)
             if dist < 0.8 then
                 -- get carcass group level
                 local groups = animals.get_dropped_item_groups(carcass)
-                assert(groups ~= nil)
+                -- Another animal may have consumed the queued target already.
+                -- Abandon this task if it is no longer an edible dropped item.
+                if not groups or not groups.carcass or groups.carcass <= 0 then
+                    return true
+                end
                 local energygain = groups.carcass * 300 * animals.get_num_dropped_items(carcass)
                 minimal.log("hq_eat_carcass: energygain:" .. energygain)
                 local self_e = (mobkit.recall(self, 'energy') or 1)

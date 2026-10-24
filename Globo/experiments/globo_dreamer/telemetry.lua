@@ -9,8 +9,10 @@ local function emit(player)
     local inv = player:get_inventory():get_list("main") or {}
     local items = {}
     local slots = {}
+    local slot_max = {}
     for i, stack in ipairs(inv) do
         slots[i] = stack:get_count()
+        slot_max[i] = stack:get_stack_max()
         if not stack:is_empty() then
             local name = stack:get_name()
             items[name] = (items[name] or 0) + stack:get_count()
@@ -24,7 +26,12 @@ local function emit(player)
         temperature = meta:get_int("temperature"),
         temperature_external = meta:get_int("temperature_external"),
         breath = player:get_breath(), wield = player:get_wield_index(),
-        items = items, slots = slots, death_reason = death_reason,
+        items = items, slots = slots, slot_max = slot_max, death_reason = death_reason,
+        breath_max = player:get_properties().breath_max or 10,
+        score = meta:get_int('score'), heal_rate = meta:get_int('heal_rate'),
+        hunger_rate = meta:get_int('hunger_rate'), thirst_rate = meta:get_int('thirst_rate'),
+        recovery_rate = meta:get_int('recovery_rate'),
+        effects = minetest.deserialize(meta:get_string('effects_list')) or {},
         last_damage_type = last_damage_type, cumulative_damage = cumulative_damage,
         look_pitch = player:get_look_vertical(), look_yaw = player:get_look_horizontal(),
     }

@@ -36,6 +36,20 @@ dofile(path .. "/gazelle.lua")
 dofile(path .. "/firepuffin.lua")
 -- dofile(path.."/test.lua")
 
+-- Cap mobkit health (also the regeneration ceiling) for every animal species.
+-- Reapply after activation because saved entities can restore older HP values.
+for name, def in pairs(minetest.registered_entities) do
+    if name:sub(1, 8) == "animals:" and type(def.max_hp) == "number" then
+        def.max_hp = math.min(def.max_hp, 20)
+        local activate = def.on_activate
+        def.on_activate = function(self, ...)
+            if activate then activate(self, ...) end
+            self.max_hp = math.min(self.max_hp, 20)
+            self.hp = math.min(self.hp or self.max_hp, self.max_hp)
+        end
+    end
+end
+
 ---
 -- Food Web
 

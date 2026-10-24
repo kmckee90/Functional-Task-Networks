@@ -30,6 +30,8 @@ def main():
     p.add_argument('--seed', type=int, default=7)
     p.add_argument('--world-seed', type=int, help='World generation seed; defaults to the agent seed')
     p.add_argument('--render-size', type=int, choices=(64,256), default=64)
+    p.add_argument('--reduced-actions', action='store_true',
+                   help='14 actions: idle, movement/look, dig and place; no inventory or sneak')
     p.add_argument('--mf-init-weights', help='Immutable weights-only warm-start file; ignored on own checkpoint resume')
     p.add_argument('--spawn', default='11,5.1,121')
     p.add_argument('--size', default='size12m')
@@ -70,7 +72,9 @@ def main():
     p.add_argument('--random', action='store_true', help='Random-action behavioral reference, separate lifetime memory')
     p.add_argument('--model-free', action='store_true', help='Existing RECODE DQN controls the shared real stream')
     p.add_argument('--model-free-only', action='store_true', help='Density explorer without any Dreamer model or replay')
+    p.add_argument('--live-port', type=int, default=0, help='Optional localhost MJPEG applet for FTN-M2E')
     p.add_argument('--m2e-ftn', choices=('flat','conv'), help='Bayes FTN policy decoder; frozen reservoir retained')
+    p.add_argument('--m2e-ftn-k', type=int, help='Fix active neuron count for action-space comparisons')
     p.add_argument('--frontier-ftn', choices=('frontier','waypoints'), help='Retained goal-indexed FTN policy decoders')
     p.add_argument('--model-free-device', default='cuda:0')
     p.add_argument('--mf-replay-capacity', type=int, default=4000000)
@@ -80,12 +84,16 @@ def main():
     p.add_argument('--checkpoint-seconds', type=float, default=900)
     p.add_argument('--mf-epsilon-end', type=float, default=.025)
     p.add_argument('--mf-gamma', type=float, default=.9)
+    p.add_argument('--mf-offline-updates', type=int, default=50)
     p.add_argument('--mf-online-coef', type=float, default=1.)
     p.add_argument('--mf-offline-coef', type=float, default=1.)
     p.add_argument('--mf-frontier-scale', type=float, default=5.)
     p.add_argument('--mf-lr', type=float, default=3e-4)
     p.add_argument('--dreamer-action-probability', type=float, default=.1)
     args = p.parse_args()
+    if args.mf_offline_updates < 1:p.error('--mf-offline-updates must be positive')
+    if args.m2e_ftn_k is not None and (args.m2e_ftn_k <= 0 or not args.m2e_ftn or args.frontier_ftn):
+        p.error('--m2e-ftn-k requires plain M2E FTN and a positive count')
     if args.m2e_ftn and (not args.model_free_only or args.mf_init_weights):
         p.error('M2E FTN requires a fresh model-free-only run (or its own checkpoint)')
     if args.frontier_ftn and args.m2e_ftn!='conv':
@@ -138,6 +146,8 @@ def main():
         p.error('dreamer-action-probability must be in [0,1]')
     if '/' in args.name or args.name in ('.', '..'):
         p.error('name must be a single directory name')
+    if args.live_port and (not args.model_free_only or not args.m2e_ftn or args.frontier_ftn):
+        p.error('--live-port requires --model-free-only --m2e-ftn without --frontier-ftn')
     root = runtime_path(STATE / 'runs' / args.name)
     # Single writer protects checkpoints, replay, and the one environment lifetime.
     import fcntl
@@ -147,7 +157,8 @@ def main():
     atomic_json(root / 'launch.json', dict(**vars(args), pid=os.getpid(), started=time.time()))
     env = Globo(root / 'environment', seed=args.seed if args.world_seed is None else args.world_seed, episode_steps=args.episode_steps,
                 video_every=0 if args.continuous_monitor else args.video_every, spawn=args.spawn,
-                bounded_artifacts=args.continuous_monitor, render_size=args.render_size)
+                bounded_artifacts=args.continuous_monitor, render_size=args.render_size,
+                reduced_actions=args.reduced_actions)
     if args.achievements:env.enable_achievements()
     if args.dreamer_novelty_only:
         env.novelty_fn=lambda image:0.
@@ -241,7 +252,8 @@ def train(args, root, env):
             frontier_scale=args.mf_frontier_scale, lr=args.mf_lr,
             model_reward_weight=args.model_reward_weight,model_reward_half_life=args.model_reward_half_life,
             model_feedback=args.model_feedback,reservoir_channels=args.reservoir_channels,
-            reservoir_variant=args.reservoir_variant)
+            reservoir_variant=args.reservoir_variant,num_actions=env.act_space['action'].classes,
+            offline_updates=args.mf_offline_updates)
         env.novelty_fn = behavior.observe_frame
         env.memory_size_fn = lambda: behavior.agent.density.size
         cp.behavior = behavior

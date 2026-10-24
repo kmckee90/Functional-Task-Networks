@@ -22,8 +22,8 @@ class Triggers:
             if event['id']>self.seen_event:out.append(dict(kind=event['kind'],detail=event.get('detail')))
             self.seen_event=max(self.seen_event,event['id'])
         for key,n in r.get('achievement_delta',{}).items():
-            if n and key in ('place_block','kill_wolf','kill_cow','kill_other','climb_10m','climb_20m',
-                              'harvest_papaya','eat_thorn_fruit','eat_dawn_cactus','heal_goldcap','coffee_energy'):
+            if n and (key.startswith('kill_') or key in ('place_block','climb_10m','climb_20m',
+                              'harvest_papaya','eat_thorn_fruit','eat_dawn_cactus','heal_goldcap','coffee_energy')):
                 details=[k.split('/',1)[1] for k,v in r.get('achievement_details',{}).items()
                          if k.startswith(key+'/') and v>self.details.get(k,0)]
                 out.append(dict(kind=key,count=n,details=details))

@@ -378,6 +378,8 @@ def main():
                     if t.get('render_size'):cmd.extend(['--render-size',str(t['render_size'])])
                     if t.get('mf_init_weights'):cmd.extend(['--mf-init-weights',t['mf_init_weights']])
                     if t.get('m2e_ftn'):cmd.extend(['--m2e-ftn',t['m2e_ftn']])
+                    if t.get('reduced_actions'):cmd.append('--reduced-actions')
+                    if t.get('m2e_ftn_k'):cmd.extend(['--m2e-ftn-k',str(t['m2e_ftn_k'])])
                     if t.get('frontier_ftn'):cmd.extend(['--frontier-ftn',t['frontier_ftn']])
                     if t.get('plan2explore'):
                         cmd.extend(['--plan2explore','--p2e-reward-scale',str(t.get('p2e_reward_scale',10000.))])
@@ -402,7 +404,10 @@ def main():
                         cmd.extend(['--decoder-depth',str(t['decoder_depth'])])
                     if t.get('ftn'):cmd.append('--ftn')
                     if not t.get('dreamer_baseline') and not t.get('plan2explore'):
-                        for k,v in dict(FIXED,dreamer_action_probability=0.).items():cmd.extend(['--'+k.replace('_','-'),str(v)])
+                        settings=dict(FIXED,dreamer_action_probability=0.)
+                        for k in ('mf_gamma','mf_offline_updates','mf_lr'):
+                            if k in t:settings[k]=t[k]
+                        for k,v in settings.items():cmd.extend(['--'+k.replace('_','-'),str(v)])
                     env=dict(os.environ,CUDA_VISIBLE_DEVICES=str(t['gpu']),OMP_NUM_THREADS='4',LP_NUM_THREADS='2',
                         PYTHONDONTWRITEBYTECODE='1',XLA_PYTHON_CLIENT_PREALLOCATE='false',
                         GLOBO_ENGINE_ROOT=f'/tmp/globo_continuous_engines/{t["name"]}')
@@ -413,11 +418,26 @@ def main():
                     if t.get('software_renderer'):env['GLOBO_SOFTWARE_RENDERER']='1'
                     if t.get('visitation'):env['GLOBO_VISITATION']='1'
                     if t.get('event_capture'):env['GLOBO_EVENT_CAPTURE']='1'
+                    if t.get('life_capture'):
+                        env['GLOBO_LIFE_CAPTURE']='1'
+                        env['GLOBO_LIFE_VIDEO_ROOT']=str(Path(t.get('artifact_root','/mnt/obelisk-shared/kmckee90/globo_lifetime_v2'))/'runs'/t['name']/'life_videos')
+                    if t.get('hard_survival'):env['GLOBO_HARD_SURVIVAL']='1'
+                    if t.get('natural_cycle'):env['GLOBO_NATURAL_CYCLE']='1'
+                    if 'move_speed' in t:env['GLOBO_MOVE_SPEED']=str(t['move_speed'])
+                    if 'move_accel' in t:env['GLOBO_MOVE_ACCEL']=str(t['move_accel'])
+                    if t.get('life_settings'):env['GLOBO_LIFE_SETTINGS']=t['life_settings']
+                    if t.get('survival'):
+                        env['GLOBO_SURVIVAL']='1'
+                        env['GLOBO_SURVIVAL_NOVELTY_SCALE']=str(t.get('survival_novelty_scale',.25))
+                    if t.get('single_place'):env['GLOBO_SINGLE_PLACE']='1'
+                    if t.get('lifetime_v2'):env['GLOBO_LIFETIME_V2']='1'
+                    if t.get('block_stack_capacity'):env['GLOBO_BLOCK_STACK_CAPACITY']=str(t['block_stack_capacity'])
                     if t.get('frontier_rotation') is False:env['GLOBO_FRONTIER_ROTATION']='0'
                     if t.get('phase')=='phase2':env['GLOBO_CLIP_SETTINGS']='/mnt/obelisk-shared/kmckee90/globo_phase2/clip_settings.json'
                     if t.get('phase')=='phase3':env['GLOBO_CLIP_SETTINGS']='/mnt/obelisk-shared/kmckee90/globo_phase3/clip_settings.json'
                     if t.get('phase')=='phase4':env['GLOBO_CLIP_SETTINGS']='/mnt/obelisk-shared/kmckee90/globo_phase4/clip_settings.json'
                     if t.get('phase')=='phase5':env['GLOBO_CLIP_SETTINGS']='/mnt/obelisk-shared/kmckee90/globo_phase5/clip_settings.json'
+                    if t.get('clip_settings'):env['GLOBO_CLIP_SETTINGS']=t['clip_settings']
                     cpus=sorted(os.sched_getaffinity(0))[t['gpu']*4:t['gpu']*4+4]
                     if len(cpus)==4:cmd=['taskset','-c',','.join(map(str,cpus)),*cmd]
                     with (run/'console.log').open('a') as f:

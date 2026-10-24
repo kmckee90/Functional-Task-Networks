@@ -26,6 +26,13 @@ apt-get install -y -qq \
   libgl1 libglu1-mesa \
   libegl1 libegl-mesa0 libgles2 libgbm1
 
+# Existing Globo workspaces retain their Python venv on the home volume.
+# Repair only the container's system libraries without reinstalling Python.
+if [[ ${1:-} == --system-only ]]; then
+  echo '[setup_pod] Craftium system libraries ready; existing Python environment unchanged.'
+  exit 0
+fi
+
 # --- 2. Python 3.11 + project dependencies ----------------------------------
 # craftium is cp311-only; force uv to a managed 3.11 regardless of the system
 # interpreter (the base image's default python3 is 3.12, which uv picks first).

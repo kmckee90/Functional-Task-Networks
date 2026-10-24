@@ -1,5 +1,12 @@
-function selectedAggregates(runs, hidden, column) {
+function selectedAggregates(runs, hidden, column, perModel=false) {
   const selected=runs.filter(r=>!hidden[r.name]);
+  if(perModel){
+    const groups=[];
+    for(const model of [...new Set(selected.map(r=>r.model))]){
+      groups.push(...selectedAggregates(selected.filter(r=>r.model===model),{},column).groups);
+    }
+    return {groups,selected,cap:Math.max(0,...selected.flatMap(r=>r.rows.length?[r.rows.at(-1)[0]]:[]))};
+  }
   if(!selected.length||selected.some(r=>!r.rows.length))return {groups:[],cap:null,selected};
   const cap=Math.min(...selected.map(r=>r.rows.at(-1)[0]));
   const start=Math.max(...selected.map(r=>r.rows[0][0]));
@@ -18,12 +25,15 @@ function redrawSelected(){
   document.querySelectorAll('.curve').forEach(p=>p.classList.toggle('hidden',!!hidden[p.dataset.run]));
   let result;
   for(const svg of document.querySelectorAll('.comparison-chart')){
-    const column=svg.dataset.metric==='total_cells'?1:2;
-    result=selectedAggregates(comparisonRuns,hidden,column);
+    if(svg.dataset.raw==='true'){svg.querySelector('.aggregate').replaceChildren();continue;}
+    const column=svg.dataset.column?Number(svg.dataset.column):(svg.dataset.metric==='total_cells'?1:2);
+    const source=svg.dataset.source==='survival'?comparisonSurvivalRuns:comparisonRuns;
+    const chartResult=selectedAggregates(source,hidden,column,typeof comparisonPerModelEndpoints!=='undefined'&&comparisonPerModelEndpoints);
+    if(!result)result=chartResult;
     const xy=(x,y)=>[70+655*x/Number(svg.dataset.xmax),315-230*y/Number(svg.dataset.ymax)];
     const layer=svg.querySelector('.aggregate');layer.replaceChildren();
     function add(tag,attrs,title){const el=document.createElementNS('http://www.w3.org/2000/svg',tag);for(const [k,v] of Object.entries(attrs))el.setAttribute(k,v);if(title){const t=document.createElementNS(el.namespaceURI,'title');t.textContent=title;el.append(t);}layer.append(el);}
-    for(const g of result.groups){
+    for(const g of chartResult.groups){
       const polygon=[...g.points.map(p=>xy(p.x,p.max)),...[...g.points].reverse().map(p=>xy(p.x,p.min))];
       if(g.n>1)add('polygon',{points:polygon.map(p=>p.join(',')).join(' '),fill:g.color,opacity:'.12'},`${g.model}: range of ${g.n} selected runs`);
       const path=g.points.map((p,i)=>(i?'L':'M')+xy(p.x,p.mean).join(',')).join(' ');
@@ -34,7 +44,7 @@ function redrawSelected(){
   if(!result.selected.length)status.textContent='No runs selected.';
   else if(result.cap===null)status.textContent='Waiting for observations from all selected runs.';
   else if(!result.groups.length)status.textContent='Selected runs do not yet share an observation interval.';
-  else status.textContent=result.groups.map(g=>`${g.model}: ${g.n} selected`).join(' · ')+` · Means and ranges through ${result.cap.toLocaleString()} observations.`;
+  else status.textContent=result.groups.map(g=>`${g.model}: ${g.n} selected`).join(' · ')+(typeof comparisonPerModelEndpoints!=='undefined'&&comparisonPerModelEndpoints?' · Each condition’s mean/range ends at its shortest selected run.':` · Means and ranges through ${result.cap.toLocaleString()} observations.`);
 }
 for(const c of document.querySelectorAll('.toggle')){
   c.checked=!hidden[c.dataset.run];

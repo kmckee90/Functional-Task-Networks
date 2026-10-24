@@ -16,7 +16,7 @@ from .scalable_replay import cpu_tree, trajectory
 
 
 class Sheet(nn.Module):
-    def __init__(self, shape, actions, variant, budget, width=8, depth=8):
+    def __init__(self, shape, actions, variant, budget, width=8, depth=8, active_neurons=None):
         super().__init__()
         self.shape=tuple(shape);self.actions=actions;self.variant=variant
         c,h,w=shape
@@ -26,7 +26,9 @@ class Sheet(nn.Module):
         neuron=sum((a+1)*b for a,b in zip(sizes,sizes[1:]))
         # Both existing value streams count toward the old trainable budget.
         per_atom=neuron+self.positions*actions*2
-        self.k=max(1,round(budget/per_atom));self.H=self.k*8
+        self.k=max(1,round(budget/per_atom)) if active_neurons is None else int(active_neurons)
+        if self.k < 1:raise ValueError('FTN active neuron count must be positive')
+        self.H=self.k*8
         self.weights=nn.ParameterList()
         self.biases=nn.ParameterList()
         for a,b in zip(sizes,sizes[1:]):
@@ -120,12 +122,13 @@ class Selector(BayesMaskReconfig,nn.Module):
 
 class M2EFTN:
     """Install a sheet into M2E with bounded-dwell frontier selection."""
-    def __init__(self,agent,variant):
+    def __init__(self,agent,variant,active_neurons=None):
         self.agent=agent
         from .frontier_rotation import FrontierRotation
         agent.frontier_rotation=FrontierRotation()
         budget=sum(p.numel() for p in agent._trainable_params)
-        self.q=Sheet(agent.hidden_shape,agent.head_sizes[0],variant,budget).to(agent.device)
+        self.q=Sheet(agent.hidden_shape,agent.head_sizes[0],variant,budget,
+            active_neurons=active_neurons).to(agent.device)
         self.target=deepcopy(self.q).requires_grad_(False)
         self.selector=Selector(self.q.H,self.q.k,self.q.actions,agent.gamma,agent.gamma_env).to(agent.device)
         self.q.mask.copy_(self.selector.m);self.target.mask.copy_(self.selector.m)
@@ -160,6 +163,13 @@ class M2EFTN:
         bonus_index=-1 if d.get('frontier_endpoint',False) else nov.argmax()
         reward[bonus_index]*=a.goal_sparse_reward_scale if d['is_goal'] else a.main_sparse_reward_scale
         env=a.env_reward_coef*d['env_r']-a.death_penalty*d['terminal'].float()
+        if getattr(a,'survival',False):
+            # Keep the boosted frontier reward; quarter other novelty rewards.
+            # Match death cost to that batch's original positive goal target.
+            goal_reward=reward[bonus_index].clone().clamp_min(0)
+            reward*=getattr(a,'survival_novelty_scale',.25)
+            reward[bonus_index]=goal_reward
+            env=-d['env_r'].lt(0).float()*goal_reward
         return torch.stack((d['action'][:,0].float(),reward,env,(~d['terminal']).float()),-1)
 
     def search(self,d):

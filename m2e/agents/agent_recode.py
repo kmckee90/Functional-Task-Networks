@@ -98,6 +98,11 @@ class RDDPG_Dual(nn.Module):
     ):
         super().__init__()
         self.config = kwargs
+        self.config.setdefault("a", 0.0)
+        self.config.setdefault("returns_gamma", self.config.get("gamma", 0.9))
+        for name in ("a", "returns_gamma"):
+            if not 0.0 <= self.config[name] <= 1.0:
+                raise ValueError(f"{name} must be in [0, 1], got {self.config[name]}")
         self.action_size = action_size
         self.action_bounds = action_bounds
         self.cur_step = 0
@@ -269,6 +274,22 @@ class RDDPG_Dual(nn.Module):
         targets = reward.squeeze() + self.config["gamma"] * max_q_values_next * ~done.squeeze()
         return targets
 
+    @torch.no_grad()
+    def _empirical_returns(self, goal_reward: Tensor, done: Tensor) -> Tensor:
+        """Discount goal rewards through the sampled sequence, without bootstrapping.
+
+        Terminal transitions stop accumulation even when a batch spans episodes.
+        A truncated final episode uses only the rewards available in this batch.
+        """
+        rewards = goal_reward.detach().reshape(-1)
+        terminals = done.reshape(-1).bool()
+        returns = torch.empty_like(rewards)
+        running_return = rewards.new_zeros(())
+        for t in range(len(rewards) - 1, -1, -1):
+            running_return = rewards[t] + self.config["returns_gamma"] * running_return * ~terminals[t]
+            returns[t] = running_return
+        return returns
+
     def _polyak_update(self, target_parameters: Iterator[nn.Parameter], pred_parameters: Iterator[nn.Parameter]):
         with torch.no_grad():
             assert isinstance(self.config["polyak_beta"], float)
@@ -353,7 +374,8 @@ class RDDPG_Dual(nn.Module):
                     recall_mode = "random"
 
                 # Train on either the goal buffer or the main buffer
-                if self.goal_memory.length() > 4 * self.config["minibatch_size"] and recall_mode == "goal":
+                goal_replay = self.goal_memory.length() > 4 * self.config["minibatch_size"] and recall_mode == "goal"
+                if goal_replay:
                     obs, feedback, next_obs, next_feedback, action, reward, done, idx = self._prioritized_recall(
                         self.goal_memory, "goal"
                     )
@@ -362,7 +384,7 @@ class RDDPG_Dual(nn.Module):
                     obs, feedback, next_obs, next_feedback, action, reward, done, idx = self._prioritized_recall(
                         self.memory, recall_mode
                     )
-                    rewards_o = main_reward[idx].reshape(-1, 1)  # type: ignore
+                    rewards_o = reward
 
                 states_o = self.state_model_o(obs * self.config["OCP"])
                 next_states_o = self.state_model_o_targ(next_obs)
@@ -374,10 +396,13 @@ class RDDPG_Dual(nn.Module):
                 next_states = torch.cat((next_states_o, next_states_f), -1)
 
                 # Critic loss (obs)
-                rewards_o = reward
                 q_values_o = self._q_values_o(states_o, action)
                 next_action = self.act_target(next_states)
                 targets_o = self._q_targets_o(rewards_o, torch.cat([next_states_o, next_action], dim=1).detach(), done)
+                if goal_replay and self.config["a"] > 0:
+                    returns = self._empirical_returns(rewards_o, done)
+                    a = self.config["a"]
+                    targets_o = (1 - a) * targets_o + a * returns
                 critic_loss_o = torch.nn.functional.mse_loss(q_values_o, targets_o)
 
                 # Critic loss (feedback)
@@ -415,6 +440,7 @@ class RDDPG_Dual(nn.Module):
                 if self.config["FCP"]:
                     self._polyak_update(self.q_target_f.parameters(), self.q_pred_f.parameters())
                 self._polyak_update(self.act_target.parameters(), self.act_pred.parameters())
+
 
         # Reinstate real-world context
         self.state_model_f.hidden = hidden_f

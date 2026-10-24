@@ -1,60 +1,11 @@
-# Source sync only. Applied when actl sync is next started; never delete local results.
-# These experiments have their own pod sync sessions.
-/experiments/sit/
-/experiments/doom/
-/experiments/ftn_robotics/
-/experiments/clrs/
-/experiments/e2e/
+# FTN intentionally syncs experiment artifacts in both directions.
+# Git ignores still keep generated results out of source control.
 **/.git/
-**/__pycache__/
 **/.venv/
 **/venv/
+**/__pycache__/
 **/node_modules/
-**/*artifacts*/
-**/checkpoints*/
-**/replay/
-**/runs/
-**/results/
-**/output/
-**/outputs/
-**/ckpt/
-**/logs/
-**/datasets/
-**/data_cache/
-**/expert_data/
-**/wandb/
-**/pretrained_models/
-**/wad/
-exploration_results/
-proposal_offline/
-proposal_githubio/
-nascent/proposal_githubio/
-**/*.pt
-**/*.pth
-**/*.ckpt
-**/*.safetensors
-**/*.npy
-**/*.npz
-**/*.pkl
-**/*.pickle
-**/*.parquet
-**/*.arrow
-**/*.h5
-**/*.hdf5
-**/*.wad
-**/*.mp4
-**/*.webm
-**/*.gif
-**/*.png
-**/*.jpg
-**/*.jpeg
-**/*.pdf
-**/*.log
-**/*.out
-**/*.zip
-**/*.tar
-**/*.tar.gz
-**/*.tgz
-
-# Globo has its own sync root (including required game textures).
-/Globo/
+**/*.pyc
+**/.mypy_cache/
+**/.pytest_cache/
+**/.ruff_cache/

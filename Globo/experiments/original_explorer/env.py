@@ -246,6 +246,9 @@ def ensure_env_dir(env_dir: str = DEFAULT_ENV_DIR, globo_src: str = DEFAULT_GLOB
 
     # Make globo's `climate` mod load AFTER craftium_env, so our RNG reseed (for
     # weather_seed) runs before climate picks its weather. Idempotent.
+    if have_game:
+        animal_init = os.path.join("mods", "animals", "init.lua")
+        shutil.copyfile(os.path.join(globo_src, animal_init), os.path.join(game_dst, animal_init))
     climate_conf = os.path.join(game_dst, "mods", "climate", "mod.conf")
     if os.path.isfile(climate_conf):
         with open(climate_conf) as f:

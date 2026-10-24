@@ -1,9 +1,10 @@
 -- Screening only. Find safe solid ground; never loaded during agent training.
 local started = false
+local ceiling = globo_spawn_scan_ceiling or 60
 minetest.register_globalstep(function(dt)
   if started or #minetest.get_connected_players() == 0 then return end
   started = true
-  minetest.emerge_area({x=-16,y=-16,z=96}, {x=40,y=80,z=144}, function(_,_,remaining)
+  minetest.emerge_area({x=-16,y=-16,z=96}, {x=40,y=ceiling+20,z=144}, function(_,_,remaining)
     if remaining ~= 0 then return end
     local candidates = {}
     local function safe_air(x,y,z)
@@ -13,7 +14,7 @@ minetest.register_globalstep(function(dt)
         (d.liquidtype == nil or d.liquidtype == 'none') and (d.damage_per_second or 0)==0
     end
     for x=-8,32,2 do for z=104,136,2 do
-      for y=60,-8,-1 do
+      for y=ceiling,-8,-1 do
         local n=minetest.get_node({x=x,y=y,z=z})
         local d=minetest.registered_nodes[n.name]
         if d and d.walkable and (d.damage_per_second or 0)==0 then

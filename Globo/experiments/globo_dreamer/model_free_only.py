@@ -17,13 +17,14 @@ def train_model_free(args, root, env):
         online_coef=args.mf_online_coef,offline_coef=args.mf_offline_coef,
         frontier_scale=args.mf_frontier_scale,lr=args.mf_lr,
         model_reward_weight=0.,model_feedback=args.model_feedback,
-        reservoir_channels=args.reservoir_channels,reservoir_variant=args.reservoir_variant)
+        reservoir_channels=args.reservoir_channels,reservoir_variant=args.reservoir_variant,
+        num_actions=env.act_space['action'].classes,offline_updates=args.mf_offline_updates)
     if args.m2e_ftn:
         from .m2e_ftn import M2EFTN
         if args.frontier_ftn:
             from .frontier_ftn import FrontierFTN
             behavior.ftn=FrontierFTN(behavior.agent,args.frontier_ftn,root)
-        else:behavior.ftn=M2EFTN(behavior.agent,args.m2e_ftn)
+        else:behavior.ftn=M2EFTN(behavior.agent,args.m2e_ftn,active_neurons=args.m2e_ftn_k)
         atomic_json(root/'architecture.json',behavior.ftn.q.spec)
         print('FTN architecture:',behavior.ftn.q.spec,flush=True)
     if args.mf_init_weights:
@@ -39,6 +40,10 @@ def train_model_free(args, root, env):
         if not args.m2e_ftn:raise ValueError('Event capture requires the FTN observation/mask stream')
         from .event_capture import EventCapture
         capture=EventCapture(root/'event_clips',behavior.ftn)
+    life_capture=None
+    if os.environ.get('GLOBO_LIFE_CAPTURE')=='1':
+        from .life_capture import LifeCapture
+        life_capture=LifeCapture(os.environ.get('GLOBO_LIFE_VIDEO_ROOT',str(root/'life_videos')),behavior.ftn)
     cp=elements.Checkpoint(elements.Path(root/'ckpt'))
     cp.step=elements.Counter(0);cp.behavior=behavior;cp.live=live
     if args.mf_init_weights and not cp.exists():
@@ -48,6 +53,24 @@ def train_model_free(args, root, env):
             optimizer='fresh',schedule='minimum epsilon from start',
             epsilon=behavior.agent.epsilon,step=0))
     cp.load_or_save()
+    # New-world forks keep all learned state but start geometric/evaluation
+    # statistics afresh. The training counter stays at its inherited step.
+    from .phase2 import read
+    fork=read(root/'fork.json')
+    if fork.get('reset_world_metrics') and int(cp.step)==fork['step']:
+        live=ContinuousMonitor(root/'live');cp.live=live
+        if args.m2e_ftn:live.m2e_ftn=behavior.ftn;live.last_render_time=0
+    if os.environ.get('GLOBO_SURVIVAL')=='1':
+        # Loading an optimizer restores its old LR. Explicit experiment settings
+        # must win, while retaining the accumulated optimizer moments.
+        for group in behavior.agent.optimizer.param_groups:group['lr']=args.mf_lr
+        settings=dict(step=int(cp.step),gamma=behavior.agent.gamma,gamma_env=behavior.agent.gamma_env,
+            learning_rate=[g['lr'] for g in behavior.agent.optimizer.param_groups],
+            offline_updates=behavior.offline_updates,novelty_scale=behavior.agent.survival_novelty_scale,
+            replay_size=behavior.agent.memory.size,frontier_size=behavior.agent.goal.size,
+            density_size=behavior.agent.density.size)
+        atomic_json(root/'survival_settings.json',settings)
+        print('Survival settings:',settings,flush=True)
     behavior.agent.capture_input = args.render_size != 64
     step=cp.step
     live.event('process_start',int(step),pid=os.getpid(),model_free_only=True)
@@ -56,6 +79,10 @@ def train_model_free(args, root, env):
     signal.signal(signal.SIGINT,lambda *_:stopping.__setitem__(0,True))
     driver=embodied.Driver([lambda:env],parallel=False)
     driver.reset(lambda batch:None)
+    applet=None
+    if args.live_port:
+        from .live_applet import LiveApplet
+        applet=LiveApplet(args.live_port, location_path=root/'live'/'goal_sightings.sqlite')
     def on_step(transition,worker):
         step.increment()
         if behavior.agent.capture_input:
@@ -76,11 +103,13 @@ def train_model_free(args, root, env):
             transition.update({'log/goal_id':np.int32(behavior.ftn.action_goal),
                 'log/frontier_id':np.int32(behavior.ftn.action_final)})
         live.observe(transition,env.record,int(step),behavior.metrics)
+        if applet:applet.observe(transition,env.record,int(step),behavior)
         if capture:capture.observe(transition,env.record,int(step))
+        if life_capture:life_capture.observe(transition,env.record,int(step))
     driver.on_step(on_step)
     def policy(carry,obs,**kwargs):
         # Keep the hybrid's feedback input dimensions, with the model slot zero.
-        actions=behavior.policy(obs,{},np.zeros((1,25),np.float32))
+        actions=behavior.policy(obs,{},np.zeros((1,env.act_space['action'].classes),np.float32))
         return carry,actions,{}
     start=last_log=last_save=time.time();initial=int(step)
     def status(running):
@@ -107,3 +136,5 @@ def train_model_free(args, root, env):
         live.render(int(step),0,force=True)
         save();status(False)
         if capture:capture.close()
+        if life_capture:life_capture.close()
+        if applet:applet.close()

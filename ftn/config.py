@@ -27,6 +27,11 @@ available (N_REPLAY_SAMPLES=0 disables it). No weight freezing.
 Parameter glossary
 ==================
 
+DECORRELATION_COEF    Weight-training coefficient for mean squared off-diagonal
+                     neuron-output Pearson correlation. Default 0 disables it.
+                     Presets: DecorrelationWeak/Medium/Strong/VeryStrong.
+                     Applied before masking; never used by mask search.
+
 Architecture
 ------------
 ARCHITECTURE         Backbone family:
@@ -494,7 +499,7 @@ class Default:
     SEED = 123
 
     # ---- Data generator: shared (both TASK values) ----
-    N_TASK = 24               # number of continual-learning tasks
+    N_TASK = 12      # number of continual-learning tasks
     T = 256                  # samples generated per task batch
 
     # ---- Data generator: sine (TASK == "sine") ----
@@ -536,6 +541,11 @@ class Default:
     QUAD_DIM = 8   # ARCHITECTURE=="quad" only: per-unit quad feature width
 
     DROPOUT = 0.0
+
+    # Weight training only: mean squared off-diagonal Pearson correlation of
+    # scalar backbone neuron outputs across the batch (all neurons, pre-mask).
+    # Zero bypasses computation. Supported by base/quad/stack/rnn/wave.
+    DECORRELATION_COEF = 0.0
 
     LATERAL_B = 0.0
     LATERAL_STEPS = 0
@@ -1914,6 +1924,46 @@ class tasks4(Default):
 
 class Entropy(Default):
     RECONFIG_ENTROPY_COEF = 0.5
+
+class DecorrelationWeak(Default):
+    """Weight-training neuron decorrelation, coefficient 0.001."""
+    DECORRELATION_COEF = 0.001
+
+class DecorrelationMedium(Default):
+    """Weight-training neuron decorrelation, coefficient 0.01."""
+    DECORRELATION_COEF = 0.01
+
+class DecorrelationStrong(Default):
+    """Weight-training neuron decorrelation, coefficient 0.1."""
+    DECORRELATION_COEF = 0.1
+
+class DecorrelationVeryStrong(Default):
+    """Weight-training neuron decorrelation, coefficient 1.0."""
+    DECORRELATION_COEF = 1.0
+
+class DecorrelationVeryVeryStrong(Default):
+    """Weight-training neuron decorrelation, coefficient 1.0."""
+    DECORRELATION_COEF = 10.0
+
+class Decorrelation5(Default):
+    """Weight-training neuron decorrelation, coefficient 1.0."""
+    DECORRELATION_COEF = 5.0
+
+class Decorrelation10(Default):
+    """Weight-training neuron decorrelation, coefficient 1.0."""
+    DECORRELATION_COEF = 10.0
+
+class Decorrelation100(Default):
+    """Weight-training neuron decorrelation, coefficient 1.0."""
+    DECORRELATION_COEF = 100.0
+
+class Decorrelation1000(Default):
+    """Weight-training neuron decorrelation, coefficient 1.0."""
+    DECORRELATION_COEF = 1000.0
+
+class Decorrelation50(Default):
+    """Weight-training neuron decorrelation, coefficient 1.0."""
+    DECORRELATION_COEF = 50.0
 
 class NoEvals(Default):
     EVAL_BACKWARDS=False

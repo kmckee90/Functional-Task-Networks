@@ -1,43 +1,46 @@
-# FTN continual learning with SiT
+# FTN-SiT
 
-This directory belongs to the parent Functional Task Networks repository.
-`continual/` was moved intact from the upstream SiT checkout, including existing
-local results. Results remain on disk but are ignored by Git.
+Functional Task Networks continual-learning experiments built on
+[SiT](https://github.com/willisma/SiT).
 
-The backbone remains the unmodified `willisma/SiT` checkout at `sit/` beside `continual/`.
-The original experiment package name is still `continual`, so serialized module
-names, internal imports, and subprocess module names remain unchanged.
+This standalone repository was extracted from `experiments/sit` in
+`kmckee90/functional_task_networks`. The experiment package remains `continual`
+to preserve imports and serialized module names. Local datasets, model weights,
+and generated results are excluded from Git.
 
-On the pod, using the existing experiment environment:
+## Setup
 
-**Environment note:** the retained venv currently has an incomplete PyTorch
-installation. See `../../docs/refactoring/POD_MIGRATION.md` for the verified
-import-check workaround; training has not been restarted or validated.
+Clone this repository, then obtain the pinned upstream dependency:
 
 ```bash
-PYTHON=/home/dev/sit_state/venv/bin/python bash experiments/sit/run.sh -m continual.run --help
+git clone https://github.com/kmckee90/FTN-SiT.git
+cd FTN-SiT
+git clone https://github.com/willisma/SiT.git sit
+git -C sit checkout --detach cbde832a40b153ccc79603412409da9c9b0c568c
 ```
 
-Set `PYTHON` to the actual environment's interpreter. Set `SIT_UPSTREAM` to an
-absolute SiT checkout path when it is not at the default location. The launcher
-adds both the experiment directory and upstream SiT to `PYTHONPATH`, including
-for child processes. It does not install dependencies or launch jobs by itself.
-The pinned upstream revision is recorded in `../upstreams.json`.
-
-For a fresh parent checkout, obtain the upstream dependency without a fork:
+The upstream environment specification is in `environment.yml`. Set `PYTHON`
+to your environment's interpreter and run from the repository root:
 
 ```bash
-git clone https://github.com/willisma/SiT.git experiments/sit/sit
-git -C experiments/sit/sit checkout --detach cbde832
+PYTHON=/path/to/environment/bin/python bash run.sh -m continual.run --help
 ```
 
-The `sit` actl workspace is mapped to this experiment directory and syncs to
-`/home/dev/experiment`. From that remote directory use `bash run.sh ...`.
-Reconnect from this local directory with:
+Set `SIT_UPSTREAM` if the dependency is stored somewhere other than `./sit`.
+The launcher adds this repository and upstream SiT to `PYTHONPATH`, including
+for child processes. It does not install dependencies or start jobs itself.
 
-```bash
-actl pod up sit -n obelisk --sync --remote-path /home/dev/experiment
-```
+## Existing cluster workspace
 
-Keep bulk runtime output outside synchronized directories. The old remote
-`/home/dev/workspace` is preserved but is no longer this session's source root.
+`connect.sh` reconnects the `sit` actl workspace in namespace `obelisk` and
+syncs this directory to `/home/dev/experiment`. On that workspace, run
+`bash run.sh ...` from `/home/dev/experiment`. Keep bulk runtime output outside
+synchronized directories.
+
+The previously retained environment at `/home/dev/sit_state/venv` was recorded
+as having an incomplete PyTorch installation; its current health and training
+have not been verified as part of this repository extraction.
+
+## Attribution
+
+SiT source retains its original MIT license in `LICENSE.txt`.

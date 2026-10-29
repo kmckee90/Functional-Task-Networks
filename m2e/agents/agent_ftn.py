@@ -21,7 +21,7 @@ class MaskPosterior(BayesMaskReconfig, nn.Module):
         self.hidden_size, self.k, self.normalize = H, k, normalize
         self.reconfig_steps = cfg['ftn_reconfig_steps']
         self.reconfig_sample_size = cfg['ftn_support_size']
-        self.reconfig_noise_scale = 1.
+        self.reconfig_noise_scale = cfg['ftn_reconfig_noise_scale']
         self.loss = F.mse_loss
         self.register_buffer('m', torch.zeros(H))
         self._init_bayes(
@@ -31,10 +31,20 @@ class MaskPosterior(BayesMaskReconfig, nn.Module):
             bayes_temperature=cfg['ftn_temperature'],
             bayes_prior_decay=cfg['ftn_prior_decay'],
             bayes_stochastic_mask=cfg['ftn_stochastic_mask'],
+            bayes_reconfig_take_best=cfg['ftn_reconfig_take_best'],
             bayes_changepoint_reconfig_steps=cfg['ftn_changepoint_steps'],
-            bayes_changepoint_reconfig_lr=cfg['ftn_reconfig_lr'],
-            bayes_changepoint_prior_decay=0., bayes_changepoint_kl_weight=0.)
-        self.m.copy_(self._sample_mask(self.mask_logits, 1., True))
+            bayes_changepoint_reconfig_lr=(cfg['ftn_reconfig_lr'] if cfg['ftn_changepoint_lr'] is None
+                                          else cfg['ftn_changepoint_lr']),
+            bayes_changepoint_reconfig_sample_size=cfg['ftn_changepoint_support_size'],
+            bayes_changepoint_temperature=cfg['ftn_changepoint_temperature'],
+            bayes_changepoint_prior_decay=cfg['ftn_changepoint_prior_decay'],
+            bayes_changepoint_kl_weight=cfg['ftn_changepoint_kl_weight'],
+            bayes_changepoint_stochastic_mask=cfg['ftn_changepoint_stochastic_mask'],
+            sample_type=cfg['ftn_sample_type'],
+            overlap_mode=cfg['ftn_overlap_mode'], overlap_lambda=cfg['ftn_overlap_lambda'],
+            overlap_threshold=cfg['ftn_overlap_threshold'], overlap_temperature=cfg['ftn_overlap_temperature'])
+        self.m.copy_(self._sample_mask(self.mask_logits, cfg['ftn_initial_temperature'],
+                                      cfg['ftn_initial_stochastic_mask']))
 
     def _topk_mask(self, scores):
         return torch.zeros_like(scores).scatter_(0, scores.topk(self.k).indices, 1.)
@@ -105,11 +115,18 @@ FTN_DEFAULTS = dict(
     ftn_k=None, ftn_hidden_size=None, ftn_bank_multiplier=8,
     ftn_width=8, ftn_depth=8, ftn_reconfig_steps=2, ftn_reconfig_lr=.3,
     ftn_support_size=64, ftn_kl_weight=1., ftn_temperature=1.,
+    ftn_reconfig_take_best=False, ftn_sample_type='gumbel', ftn_reconfig_noise_scale=1.,
+    ftn_initial_temperature=1., ftn_initial_stochastic_mask=True,
     ftn_prior_decay=1., ftn_stochastic_mask=True, ftn_changepoint_steps=2,
+    ftn_changepoint_lr=None, ftn_changepoint_support_size=None,
+    ftn_changepoint_temperature=1., ftn_changepoint_prior_decay=0.,
+    ftn_changepoint_kl_weight=0., ftn_changepoint_stochastic_mask=True,
     ftn_changepoint_sd=3., ftn_changepoint_warmup=32, ftn_loss_ema=.03,
     ftn_action_reconfig_interval=8, ftn_replay_capacity=256,
     ftn_replay_every=8, ftn_overlap_low=.2, ftn_overlap_high=.8,
-    ftn_grad_clip=1.)
+    ftn_overlap_mode='bump', ftn_overlap_lambda=0.,
+    ftn_overlap_threshold=.5, ftn_overlap_temperature=.2,
+    ftn_grad_clip=1., ftn_reactive=False, ftn_reactive_sd=5., ftn_reactive_ema=.9)
 
 
 class RDDPG_Dual(RECODEAgent):
@@ -118,9 +135,15 @@ class RDDPG_Dual(RECODEAgent):
         for key in ('ftn_bank_multiplier','ftn_width','ftn_depth','ftn_reconfig_steps',
                     'ftn_support_size','ftn_changepoint_steps','ftn_replay_every'):
             if not isinstance(cfg[key], int) or cfg[key] < 1:raise ValueError(f'{key} must be positive')
-        for key in ('ftn_k','ftn_hidden_size'):
+        for key in ('ftn_k','ftn_hidden_size','ftn_changepoint_support_size'):
             if cfg[key] is not None and (not isinstance(cfg[key], int) or cfg[key] < 1):
                 raise ValueError(f'{key} must be positive or None')
+        for key in ('ftn_initial_temperature', 'ftn_changepoint_lr'):
+            value = cfg[key]
+            if key == 'ftn_changepoint_lr' and value is None:continue
+            if not math.isfinite(value) or value <= 0:raise ValueError(f'{key} must be finite and positive')
+        if not math.isfinite(cfg['ftn_reconfig_noise_scale']) or cfg['ftn_reconfig_noise_scale'] < 0:
+            raise ValueError('ftn_reconfig_noise_scale must be finite and non-negative')
         if not 0 <= cfg['ftn_overlap_low'] <= cfg['ftn_overlap_high'] <= 1:
             raise ValueError('Invalid FTN overlap interval')
         if not 0 < cfg['ftn_loss_ema'] <= 1:raise ValueError('Invalid FTN loss EMA')
@@ -130,6 +153,9 @@ class RDDPG_Dual(RECODEAgent):
             raise ValueError('Invalid FTN changepoint SD')
         if not math.isfinite(cfg['ftn_grad_clip']) or cfg['ftn_grad_clip'] <= 0:
             raise ValueError('Invalid FTN gradient clip')
+        if not 0 <= cfg['ftn_reactive_ema'] < 1:raise ValueError('Invalid FTN reactive EMA')
+        if not math.isfinite(cfg['ftn_reactive_sd']) or cfg['ftn_reactive_sd'] < 0:
+            raise ValueError('Invalid FTN reactive SD')
         super().__init__(observation_size, action_size, action_bounds, reservoir_type, **cfg)
         self.posteriors = nn.ModuleDict()
         self.ftn_spec = {}
@@ -151,6 +177,9 @@ class RDDPG_Dual(RECODEAgent):
         self.ftn_replay_updates = 0
         self.ftn_loss_mean = self.ftn_loss_var = 0.
         self._last_action_search = -1
+        self.ftn_reactive_mean = None
+        self.ftn_reactive_var = 0.
+        self.ftn_reactive_since = self.ftn_reactive_checks = 0
 
     @staticmethod
     def _names(key):
@@ -183,12 +212,22 @@ class RDDPG_Dual(RECODEAgent):
         with torch.no_grad():
             inputs={'o':torch.cat((d['o'],d['action']),-1),'f':torch.cat((d['f'],d['action']),-1),
                     'a':torch.cat((d['o'],d['f']),-1)}
-            contributions={k:getattr(self,self._names(k)[0]).contributions(v) for k,v in inputs.items()}
-            err=sum(float(F.mse_loss(getattr(self,self._names(k)[0])(inputs[k]),y))
-                    for k,y in [('o',to),('f',tf)] if self.config['OCP' if k=='o' else 'FCP'])
+            err=self._critic_error(inputs,to,tf)
         cfg=self.config
         cp=(self.ftn_searches>=cfg['ftn_changepoint_warmup'] and
             err>self.ftn_loss_mean+cfg['ftn_changepoint_sd']*max(math.sqrt(self.ftn_loss_var),1e-4))
+        reactive=cfg.get('ftn_reactive',False)
+        if reactive:
+            self.ftn_reactive_checks+=1
+            warmup=math.ceil(1/max(1-cfg['ftn_reactive_ema'],1e-8))
+            initial=self.ftn_reactive_mean is None
+            cp=(not initial and self.ftn_reactive_since>=warmup and
+                err>self.ftn_reactive_mean+cfg['ftn_reactive_sd']*math.sqrt(max(self.ftn_reactive_var,0.)))
+            if not initial and not cp:
+                self._observe_reactive_loss(err)
+                return False
+        with torch.no_grad():
+            contributions={k:getattr(self,self._names(k)[0]).contributions(v) for k,v in inputs.items()}
         for k,y in [('o',to),('f',tf),('a',inputs['a'])]:
             if k!='a' and not cfg['OCP' if k=='o' else 'FCP']:continue
             posterior=self.posteriors[k]
@@ -203,6 +242,26 @@ class RDDPG_Dual(RECODEAgent):
         self.ftn_loss_mean+=rate*delta
         self.ftn_loss_var=(1-rate)*(self.ftn_loss_var+rate*delta*delta)
         self.ftn_searches+=1;self.ftn_changepoints+=int(cp)
+        if reactive:
+            # Match ftn/run_experiments: track the post-search loss, never the
+            # pre-search spike; suppress triggers while the EMA re-forms.
+            self.ftn_reactive_since=0
+            self._observe_reactive_loss(self._critic_error(inputs,to,tf))
+        return True
+
+    @torch.no_grad()
+    def _critic_error(self, inputs, to, tf):
+        return sum(float(F.mse_loss(getattr(self,self._names(k)[0])(inputs[k]),y))
+                   for k,y in [('o',to),('f',tf)] if self.config['OCP' if k=='o' else 'FCP'])
+
+    def _observe_reactive_loss(self, loss):
+        alpha=self.config['ftn_reactive_ema']
+        if self.ftn_reactive_mean is None:self.ftn_reactive_mean=loss
+        else:
+            delta=loss-self.ftn_reactive_mean
+            self.ftn_reactive_mean=alpha*self.ftn_reactive_mean+(1-alpha)*loss
+            self.ftn_reactive_var=alpha*self.ftn_reactive_var+(1-alpha)*delta*delta
+        self.ftn_reactive_since+=1
 
     def _backward(self, d):
         to,tf=self._targets(d)
@@ -222,12 +281,9 @@ class RDDPG_Dual(RECODEAgent):
         for k in masks:getattr(self,'optimizer_'+k).zero_grad(set_to_none=True)
         critic,actor=self._backward(d)
         # One old support, under its own masks, sums gradients on shared neurons.
-        eligible=[]
-        for entry in self.ftn_archive:
-            overlaps=[float((entry['masks'][k].to(m.device)*m).sum())/self.posteriors[k].k for k,m in masks.items()]
-            if any(self.config['ftn_overlap_low']<=v<=self.config['ftn_overlap_high'] for v in overlaps):eligible.append(entry)
+        eligible=self._eligible_archive_indices(masks)
         if eligible:
-            old=eligible[int(torch.randint(len(eligible),()))]
+            old=self.ftn_archive[eligible[int(torch.randint(len(eligible),()))]]
             old_masks={k:m.to(masks[k].device) for k,m in old['masks'].items()}
             self._install(old_masks)
             self._backward(self._to_device(old['data']))
@@ -252,6 +308,23 @@ class RDDPG_Dual(RECODEAgent):
         self._metrics.update(ftn_critic_loss=critic,ftn_actor_loss=actor,ftn_updates=self.ftn_updates,
             ftn_searches=self.ftn_searches,ftn_changepoints=self.ftn_changepoints,
             ftn_replay_updates=self.ftn_replay_updates,ftn_archived_supports=len(self.ftn_archive))
+
+    def _eligible_archive_indices(self, masks):
+        """Same eligibility/order as the scalar scan, with three transfers total.
+
+        Archive masks already live on CPU. Accumulate exact binary overlaps in
+        batches there, then divide in float64 to match Python float thresholds.
+        """
+        if not self.ftn_archive:return []
+        overlaps=[]
+        for k,m in masks.items():
+            stored=torch.stack([entry['masks'][k] for entry in self.ftn_archive])
+            counts=(stored*m.detach().cpu()).sum(-1).double()
+            overlaps.append(counts/self.posteriors[k].k)
+        overlaps=torch.stack(overlaps,-1)
+        eligible=((overlaps>=self.config['ftn_overlap_low']) &
+                  (overlaps<=self.config['ftn_overlap_high'])).any(-1)
+        return eligible.nonzero().flatten().tolist()
 
     def _trim(self,d,cpu=False):
         # Keep the full sequence when blending empirical returns; truncating it
@@ -282,7 +355,8 @@ class RDDPG_Dual(RECODEAgent):
 
     def get_extra_state(self):
         return {k:getattr(self,k) for k in ('ftn_archive','ftn_updates','ftn_archive_seen',
-            'ftn_searches','ftn_changepoints','ftn_replay_updates','ftn_loss_mean','ftn_loss_var','_last_action_search')}
+            'ftn_searches','ftn_changepoints','ftn_replay_updates','ftn_loss_mean','ftn_loss_var','_last_action_search',
+            'ftn_reactive_mean','ftn_reactive_var','ftn_reactive_since','ftn_reactive_checks')}
 
     def set_extra_state(self,state):
         for k,v in state.items():setattr(self,k,v)

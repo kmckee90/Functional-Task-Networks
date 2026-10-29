@@ -1,7 +1,10 @@
 """Same maze experiment as experiment_recode, with Bayesian FTN decoders."""
 import argparse
+import json
 import os
-from contextlib import nullcontext
+from pathlib import Path
+import re
+from contextlib import ExitStack, nullcontext
 from dataclasses import asdict, dataclass
 from itertools import count
 from math import prod
@@ -16,6 +19,8 @@ from envs.continuous_maze import ContinuousMaze, CoverageCalculator
 from copy import deepcopy
 from PIL import Image
 import mlflow.pytorch
+from ftn_diagnostics import FTNRouteDiagnostic
+from ftn_diagnostic_worker import AsyncFTNRouteDiagnostic
 
 NUM_EPISODES = 1000
 SERVER_URI = "databricks"
@@ -157,21 +162,41 @@ class Hyperparameters:
     ftn_depth: int = 8
     ftn_reconfig_steps: int = 2
     ftn_reconfig_lr: float = 0.3
-    ftn_support_size: int = 64
+    ftn_support_size: int = 200
     ftn_kl_weight: float = 1.0
-    ftn_temperature: float = 1.0
+    ftn_temperature: float = 3.0
     ftn_prior_decay: float = 1.0
     ftn_stochastic_mask: bool = True
-    ftn_changepoint_steps: int = 2
+    ftn_reconfig_take_best: bool = False
+    ftn_sample_type: str = "gumbel"  # "gumbel" or "annealste"
+    ftn_reconfig_noise_scale: float = 1.0  # Used by annealste sampling.
+    ftn_initial_temperature: float = 1.0
+    ftn_initial_stochastic_mask: bool = True
+    # Changepoint refitting has independent posterior settings.
+    ftn_changepoint_steps: int = 30
+    ftn_changepoint_lr: float | None = None  # None shares ftn_reconfig_lr.
+    ftn_changepoint_support_size: int | None = None  # None uses all available support.
+    ftn_changepoint_temperature: float = 1.0
+    ftn_changepoint_prior_decay: float = 0.0
+    ftn_changepoint_kl_weight: float = 0.0
+    ftn_changepoint_stochastic_mask: bool = True
     ftn_changepoint_sd: float = 3.0
     ftn_changepoint_warmup: int = 32
     ftn_loss_ema: float = 0.03
-    ftn_action_reconfig_interval: int = 8
+    ftn_action_reconfig_interval: int = 0
     ftn_replay_capacity: int = 256
-    ftn_replay_every: int = 8
+    ftn_replay_every: int = 1
     ftn_overlap_low: float = 0.2
     ftn_overlap_high: float = 0.8
+    # Search regularization, separate from archived-support overlap eligibility.
+    ftn_overlap_mode: str = "bump"  # "bump" or "gated"
+    ftn_overlap_lambda: float = 0.0
+    ftn_overlap_threshold: float = 0.5
+    ftn_overlap_temperature: float = 0.2
     ftn_grad_clip: float = 1.0
+    ftn_reactive: bool = False
+    ftn_reactive_sd: float = 5.0
+    ftn_reactive_ema: float = 0.9
     
     k: int = 15
     polyak_beta: float = 1.0
@@ -202,6 +227,17 @@ class Hyperparameters:
     recode_gamma: float = 1.0
     recode_insertion_probability: float = 0.1
     recode_decay: float = 0.9999
+
+
+def ftn_setting_overrides(setting="Current", no_replay=False):
+    """m2e equivalents of ftn/config.py's Reactive_Low and NoReplay."""
+    if setting not in ("Current", "Reactive_Low"):
+        raise ValueError(f"Unknown FTN setting: {setting}")
+    values = dict(ftn_setting=setting, ftn_no_replay=bool(no_replay))
+    if setting == "Reactive_Low":
+        values.update(ftn_reactive=True, ftn_reactive_sd=5., ftn_reactive_ema=.9)
+    if no_replay:values["ftn_replay_capacity"] = 0
+    return values
 
 
 def main(args):
@@ -250,6 +286,8 @@ def main(args):
     cfgdict = asdict(cfg)
     cfgdict.update(asdict(Hyperparameters()))
     cfgdict["device"] = args.device
+    cfgdict.update(ftn_setting_overrides(getattr(args, "ftn_setting", "Current"),
+                                        getattr(args, "no_ftn_replay", False)))
     for name in ("a", "returns_gamma"):
         value = getattr(args, name, None)
         if value is not None:
@@ -305,10 +343,39 @@ def main(args):
     max_reward = 1e-6
     step = 0
     gif_frames = []
-    with mlflow.start_run(run_name=args.run_name) if args.log else nullcontext():
+    with (mlflow.start_run(run_name=args.run_name, run_id=getattr(args, "run_id", None)) if args.log else nullcontext()), ExitStack() as diagnostic_stack:
+        local_metrics = None
+        if getattr(args, "local_metrics", None):
+            metrics_path = Path(args.local_metrics)
+            metrics_path.parent.mkdir(parents=True, exist_ok=True)
+            local_metrics = diagnostic_stack.enter_context(metrics_path.open("w"))
         if args.log:
             mlflow.set_tag("MLFLow test on explorer", "checking out mlflow")
             mlflow.log_params(cfgdict)
+
+        diagnostic = None
+        if not getattr(args, "no_ftn_diagnostics", False):
+            run_key = mlflow.active_run().info.run_id if args.log else re.sub(r"[^\w.-]+", "_", args.run_name)
+            asynchronous = not getattr(args, "ftn_diagnostic_sync", False)
+            diagnostic_class = AsyncFTNRouteDiagnostic if asynchronous else FTNRouteDiagnostic
+            worker_options = dict(normalization=cfg.density_normalization,
+                                  run_id=run_key if args.log else None,
+                                  tracking_uri=mlflow.get_tracking_uri() if args.log else None) if asynchronous else {}
+            diagnostic = diagnostic_class(
+                Path(getattr(args, "ftn_diagnostic_dir", "outputs/ftn_diagnostics")) / run_key,
+                cfg.maze_config.obs_scale, NORMALIZATION_FUNCTIONS[cfg.density_normalization],
+                seed=args.seed or 0,
+                artifact_logger=(lambda path: mlflow.log_artifact(str(path), artifact_path="ftn_diagnostics")) if args.log and not asynchronous else None,
+                **worker_options)
+            if asynchronous:
+                diagnostic_stack.enter_context(diagnostic)
+            if args.log:
+                mlflow.log_params(dict(ftn_diagnostic_interval=diagnostic.block_size,
+                                       ftn_diagnostic_rollouts=diagnostic.rollouts,
+                                       ftn_diagnostic_visitation_color="red",
+                                       ftn_diagnostic_execution="async" if asynchronous else "sync",
+                                       ftn_diagnostic_representative="most_used_actor",
+                                       ftn_diagnostic_layout="SpatialPermuteRandomCenter"))
 
         for ep in range(NUM_EPISODES+1):
             if not cfg.maze_config.reset and ep > 0:
@@ -318,6 +385,8 @@ def main(args):
             if not cfg.maze_config.reset and ep > 0:
                 env.pos = last_pos  # type: ignore
                 obs[:2] = torch.tensor(last_pos, dtype=torch.float, device=device) / cfg.maze_config.obs_scale  # type: ignore
+            if diagnostic:
+                diagnostic.begin_episode(ep + 1, env)
             done = False
             
 
@@ -330,6 +399,8 @@ def main(args):
                 with torch.no_grad():
                     # Need to build obs feedback concat here
                     action = agent(obs, feedback).squeeze()
+                    if diagnostic:
+                        diagnostic.record_step(agent)
                     next_obs, _, done, _, _ = env.step(action.cpu().numpy())                    
                     next_obs = torch.tensor(next_obs, dtype=torch.float, device=device) / cfg.maze_config.obs_scale
 
@@ -369,6 +440,8 @@ def main(args):
                 
                 
                 if done:
+                    if diagnostic:
+                        diagnostic.end_episode()
                     #Rendering for gif
                     if args.gif is not None:
                         gif_frames.append(Image.fromarray(return_image(cfg, env, agent, ep=ep + 1)))
@@ -383,10 +456,16 @@ def main(args):
                         env.all_pos = list(agent.all_pos[:, :2] * cfg.maze_config.obs_scale)  # type: ignore
                         env.render("human")
 
-                    if args.log and ep % 20 == 0:
+                    if (args.log or local_metrics is not None) and ep % 20 == 0:
                         coverage = coverage_calculator.calculate(kernel_size=2)
-                        mlflow.log_metric("Coverage", coverage, step=step)
-                        save_image(cfg, env, agent, ep=ep + 1)
+                        if local_metrics is not None:
+                            record = dict(episode=ep + 1, step=step, Coverage=float(coverage))
+                            local_metrics.write(json.dumps(record) + "\n")
+                            local_metrics.flush()
+                            print(f"Episode {ep + 1}, step {step}: Coverage={float(coverage):.6f}", flush=True)
+                        if args.log:
+                            mlflow.log_metric("Coverage", coverage, step=step)
+                            save_image(cfg, env, agent, ep=ep + 1)
                         
                     if args.gif is not None and ep % 10 == 0:
                         gif_frames[0].save(
@@ -396,7 +475,20 @@ def main(args):
                             duration=100,  # milliseconds per frame
                             loop=0         # 0 = infinite loop
                         )
+                    if diagnostic and diagnostic.ready:
+                        print(f"FTN diagnostic: episodes {diagnostic.pending[0]['episode']}–{ep + 1}, "
+                              f"{diagnostic.block_size * diagnostic.rollouts} fixed-mask rollouts", flush=True)
+                        if isinstance(diagnostic, AsyncFTNRouteDiagnostic):
+                            diagnostic.submit(agent, max_reward)
+                            print("FTN diagnostic snapshot queued; training continues", flush=True)
+                        else:
+                            paths = diagnostic.evaluate(agent, max_reward)
+                            print(f"FTN diagnostic saved: {paths[0]}", flush=True)
+                    if isinstance(diagnostic, AsyncFTNRouteDiagnostic):
+                        diagnostic.poll()
                     break
+        if isinstance(diagnostic, AsyncFTNRouteDiagnostic):
+            diagnostic.close()  # Finish uploads before the MLflow run closes.
         if args.log:
             save_image(cfg, env, agent)
             save_density_estimator(agent)
@@ -469,6 +561,8 @@ if __name__ == "__main__":
     parser.add_argument("-v", "--verbose", action="store_true", default=False, help="Enable verbose logging.")
     parser.add_argument("-e", "--experiment_name", default="RDDPG Refinements", help="Experiment name for mlflow")
     parser.add_argument("-n", "--run_name", default=None, help="Run name for mlflow")
+    parser.add_argument("--run_id", default=None, help="Existing MLflow run ID, used by the multi-GPU launcher")
+    parser.add_argument("--local_metrics", default=None, help="Write coverage metrics to a local JSONL file")
     parser.add_argument("--notes", default="", help="Extra labeling for the run")
     parser.add_argument("--gif", default=None, help="Produce animated gif of given filename.")
     parser.add_argument("-s", "--save", action="store_true", default=False)
@@ -479,6 +573,11 @@ if __name__ == "__main__":
     parser.add_argument("-o", "--no_OCP", action="store_true", default=False, help="Enable OCP")
     parser.add_argument("-f", "--no_FCP", action="store_true", default=False, help="Enable FCP")
     parser.add_argument("--task", default="Fixed")
+    parser.add_argument("--no_ftn_diagnostics", action="store_true", help="Disable the 20-episode fixed-mask route diagnostic")
+    parser.add_argument("--ftn_diagnostic_dir", default="outputs/ftn_diagnostics", help="Local diagnostic PNG/NPZ/JSON artifact directory")
+    parser.add_argument("--ftn_diagnostic_sync", action="store_true", help="Run retrospective diagnostics synchronously instead of in a same-device worker")
+    parser.add_argument("--ftn_setting", choices=["Current", "Reactive_Low"], default="Current", help="FTN mask reconfiguration setting")
+    parser.add_argument("--no_ftn_replay", action="store_true", help="Disable FTN archived-support replay; retain DDPG experience replay")
 
 
 

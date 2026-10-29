@@ -4,7 +4,7 @@ from dataclasses import asdict
 from unittest.mock import patch
 import torch
 
-from agents.agent_ftn import RDDPG_Dual, FTNDecoder, IsolatedRMSprop, FTN_DEFAULTS
+from agents.agent_ftn import RDDPG_Dual, FTNDecoder, IsolatedRMSprop, FTN_DEFAULTS, MaskPosterior
 from experiment_ftn import Config, Hyperparameters
 from experiment_recode import Hyperparameters as OriginalHyperparameters
 
@@ -20,10 +20,49 @@ def make_agent(device='cpu', **extra):
 
 
 class FTNTests(unittest.TestCase):
+    def test_posterior_configuration_and_separate_changepoint_settings(self):
+        cfg = dict(FTN_DEFAULTS, ftn_temperature=3., ftn_reconfig_lr=.2,
+                   ftn_reconfig_take_best=True, ftn_sample_type='annealste',
+                   ftn_reconfig_noise_scale=.7, ftn_initial_stochastic_mask=False,
+                   ftn_initial_temperature=2., ftn_changepoint_steps=4,
+                   ftn_changepoint_lr=.1, ftn_changepoint_support_size=3,
+                   ftn_changepoint_temperature=.8, ftn_changepoint_prior_decay=.4,
+                   ftn_changepoint_kl_weight=.2, ftn_changepoint_stochastic_mask=False,
+                   ftn_overlap_mode='gated', ftn_overlap_lambda=.3,
+                   ftn_overlap_threshold=.6, ftn_overlap_temperature=.15)
+        posterior = MaskPosterior(8, 2, False, cfg)
+        self.assertTrue(posterior.bayes_reconfig_take_best)
+        self.assertEqual(posterior.sample_type, 'annealste')
+        self.assertEqual(posterior.reconfig_noise_scale, .7)
+        for name in ('mode', 'lambda', 'threshold', 'temperature'):
+            self.assertEqual(getattr(posterior, 'overlap_' + name), cfg['ftn_overlap_' + name])
+        torch.testing.assert_close(posterior.m, posterior._topk_mask(posterior.mask_logits))
+        x, y = torch.randn(6, 8, 1), torch.randn(6, 1)
+        with patch.object(posterior, '_posterior_update', wraps=posterior._posterior_update) as update:
+            posterior.reconfigure(x, y)
+            ordinary = update.call_args.kwargs
+            posterior.reconfigure_changepoint(x, y)
+            change = update.call_args.kwargs
+        self.assertEqual(ordinary['temperature'], 3.)
+        self.assertEqual(ordinary['lr'], .2)
+        self.assertEqual(change, dict(steps=4, lr=.1, sample_size=3, kl_weight=.2,
+                                     temperature=.8, prior_decay=.4,
+                                     stochastic_mask=False, changepoint=True))
+        torch.testing.assert_close(posterior.m.sum(), posterior.m.new_tensor(2.))
+        self.assertTrue(torch.isfinite(posterior.mask_logits).all())
+        shared = MaskPosterior(8, 2, False, dict(FTN_DEFAULTS, ftn_reconfig_lr=.7))
+        self.assertEqual(shared.bayes_changepoint_reconfig_lr, .7)
+        self.assertEqual(shared.bayes_changepoint_temperature, 1.)
+
     def test_config_preserves_original_and_exposes_ftn(self):
         cfg=asdict(Hyperparameters())
         for k,v in asdict(OriginalHyperparameters()).items():self.assertEqual(cfg[k],v)
-        for k,v in FTN_DEFAULTS.items():self.assertEqual(cfg[k],v)
+        for k,v in FTN_DEFAULTS.items():
+            if k == 'ftn_k':
+                # The experiment intentionally selects an explicit active
+                # budget; the reusable agent still defaults to auto-sizing.
+                self.assertTrue(cfg[k] is None or isinstance(cfg[k],int) and cfg[k]>0)
+            else:self.assertEqual(cfg[k],v)
 
     def test_selected_forward_and_inactive_weights(self):
         cfg=dict(FTN_DEFAULTS,ftn_k=2,ftn_hidden_size=8,ftn_width=3,ftn_depth=2)

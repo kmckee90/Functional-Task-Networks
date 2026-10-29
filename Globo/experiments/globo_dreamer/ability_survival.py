@@ -9,19 +9,23 @@ from . import natural_survival as previous
 from . import action_comparison as base
 
 SHARED = Path('/mnt/obelisk-shared/kmckee90/globo_ability_survival')
-PODS = previous.PODS
+PODS = dict(previous.PODS, globo2=19, globo3=101)
 
 def experiments(pod):
-    return [dict(t, name=t['name'].replace('natural_hard_', 'abilities18_'),
-        model=f'18 actions · world {t["seed"]}', phase='ability_survival',
+    extra=pod in ('globo2','globo3')
+    source=('globo-actions' if PODS[pod]==19 else 'globo1') if extra else pod
+    templates=previous.experiments(source)[:2] if extra else previous.experiments(source)
+    return [dict(t, name=t['name'].replace('natural_hard_', 'abilities18_g995_' if extra else 'abilities18_'),
+        pod=pod, mf_gamma=.995 if extra else .90,
+        model=(f'18 actions · γ=.995 · world {t["seed"]}' if extra else f'18 actions · world {t["seed"]}'), phase='ability_survival',
         reduced_actions=False, inventory_actions=True, block_stack_capacity=0,
         collected_stack_capacity=2, artifact_root=str(SHARED),
         clip_settings=str(SHARED/'clip_settings.json'),
-        life_settings=str(SHARED/'life_settings.json')) for t in previous.experiments(pod)]
+        life_settings=str(SHARED/'life_settings.json')) for t in templates]
 
 def references():
     result=[]
-    for pod in PODS:
+    for pod in previous.PODS:
         for t in read(previous.SHARED/'specs'/f'{pod}.json',[]):
             result.append(dict(t, model=f'Previous 14 actions · world {t["seed"]}', status='archived'))
     return result
@@ -39,9 +43,10 @@ def launch(pod):
             if b'globo_dreamer.natural_survival' in args and b'publish' in args:
                 os.kill(int(proc.parent.name),signal.SIGTERM)
         except (OSError,ProcessLookupError):pass
-    snapshot=read(previous.SHARED/'pods'/f'{pod}.json')
-    snapshot['trials']=old
-    atomic(previous.SHARED/'pods'/f'{pod}.json',snapshot)
+    if pod in previous.PODS:
+        snapshot=read(previous.SHARED/'pods'/f'{pod}.json')
+        snapshot['trials']=old
+        atomic(previous.SHARED/'pods'/f'{pod}.json',snapshot)
     for t in specs:
         assert not (STATE/'runs'/t['name']).exists()
         assert not (SHARED/'runs'/t['name']).exists()
@@ -67,6 +72,7 @@ def launch(pod):
 def monitor(port):
     base.SHARED=SHARED;base.OUT=SHARED/'monitor';base.archived=references
     base.COLORS={'18 actions · world 19':'#7de1bf','18 actions · world 101':'#d695ff',
+        '18 actions · γ=.995 · world 19':'#ffbd59','18 actions · γ=.995 · world 101':'#ff7198',
         'Previous 14 actions · world 19':'#568d80','Previous 14 actions · world 101':'#826a99'}
     def current():
         result=[]
@@ -76,13 +82,15 @@ def monitor(port):
         return result
     base.CURRENT_TRIALS=current
     base.INTRO='''<h1>FTN-M2E · egg laying, sleep and four-slot inventory</h1>
-<p>Eight fresh agents: agent seeds 2901–2904 on each of worlds 19 and 101,
-matched against the previous natural-cycle runs. No checkpoint initialization.</p>
+<p>Twelve agents, all started fresh: eight γ=.90 runs (agent seeds 2901–2904
+on each of worlds 19 and 101), plus four γ=.995 runs (2901–2902 on each world).
+The higher-discount runs are seed-matched to the first two γ=.90 runs per world.
+No checkpoint initialization. Both Q streams use the stated discount.</p>
 <p>18 actions: the previous 14 plus selection of slots 1–4. Slots 1–2 hold
 collected items (maximum two per stack; single-item tools remain single).
 Slot 3 is egg laying; slot 4 is sleep. Both abilities accept dig/use and
 place/use. Normal resource and location requirements apply. No sneak actions.</p>
-<p>Otherwise unchanged: γ=.90, 50 offline updates, original novelty scales,
+<p>Otherwise unchanged: 50 offline updates, original novelty scales,
 death penalty equal to the goal bonus, hard survival, original animal HP,
 natural day/night and clouds, speed 2.5, acceleration 2, stationary jump,
 single-click placement, empty collected-item inventory. No step limit.</p>

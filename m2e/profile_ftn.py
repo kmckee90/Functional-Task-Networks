@@ -60,6 +60,8 @@ def main():
         return int(((overlaps>=.2)&(overlaps<=.8)).any(-1).sum())
     assert cpu_scan()==scan()
     result['batched_cpu_scan_s']=timed(cpu_scan)
+    assert len(agent._eligible_archive_indices(masks))==scan()
+    result['batched_production_scan_s']=timed(lambda:agent._eligible_archive_indices(masks))
     # Guarantee eligible retained supports so this measures actual extra replay.
     for entry in entries:
         for k,m in masks.items():

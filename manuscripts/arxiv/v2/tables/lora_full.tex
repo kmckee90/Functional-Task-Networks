@@ -1,0 +1,22 @@
+\begin{table}[t]
+\centering
+\small
+\caption{Full FTN-LoRA ablation table. Headline rows (SeqLoRA, SeqLoRA + ER, Indep.\ LoRA, Indep.\ LoRA + Router, FTN-LoRA random per-batch masks, FTN-LoRA) are computed over five seeds; the three diagnostic FTN rows that use standard LoRA initialisation ($B_0{=}0$) are computed over two seeds and are reported only as the diagnostic that motivated the $B_0{\sim}\mathcal{N}(0,0.01)$ choice. RandMask + Router is two seeds. The diagnostic narrative is in \cref{app:lora_ablations}.}
+\label{tab:lora_full}
+\begin{tabular}{lcccc}
+\toprule
+Method & ACC $\uparrow$ & FM $\downarrow$ & BWT $\uparrow$ & HS NLL $\downarrow$ \\
+\midrule
+SeqLoRA & 0.417\,\scriptsize$\pm$0.131 & 0.550\,\scriptsize$\pm$0.197 & -0.465\,\scriptsize$\pm$0.174 & 1.37\,\scriptsize$\pm$0.16 \\
+SeqLoRA + ER & 0.750\,\scriptsize$\pm$0.132 & 0.145\,\scriptsize$\pm$0.112 & -0.090\,\scriptsize$\pm$0.129 & 1.37\,\scriptsize$\pm$0.22 \\
+RandMask + Router & 0.573\,\scriptsize$\pm$0.192 & 0.287\,\scriptsize$\pm$0.053 & -0.263\,\scriptsize$\pm$0.088 & 1.25\,\scriptsize$\pm$0.13 \\
+Indep.\ LoRA (oracle) & 0.392\,\scriptsize$\pm$0.139 & 0.275\,\scriptsize$\pm$0.158 & -0.255\,\scriptsize$\pm$0.174 & 1.22 \\
+Indep.\ LoRA + Router & 0.642\,\scriptsize$\pm$0.159 & 0.150\,\scriptsize$\pm$0.126 & -0.105\,\scriptsize$\pm$0.112 & 1.26\,\scriptsize$\pm$0.17 \\
+FTN-LoRA, $B_0=0$, no replay & 0.729 & 0.225\,\scriptsize$\pm$0.035 & -0.087\,\scriptsize$\pm$0.124 & 3.49\,\scriptsize$\pm$2.72 \\
+FTN-LoRA, $B_0=0$ + Router & 0.760\,\scriptsize$\pm$0.044 & 0.188\,\scriptsize$\pm$0.018 & -0.125 & 1.95\,\scriptsize$\pm$0.35 \\
+FTN-LoRA, $B_0=0$ & 0.615\,\scriptsize$\pm$0.162 & 0.275\,\scriptsize$\pm$0.106 & -0.200\,\scriptsize$\pm$0.106 & 1.66\,\scriptsize$\pm$0.17 \\
+FTN-LoRA, random per-batch masks & 0.854\,\scriptsize$\pm$0.118 & 0.120\,\scriptsize$\pm$0.074 & -0.075\,\scriptsize$\pm$0.115 & 1.38\,\scriptsize$\pm$0.18 \\
+FTN-LoRA & 0.833\,\scriptsize$\pm$0.101 & 0.085\,\scriptsize$\pm$0.086 & 0.190\,\scriptsize$\pm$0.101 & 1.42\,\scriptsize$\pm$0.25 \\
+\bottomrule
+\end{tabular}
+\end{table}

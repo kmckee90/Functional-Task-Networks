@@ -26,5 +26,13 @@ fi
 if [[ -w /usr/local/bin && ! -e /usr/local/bin/databricks ]]; then
     ln -s "$cli_bin" /usr/local/bin/databricks
 fi
+# Shell configuration lives on the home PVC, so PATH survives pod recreation.
+path_entry='export PATH="$HOME/.local/bin:$PATH"'
+for startup in "$HOME/.bashrc" "$HOME/.profile"; do
+    if ! grep -Fqx "$path_entry" "$startup" 2>/dev/null; then
+        printf '\n# Persistent user-installed command-line tools.\n%s\n' "$path_entry" >> "$startup"
+    fi
+done
+export PATH="$HOME/.local/bin:$PATH"
 "$cli_bin" --version
 printf 'Login: databricks auth login --host https://YOUR-WORKSPACE --profile DEFAULT\n'

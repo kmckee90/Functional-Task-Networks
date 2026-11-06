@@ -1,0 +1,20 @@
+# Repository-wide `datasets/` rules must not hide vendored dataset SOURCE.
+!third_party/mammoth/datasets/
+!third_party/mammoth/datasets/**
+
+# Actual bulk data and runtime outputs stay remote; ignore accidental copies.
+/data/
+/datasets/
+/cache/
+/envs/
+/tmp/
+/checkpoints/
+/runs/
+/artifacts/
+/reports/
+/reevaluations/
+/validation/
+/manifests/
+/*_REPORT.md
+/FTN_DOMAIN_SUPPORT_RESULTS.md
+**/__pycache__/

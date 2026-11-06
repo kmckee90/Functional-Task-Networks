@@ -1,0 +1,134 @@
+{
+  "source_commit": "3884dea0ed9c969aa4dea6cd5bad51bc44379d57",
+  "removed_by": "e4b6543",
+  "files": {
+    "README.original.md": {
+      "source_path": "base/README.md",
+      "sha256": "748bd38c45df687cca5c27462d796e878457b4cbff90e6958616cfc6559a2dd0"
+    },
+    "baselines.py": {
+      "source_path": "base/baselines.py",
+      "sha256": "6fd4e4dfff3acdd67697f97c7ba18b19698d1e961c6ba9a64309b887b334e371"
+    },
+    "experiments/analyze_mask_overlap.py": {
+      "source_path": "base/experiments/analyze_mask_overlap.py",
+      "sha256": "d1eeac26e152668bd75894adfbea25e239ccac53a9d2d07d89739acf7d251f6f"
+    },
+    "experiments/generate_baseline_tables.py": {
+      "source_path": "base/experiments/generate_baseline_tables.py",
+      "sha256": "f9d150222659700be6a05251a7ce826536448e16203f7c96a71b331a42ececf9"
+    },
+    "experiments/generate_figures.py": {
+      "source_path": "base/experiments/generate_figures.py",
+      "sha256": "7155a1a93a18ea5365d9860e77f5995337356b324dc25555994f446fa6ed979a"
+    },
+    "experiments/generate_figures_exp.py": {
+      "source_path": "base/experiments/generate_figures_exp.py",
+      "sha256": "c5629a4e42f82476d8c66af73f3fb02e8d58faf23a3013d74b8f759f6344c2a4"
+    },
+    "experiments/generate_figures_exp1_rerun.py": {
+      "source_path": "base/experiments/generate_figures_exp1_rerun.py",
+      "sha256": "56244bbf4347ae44ed81766474a80fb1a51bbfc63a92f2086961528daac4527a"
+    },
+    "experiments/generate_figures_mnist.py": {
+      "source_path": "base/experiments/generate_figures_mnist.py",
+      "sha256": "6a6c1a8658edfdbf2ce3bb48c3c9e67d81daefa96097f1012e6b3fefbceabcd9"
+    },
+    "experiments/generate_revision_figs.py": {
+      "source_path": "base/experiments/generate_revision_figs.py",
+      "sha256": "a4e6110e4d40e4caafbf868583fa504548cb9daae2fcc472a151b4c8adac44aa"
+    },
+    "experiments/generate_revision_tables.py": {
+      "source_path": "base/experiments/generate_revision_tables.py",
+      "sha256": "7d5172549dd19d4ae51af14319b0ec1fe8ccd4dea4c43929fec62ccc9c4eb646"
+    },
+    "experiments/launch_baselines_parallel.sh": {
+      "source_path": "base/experiments/launch_baselines_parallel.sh",
+      "sha256": "8c51ebe284d53ab5494fe79806bcc520e4355c66fe71df58181c28289776a789"
+    },
+    "experiments/launch_revision_parallel.sh": {
+      "source_path": "base/experiments/launch_revision_parallel.sh",
+      "sha256": "a4383363c0e418b390e61df47aa94804e14596e9e6c78b7b828df0cadaa10352"
+    },
+    "experiments/launch_supportsize_parallel.sh": {
+      "source_path": "base/experiments/launch_supportsize_parallel.sh",
+      "sha256": "b946b8a5939a6a4964fec5b1773d3b758a6be7d802f11a4c0ca506d734fcd71e"
+    },
+    "experiments/merge_baselines.py": {
+      "source_path": "base/experiments/merge_baselines.py",
+      "sha256": "68360972e5cf8553a18860861bb06187e3a750b7e283e7f3e40ee0ea755955dc"
+    },
+    "experiments/run_all_exps.sh": {
+      "source_path": "base/experiments/run_all_exps.sh",
+      "sha256": "5eb7587af20b0d29f6b1a6e4064ba71c5d29f0cb334459ca4e0a77d1280d23f7"
+    },
+    "experiments/run_baselines.py": {
+      "source_path": "base/experiments/run_baselines.py",
+      "sha256": "154c0a4340859c5f1eefbc7a1a0f137c4e18e2dfc99b2b4ea13b3db69fcfed15"
+    },
+    "experiments/run_exp1_rerun_t1000.py": {
+      "source_path": "base/experiments/run_exp1_rerun_t1000.py",
+      "sha256": "02a30521e04e3d1b4289bf597293fc84f91a44f7f9083606abe0cd4232b922d8"
+    },
+    "experiments/run_kt.py": {
+      "source_path": "base/experiments/run_kt.py",
+      "sha256": "8a3b76d2b024e4380af1d59dad6e43385752dd1c72094af0981e5a44e7ae3191"
+    },
+    "experiments/run_kt_exp.py": {
+      "source_path": "base/experiments/run_kt_exp.py",
+      "sha256": "6ee7470edec45a26a9a08d21c0dadd910a1df043f0e8d204df2599bfbca50e90"
+    },
+    "experiments/run_kt_exp_mnist.py": {
+      "source_path": "base/experiments/run_kt_exp_mnist.py",
+      "sha256": "53b051c398b41e9760cb44103c64014b884522bd51f45cd113e4087c2bd36c21"
+    },
+    "experiments/run_kt_parallel.py": {
+      "source_path": "base/experiments/run_kt_parallel.py",
+      "sha256": "93be34ed7b5f3ee4d2d9f3973917b69d9d2fe1b12cbcb5b359ff543b63ef3ebf"
+    },
+    "experiments/run_revision.py": {
+      "source_path": "base/experiments/run_revision.py",
+      "sha256": "114bf6cfd2d32215ff06c698182a0fc771147859491d9be204afe5891f3cb1de"
+    },
+    "experiments/run_revision_merge.py": {
+      "source_path": "base/experiments/run_revision_merge.py",
+      "sha256": "520ea853871fb488f484e95fb8cde4389a1c310ad15c47442362b8e2d6329348"
+    },
+    "experiments/run_sanity_n256_t5000.py": {
+      "source_path": "base/experiments/run_sanity_n256_t5000.py",
+      "sha256": "f4415963bd548dd5e0fa36bf970b54c356d06297545faa8cff398e71de8a7a91"
+    },
+    "experiments/update_paper_with_revision.sh": {
+      "source_path": "base/experiments/update_paper_with_revision.sh",
+      "sha256": "4d3f90609180da9f03df02bcddd890cdf8150840d9f3f2644ce1dff73fcf7eae"
+    },
+    "masks.py": {
+      "source_path": "base/masks.py",
+      "sha256": "ea28e395a0d0b8de07f0efdfb0631db78e1e66db7fc71ccfa4d3725bffb1796a"
+    },
+    "metrics.py": {
+      "source_path": "base/metrics.py",
+      "sha256": "51d0a46feb07ce7384f7658d4a99db7c2c5205d5830c5119ec9be1db33940bbb"
+    },
+    "models.py": {
+      "source_path": "base/models.py",
+      "sha256": "f279a1d97c13ddd78aedcb92b72937a0b99734ce1c56e18e822220d87caee206"
+    },
+    "plotting.py": {
+      "source_path": "base/plotting.py",
+      "sha256": "950f4972c9536d48378e9886dee2c6b9281c66fdb4b3ff46ebbedd3862564593"
+    },
+    "tasks.py": {
+      "source_path": "base/tasks.py",
+      "sha256": "8137ed4adf36cced5124aa3ccedfc128213f0d22af8ac0b1f54be6d1fbfc3006"
+    },
+    "trainer.py": {
+      "source_path": "base/trainer.py",
+      "sha256": "f137f7ee34c809ffcb7af4169e48c9ac3bdb23f9eace29bc458a370c3d394e07"
+    },
+    "utils.py": {
+      "source_path": "base/utils.py",
+      "sha256": "6b0998a7c381b6905e93a42d23e9a32b0e8201de15f9bbb872c0d25947ed83e8"
+    }
+  }
+}

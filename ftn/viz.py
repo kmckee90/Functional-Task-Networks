@@ -248,7 +248,6 @@ def save_forgetting_matrix(rows, row_order, col_order, suffix, out_dir="artifact
     Entries with no data are rendered white.
     """
     import matplotlib.pyplot as plt
-    from matplotlib.colors import LinearSegmentedColormap
 
     n_rows = len(row_order)
     n_cols = len(col_order)
@@ -260,8 +259,7 @@ def save_forgetting_matrix(rows, row_order, col_order, suffix, out_dir="artifact
             if t in row:
                 mat[i, j] = row[t]
 
-    cmap = LinearSegmentedColormap.from_list("red_white", ["red", "white"])
-    cmap = cmap.copy()
+    cmap = plt.get_cmap("viridis").copy()
     cmap.set_bad(color="white")
 
     _, ax = plt.subplots(
@@ -274,7 +272,7 @@ def save_forgetting_matrix(rows, row_order, col_order, suffix, out_dir="artifact
     ax.set_yticklabels([str(t) for t in row_order], fontsize=7)
     ax.set_xlabel("Evaluated task")
     ax.set_ylabel("After training task")
-    ax.set_title("Accuracy (white=1, red=0)")
+    ax.set_title("Accuracy (viridis, 0--1)")
 
     # Thin black cell borders.
     ax.set_xticks(np.arange(-0.5, n_cols, 1), minor=True)

@@ -29,6 +29,7 @@ functional_task_networks/
 │   ├── warpcraft/explorer/ inactive JAX explorer
 │   └── experiments/     current globo_dreamer and original explorer
 ├── experiments/
+│   ├── mnist/            restored manuscript MNIST suite, SupSup/Progressive, and controls
 │   ├── rl/               FTN-DDPG robotics and Atari DQN (PyTorch/JAX)
 │   ├── nlp/              FTN-LoRA, expert chat, and LoRA multiplexing
 │   ├── nar/              neural algorithmic reasoning experiments

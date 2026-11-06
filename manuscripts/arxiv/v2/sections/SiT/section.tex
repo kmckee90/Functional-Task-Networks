@@ -1,0 +1,74 @@
+\section{Continual generative adaptation with FTN--SiT}\label{sec:sit_memory}
+We test whether a sparse adapter bank can retain generative capabilities as access to previous training images is reduced. Four runs use replay-memory budgets of 50\%, 25\%, 10\%, and 5\%, with the same seed (125) and eleven-task order. Each run completes 16,500 updates; the archive contains 66,000 updates and 48 evaluated checkpoints in total, including initialization. The budget controls retained historical examples, not the fraction of active model parameters.
+
+\subsection{Model, task stream, and memory protocol}
+The model starts from a pretrained SiT-XL/2 checkpoint for $256\times256$ images. The SiT backbone is frozen, and rank-one adapter banks are attached to the attention query/key/value and output projections and both MLP linear layers in its transformer blocks. A common binary mask activates $K=256$ of $H=1024$ atoms, with adapter scaling $\alpha=64$. The model learns a latent transport velocity by mean squared error. Training uses Adam with learning rate $3\times10^{-4}$, 1,500 updates per task, and 16 current-task examples per update. The Bayesian reactive configurer updates masks during training and invokes changepoint reconfiguration when its loss detector triggers.
+
+The task order is monochrome, poster, sketch, George W. Bush, Colin Powell, Tony Blair, Whoopi Goldberg, Bruce Willis, Nicole Kidman, giant anteater, and BMW i8. This combines three visual styles, six identities, and two object concepts. The full current-task training set is available while its block is active. After the block, access is restricted to retained examples and their features. Nested, class-balanced facility-location subsets are selected using frozen, equal-norm DINO, style, and CASIA face features. The final memories contain 4,160, 2,080, 832, and 416 examples, respectively; these counts exclude model and feature-storage overhead. The archived cross-budget audit passes its nested-subset and run checks.
+
+\paragraph{Replay and mask repair.}
+Each update can replay four examples under one mask from an anonymous pool that also includes temporary within-block memory. Eligible masks have normalized overlap $0.2<o\leq0.85$ with the current mask. Sampling mixes an 80\% component weighted by shared-atom coverage, recency, loss ratio, and mask count with 20\% exploration uniform over distinct masks. Eight late-trajectory masks are scored on retained examples; associations with mean loss above $1.25$ times the best are excluded, and near-best per-image alternatives can improve coverage of shared atoms.
+
+At each checkpoint, a retained-only 80/20 split supports mask repair. The archived mask competes with three cold and three warm search candidates, using 30 search steps and at most 32 fitting images per candidate. Feature-distribution discrepancy on the internal holdout selects the teacher mask. This repair uses neither evaluation support nor test data. A readout is then rebuilt from all retained features using four-image episodes, a fixed random ReLU expansion of width 128, and ridge coefficient 0.01. Consequently, recall measures the complete replay, repair, and readout pipeline; it is not recall from an unchanged stored mask alone.
+
+\subsection{Evaluation}
+At initialization and after every task, four held-out support images condition the readout to produce a 256-atom mask directly, without evaluation-time refinement. Scores average ten support draws. Each distinct mask produces 200 samples for style evaluation or 64 for identity/object evaluation; identical masks reuse the same generated samples. These draws probe support sensitivity, not independent training seeds.
+
+Style quality is measured by kernel inception distance (KID; lower is better). Identity acceptance requires a detected face, the correct nearest identity among all six identities, and its fixed similarity threshold, using a frozen VGGFace2 face evaluator. Object acceptance uses a frozen CLIP classifier over 19 candidate descriptions; broad acceptance adds 1,000 ImageNet class descriptions. These acceptance rates measure the specified evaluator's decisions, rather than human judgments of image quality. We also record held-out velocity MSE under the inferred mask and under the original stored mask. Exact-teacher recovery is the fraction of support draws returning the checkpoint's selected teacher mask exactly; it does not mean that this mask is identical to the original training mask.
+
+\subsection{Retention across memory budgets}
+\begin{table}[htbp]\centering\small
+\begin{tabular}{llrrrr}\toprule
+Task & Metric & 50\% & 25\% & 10\% & 5\%\\\midrule
+monochrome & KID & 0.0128 & 0.0086 & 0.0068 & 0.0050\\
+poster & KID & 0.0120 & 0.0076 & 0.0206 & 0.0149\\
+sketch & KID & 0.0237 & 0.0214 & 0.0263 & 0.0188\\
+George W Bush & Accept. (\%) & 84.38 & 82.81 & 93.75 & 59.53\\
+Colin Powell & Accept. (\%) & 90.62 & 90.62 & 95.31 & 100.00\\
+Tony Blair & Accept. (\%) & 90.62 & 96.88 & 100.00 & 100.00\\
+Whoopi Goldberg & Accept. (\%) & 98.44 & 96.88 & 98.44 & 100.00\\
+Bruce Willis & Accept. (\%) & 96.88 & 98.44 & 100.00 & 100.00\\
+Nicole Kidman & Accept. (\%) & 98.44 & 100.00 & 100.00 & 100.00\\
+Giant anteater & Accept. (\%) & 90.62 & 76.56 & 73.44 & 98.44\\
+BMW i8 & Accept. (\%) & 90.62 & 81.25 & 85.94 & 82.81\\
+\bottomrule\end{tabular}
+\caption{Final scores after all eleven tasks. Each column is one seed-125 run; values average ten four-image support draws. KID is unscaled. Acceptance is a percentage. BMW i8 is learned last and therefore has no subsequent-task retention interval.}\label{tab:sit_final}
+\end{table}
+
+All four budgets retain substantial style and identity performance (\cref{tab:sit_final}), but retention is neither perfect nor monotonic in memory size. At 5\%, five identities reach 100\% final acceptance, while George W. Bush falls from 96.88\% immediately after learning to 59.53\% after the complete stream. At 50\%, his acceptance falls from 98.44\% to 84.38\%. This task-specific failure would be obscured by a single average. For monochrome and poster, the 5\% run improves KID after learning (0.0096 to 0.0050 and 0.0212 to 0.0149); sketch worsens from 0.0096 to 0.0188. Final sketch KID nevertheless remains well below its initial value of approximately 0.2396.
+
+The giant-anteater result illustrates sensitivity to the evaluator's candidate set. At 5\%, narrow acceptance rises from 95.31\% to 98.44\%, while broad acceptance rises from 82.81\% to 89.06\%. At 25\%, narrow acceptance falls from 87.50\% to 76.56\%, and broad acceptance falls from 84.38\% to 45.31\%. BMW i8's final acceptance ranges from 81.25\% to 90.63\%; because it is the final task, this measures acquisition rather than resistance to later interference.
+
+\begin{table}[htbp]\centering\small
+\begin{tabular}{rrrrr}\toprule
+Memory & Examples & Exact teacher (\%) & Final query MSE & $\Delta$ query MSE\\\midrule
+50\% & 4,160 & 100.00 & 0.7765 & +0.0240\\
+25\% & 2,080 & 100.00 & 0.8376 & +0.0881\\
+10\% & 832 & 96.36 & 0.9212 & +0.1824\\
+5\% & 416 & 88.18 & 1.0260 & +0.2912\\
+\bottomrule\end{tabular}
+\caption{Routing and loss diagnostics. Exact-teacher recovery and final query MSE equally weight all eleven tasks. $\Delta$ MSE averages final minus immediately-learned loss over the first ten tasks, excluding the last task's trivial zero change. Positive $\Delta$ indicates deterioration.}\label{tab:sit_diagnostics}
+\end{table}
+
+\paragraph{Generation and velocity loss need separate interpretation.}
+The smaller-memory runs can retain high evaluator acceptance despite increasing velocity error (\cref{tab:sit_diagnostics}). At 5\%, George W. Bush's query MSE rises from 0.8113 to 1.2994, and Colin Powell's rises from 0.8090 to 1.2915 even as Powell's acceptance improves to 100\%. Exact teacher recovery is perfect at the final checkpoint for the 50\% and 25\% runs, but falls for several identities at smaller budgets. Tony Blair's final exact recovery is only 40\% at 5\%, despite 100\% acceptance. Thus exact teacher retrieval, velocity prediction, and generated identity acceptance measure different properties; none can substitute for the others.
+
+\paragraph{Interpretation.}
+The experiment demonstrates retained generative capabilities with as few as 416 historical examples in this eleven-task stream, alongside task-specific forgetting and substantial drift in the training objective. Improvements after subsequent tasks are descriptive backward changes of the full pipeline, including repaired teachers and a rebuilt readout. They do not isolate transfer through shared atoms. The archive has one seed and one order, with no matched no-replay, no-repair, or random-mask control in this four-budget comparison. It therefore does not establish a statistically reliable optimum memory budget or the independent causal contribution of replay, repair, and support conditioning.
+\begin{figure}[p]\centering
+\includegraphics[width=0.98\linewidth,height=0.36\textheight,keepaspectratio]{\detokenize{/media/klmckee/Seagate Portable Drive/contents/FTN-SiT-final-results/charts/xfer_replay_p50_s125_acceptance.png}}
+\includegraphics[width=0.98\linewidth,height=0.36\textheight,keepaspectratio]{\detokenize{/media/klmckee/Seagate Portable Drive/contents/FTN-SiT-final-results/charts/xfer_replay_p05_s125_acceptance.png}}
+\caption{Archived acceptance matrices for 50\% (top) and 5\% (bottom) memory. The checkpoint dimension includes evaluations before and after task acquisition, allowing early and late tasks to be distinguished. Acceptance applies to the identity and object tasks, not the three styles.}\label{fig:sit_acceptance}
+\end{figure}
+\begin{figure}[p]\centering
+\setlength{\tabcolsep}{2pt}
+\begin{tabular}{lcccc}
+ & 50\% & 25\% & 10\% & 5\%\\
+\scriptsize sketch & \includegraphics[width=0.18\linewidth]{\detokenize{/media/klmckee/Seagate Portable Drive/contents/FTN-SiT-final-results/samples/50pct/sketch/0000.png}} & \includegraphics[width=0.18\linewidth]{\detokenize{/media/klmckee/Seagate Portable Drive/contents/FTN-SiT-final-results/samples/25pct/sketch/0000.png}} & \includegraphics[width=0.18\linewidth]{\detokenize{/media/klmckee/Seagate Portable Drive/contents/FTN-SiT-final-results/samples/10pct/sketch/0000.png}} & \includegraphics[width=0.18\linewidth]{\detokenize{/media/klmckee/Seagate Portable Drive/contents/FTN-SiT-final-results/samples/5pct/sketch/0000.png}}\\
+\scriptsize George W Bush & \includegraphics[width=0.18\linewidth]{\detokenize{/media/klmckee/Seagate Portable Drive/contents/FTN-SiT-final-results/samples/50pct/George_W_Bush/0000.png}} & \includegraphics[width=0.18\linewidth]{\detokenize{/media/klmckee/Seagate Portable Drive/contents/FTN-SiT-final-results/samples/25pct/George_W_Bush/0000.png}} & \includegraphics[width=0.18\linewidth]{\detokenize{/media/klmckee/Seagate Portable Drive/contents/FTN-SiT-final-results/samples/10pct/George_W_Bush/0000.png}} & \includegraphics[width=0.18\linewidth]{\detokenize{/media/klmckee/Seagate Portable Drive/contents/FTN-SiT-final-results/samples/5pct/George_W_Bush/0000.png}}\\
+\scriptsize Colin Powell & \includegraphics[width=0.18\linewidth]{\detokenize{/media/klmckee/Seagate Portable Drive/contents/FTN-SiT-final-results/samples/50pct/Colin_Powell/0000.png}} & \includegraphics[width=0.18\linewidth]{\detokenize{/media/klmckee/Seagate Portable Drive/contents/FTN-SiT-final-results/samples/25pct/Colin_Powell/0000.png}} & \includegraphics[width=0.18\linewidth]{\detokenize{/media/klmckee/Seagate Portable Drive/contents/FTN-SiT-final-results/samples/10pct/Colin_Powell/0000.png}} & \includegraphics[width=0.18\linewidth]{\detokenize{/media/klmckee/Seagate Portable Drive/contents/FTN-SiT-final-results/samples/5pct/Colin_Powell/0000.png}}\\
+\scriptsize Giant anteater & \includegraphics[width=0.18\linewidth]{\detokenize{/media/klmckee/Seagate Portable Drive/contents/FTN-SiT-final-results/samples/50pct/Giant_anteater/0000.png}} & \includegraphics[width=0.18\linewidth]{\detokenize{/media/klmckee/Seagate Portable Drive/contents/FTN-SiT-final-results/samples/25pct/Giant_anteater/0000.png}} & \includegraphics[width=0.18\linewidth]{\detokenize{/media/klmckee/Seagate Portable Drive/contents/FTN-SiT-final-results/samples/10pct/Giant_anteater/0000.png}} & \includegraphics[width=0.18\linewidth]{\detokenize{/media/klmckee/Seagate Portable Drive/contents/FTN-SiT-final-results/samples/5pct/Giant_anteater/0000.png}}\\
+\scriptsize BMW i8 & \includegraphics[width=0.18\linewidth]{\detokenize{/media/klmckee/Seagate Portable Drive/contents/FTN-SiT-final-results/samples/50pct/BMW_i8/0000.png}} & \includegraphics[width=0.18\linewidth]{\detokenize{/media/klmckee/Seagate Portable Drive/contents/FTN-SiT-final-results/samples/25pct/BMW_i8/0000.png}} & \includegraphics[width=0.18\linewidth]{\detokenize{/media/klmckee/Seagate Portable Drive/contents/FTN-SiT-final-results/samples/10pct/BMW_i8/0000.png}} & \includegraphics[width=0.18\linewidth]{\detokenize{/media/klmckee/Seagate Portable Drive/contents/FTN-SiT-final-results/samples/5pct/BMW_i8/0000.png}}\\
+\end{tabular}
+\caption{Generated outputs recalled after all eleven tasks for selected domains. Every cell uses support draw 0 and sample index 0000, fixed across budgets without selecting for image quality. These are generated outputs, not support or training images. The quantitative tables use the complete evaluation, not this small illustrative subset.}\label{fig:sit_gallery}
+\end{figure}

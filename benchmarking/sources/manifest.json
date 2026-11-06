@@ -1,0 +1,372 @@
+{
+  "ftn/__init__.py": {
+    "original": "ftn/__init__.py",
+    "sha256": "6d970517a8051d3697d48b3382e3f4e0b6c89166f728af392b90726853fb76cf",
+    "bytes": 346
+  },
+  "ftn/analyze_sweep.py": {
+    "original": "ftn/analyze_sweep.py",
+    "sha256": "82664e4893af50fd50c3b2a8ac7c6be403633c16c7f69013cf10f734184ef621",
+    "bytes": 25000
+  },
+  "ftn/animate_wave.py": {
+    "original": "ftn/animate_wave.py",
+    "sha256": "8522e65b22314343f81c6d086c9db04e2b027936a3e6a1e59e0cdbc8d70f38dd",
+    "bytes": 7018
+  },
+  "ftn/config.py": {
+    "original": "ftn/config.py",
+    "sha256": "7b86b50b9ab37a767826e1c8052fd5040adc28df133e55fe82068d610423c914",
+    "bytes": 86141
+  },
+  "ftn/decorrelation_regularizer.py": {
+    "original": "ftn/decorrelation_regularizer.py",
+    "sha256": "ccf7e0ccae4954fa4e92d9b51b0edf25ab7574bbc1d3b09ce12c6e1f7a674eb8",
+    "bytes": 2559
+  },
+  "ftn/eval_compose.py": {
+    "original": "ftn/eval_compose.py",
+    "sha256": "925f20e2dcc3f1091d19e01b49c526d87035c92a2cbd6f903a1c06bb84aac2d5",
+    "bytes": 12140
+  },
+  "ftn/ftn.py": {
+    "original": "ftn/ftn.py",
+    "sha256": "3f757052b3f463ed3cf35273d43516dd87631f60da6c5277a232dbffeb9c00e8",
+    "bytes": 38869
+  },
+  "ftn/hml_design.py": {
+    "original": "ftn/hml_design.py",
+    "sha256": "d1fd8109e9cd9a41a8f3c087b4426fcb968f33a5d1db9f220cf0cde9acf4f88d",
+    "bytes": 3386
+  },
+  "ftn/hml_ftn.py": {
+    "original": "ftn/hml_ftn.py",
+    "sha256": "0330fcd05a8c112da4adec54cbc0f7b443d19fb740bc8977d7184c2bb0eca8f3",
+    "bytes": 20904
+  },
+  "ftn/hml_ftn_gpt.py": {
+    "original": "ftn/hml_ftn_gpt.py",
+    "sha256": "6663a06d2a0792e99bc8f30de461ec86c5f0b12bf211959614efc6d114665d77",
+    "bytes": 20143
+  },
+  "ftn/hml_ftn_stable.py": {
+    "original": "ftn/hml_ftn_stable.py",
+    "sha256": "e98972a3f89f7af240ec8e3365e439dd656fa52e07515f324b9a4ed50b10997c",
+    "bytes": 29705
+  },
+  "ftn/hml_test.py": {
+    "original": "ftn/hml_test.py",
+    "sha256": "382496ac547df35574770854ba4edf13e068d460231ecff948ed63d189b8c854",
+    "bytes": 8723
+  },
+  "ftn/input_inv_test.py": {
+    "original": "ftn/input_inv_test.py",
+    "sha256": "76946dfc6db28ba7138972f97135f42afec224a3673e278ffcb479562defc681",
+    "bytes": 5520
+  },
+  "ftn/lora_ftn.py": {
+    "original": "ftn/lora_ftn.py",
+    "sha256": "22dc0b414a3e20a6f7c93ac52e7dd4c9f75b6dfefc04b378e9e1be5839c4c3d3",
+    "bytes": 17276
+  },
+  "ftn/lora_rnn_ftn.py": {
+    "original": "ftn/lora_rnn_ftn.py",
+    "sha256": "25173d1b82743c2eee55d11390e750cf16f6fbf848406e5be7a5c02bb23ca5c6",
+    "bytes": 29827
+  },
+  "ftn/make_ablation_binder.py": {
+    "original": "ftn/make_ablation_binder.py",
+    "sha256": "988f4f9a45295bf20659d41a029311c423bddab5e23ac3c8dec357f21a8b4e65",
+    "bytes": 11160
+  },
+  "ftn/masks.py": {
+    "original": "ftn/masks.py",
+    "sha256": "b3fcb40e6135289e5534a098f64208364e389dcf1c42d84c7d92f913d62269a2",
+    "bytes": 23617
+  },
+  "ftn/metrics.py": {
+    "original": "ftn/metrics.py",
+    "sha256": "923f85f20f88e3614e8a8cb104909b2df9215b7410232511a9be0198b46a8d53",
+    "bytes": 9946
+  },
+  "ftn/models.py": {
+    "original": "ftn/models.py",
+    "sha256": "25deaf72bc03e2df107614f7a452d34cf689d0d5b0e65ba904f27ba0a581fb2f",
+    "bytes": 15298
+  },
+  "ftn/overlap_regularizer.py": {
+    "original": "ftn/overlap_regularizer.py",
+    "sha256": "a4d38a9f98675871533788924b67608784ca3c0aaf4599c786c3f929ec552bc9",
+    "bytes": 5494
+  },
+  "ftn/reconfig_optimizer.py": {
+    "original": "ftn/reconfig_optimizer.py",
+    "sha256": "09d40a6fcbdb931848300ff192696d2874f1457f7c955904a7538ad295206fd6",
+    "bytes": 420
+  },
+  "ftn/run_compose.py": {
+    "original": "ftn/run_compose.py",
+    "sha256": "d71da052a57dd976dde6491b6e49c306595144738dc9ba0edf964a0545584afc",
+    "bytes": 28944
+  },
+  "ftn/run_experiments.py": {
+    "original": "ftn/run_experiments.py",
+    "sha256": "e5b54b760e2f71581dd2690bced08957ca0776955002fedb40915aaff68fdc84",
+    "bytes": 42931
+  },
+  "ftn/run_seeds.py": {
+    "original": "ftn/run_seeds.py",
+    "sha256": "7b2301526e7870e01d8eefe94dd54dcbb591e8aa5e751f37ae21445365dd4949",
+    "bytes": 15126
+  },
+  "ftn/spatial_permute.py": {
+    "original": "ftn/spatial_permute.py",
+    "sha256": "f03ddc09ec914fb3d4f10054c969588f26034d8d62c115017c04aab44556824c",
+    "bytes": 8896
+  },
+  "ftn/stack_ftn.py": {
+    "original": "ftn/stack_ftn.py",
+    "sha256": "c12a2a26bfba3446085e1c5dd8616c366c4a2712f6584b4abf6c6998315ff67a",
+    "bytes": 43481
+  },
+  "ftn/task_comp.py": {
+    "original": "ftn/task_comp.py",
+    "sha256": "040b6b961006a37e7aae82b29393631a1743cd76a2d95c67fb5daf1718691a70",
+    "bytes": 21775
+  },
+  "ftn/tasks.py": {
+    "original": "ftn/tasks.py",
+    "sha256": "aca3976e12cf4bc195740f96b0a84594aada01e8a6f983497ac6c5e5da0011dd",
+    "bytes": 9840
+  },
+  "ftn/test_decorrelation_regularizer.py": {
+    "original": "ftn/test_decorrelation_regularizer.py",
+    "sha256": "31af58cc7ff81917b44435f2bc965e887bce1af051449bd10fb7f4297b944141",
+    "bytes": 7551
+  },
+  "ftn/test_entropy_regularizer.py": {
+    "original": "ftn/test_entropy_regularizer.py",
+    "sha256": "16227e4e1318815f95ab916c18e78e33f0435342f0221923b67c474f022c6032",
+    "bytes": 3392
+  },
+  "ftn/test_overlap_regularizer.py": {
+    "original": "ftn/test_overlap_regularizer.py",
+    "sha256": "64978bcca7736b4e44d847d2cc517ff365bbcf8df2c68264ef0129bcc78c20b6",
+    "bytes": 9010
+  },
+  "ftn/test_reconfig_optimizer.py": {
+    "original": "ftn/test_reconfig_optimizer.py",
+    "sha256": "271e8f27890a11a9d9421954821bd46e9628fefa9493b4e94de5f48e5ccaa22d",
+    "bytes": 2671
+  },
+  "ftn/test_spatial_permute.py": {
+    "original": "ftn/test_spatial_permute.py",
+    "sha256": "e44d013b39f214ca5e6c1e27254990d063f16f4d6121e02891d5b8a6ee848d62",
+    "bytes": 9713
+  },
+  "ftn/test_wave_ftn.py": {
+    "original": "ftn/test_wave_ftn.py",
+    "sha256": "464681af80336936c406ac96732d2325fe4eeb135de994b49f4f021b8f634bc3",
+    "bytes": 10329
+  },
+  "ftn/utils.py": {
+    "original": "ftn/utils.py",
+    "sha256": "f960ee2fcf3af2f382559ad9e88915545b0506bedc32ea79ca99fe6f47f057a8",
+    "bytes": 375
+  },
+  "ftn/vis_ftn.py": {
+    "original": "ftn/vis_ftn.py",
+    "sha256": "c2df2f3b39ccd4e93229f59abc0b4481c71923c86dcfdab1de4b692b38e57110",
+    "bytes": 20218
+  },
+  "ftn/viz.py": {
+    "original": "ftn/viz.py",
+    "sha256": "511dd5b5becf276888f04595b7620e689a5906a7fc56795cfd68c4989ef40d1c",
+    "bytes": 11617
+  },
+  "ftn/viz_latents.py": {
+    "original": "ftn/viz_latents.py",
+    "sha256": "7fe6571adf9bc3b48644e7e312929c68442020597d8a125ff6b079aee84d4ff6",
+    "bytes": 6865
+  },
+  "ftn/viz_latents_2d.py": {
+    "original": "ftn/viz_latents_2d.py",
+    "sha256": "9be1c0bf002e8ce8f3671c8509c3fdc1db84cfa75756f70d1eb09b6b0fa7e31b",
+    "bytes": 7955
+  },
+  "ftn/wave_ftn.py": {
+    "original": "ftn/wave_ftn.py",
+    "sha256": "ca41e303e84a50a88c0b1736652e42a7979a800e96a865fc09306d4e73733928",
+    "bytes": 17582
+  },
+  "bayesian_adv/analyze_sweep.py": {
+    "original": "ftn/projects/bayesian_adv/analyze_sweep.py",
+    "sha256": "82664e4893af50fd50c3b2a8ac7c6be403633c16c7f69013cf10f734184ef621",
+    "bytes": 25000
+  },
+  "bayesian_adv/bayes_lora_ftn.py": {
+    "original": "ftn/projects/bayesian_adv/bayes_lora_ftn.py",
+    "sha256": "943f371ec182ab334e087a729a8e69f4b79e7763b3b8d489ca579ae3166bde48",
+    "bytes": 10117
+  },
+  "bayesian_adv/bayes_lora_rnn_ftn.py": {
+    "original": "ftn/projects/bayesian_adv/bayes_lora_rnn_ftn.py",
+    "sha256": "87f2f6b5d2e53888e6b91edc9c83691a7b79fe9f1148afcfa779f2bf61c8f913",
+    "bytes": 15983
+  },
+  "bayesian_adv/bayes_reconfig.py": {
+    "original": "ftn/projects/bayesian_adv/bayes_reconfig.py",
+    "sha256": "38d61b45b310f0e8f341d88a8f5c1463d6e4c3bdd4ee9c6aef99824b440c4c88",
+    "bytes": 17131
+  },
+  "bayesian_adv/bayes_stack_ftn.py": {
+    "original": "ftn/projects/bayesian_adv/bayes_stack_ftn.py",
+    "sha256": "d74feda26b6f9077ba7d93ce2580029dc8a483e93a7d2afbc540cafcfb522e3a",
+    "bytes": 10343
+  },
+  "bayesian_adv/config.py": {
+    "original": "ftn/projects/bayesian_adv/config.py",
+    "sha256": "a4b71dda0b891a67e0c48aa68853b93f90357fb8900c4a31a0573a615cc82cb1",
+    "bytes": 39799
+  },
+  "bayesian_adv/ftn.py": {
+    "original": "ftn/projects/bayesian_adv/ftn.py",
+    "sha256": "9a8988d70417bb86b5c0355029a36ff58d4f97c130b66b10dd857724bbb4eb8f",
+    "bytes": 25040
+  },
+  "bayesian_adv/input_conditioned.py": {
+    "original": "ftn/projects/bayesian_adv/input_conditioned.py",
+    "sha256": "d3dfe4abbaa2c3bd48ae6aa05e9dac8aba62d9b2539e53497021e7a8228e7ca3",
+    "bytes": 12097
+  },
+  "bayesian_adv/lora_ftn.py": {
+    "original": "ftn/projects/bayesian_adv/lora_ftn.py",
+    "sha256": "5b3f1df51a8e5bc85e8981a51eb96ecbfa13b79e7b4a239742acec28aafbfba6",
+    "bytes": 21922
+  },
+  "bayesian_adv/metrics.py": {
+    "original": "ftn/projects/bayesian_adv/metrics.py",
+    "sha256": "923f85f20f88e3614e8a8cb104909b2df9215b7410232511a9be0198b46a8d53",
+    "bytes": 9946
+  },
+  "bayesian_adv/overlap_regularizer.py": {
+    "original": "ftn/projects/bayesian_adv/overlap_regularizer.py",
+    "sha256": "3152db53d66762a572c81212f004a70bae231728dc451a53c28d2a8e1f72409d",
+    "bytes": 1955
+  },
+  "bayesian_adv/run_experiments.py": {
+    "original": "ftn/projects/bayesian_adv/run_experiments.py",
+    "sha256": "5f418c1f8b3b58d07b95340a41f136d4a92ba4b8bf4b2eda7badbc2ace137cff",
+    "bytes": 32408
+  },
+  "bayesian_adv/run_seeds.py": {
+    "original": "ftn/projects/bayesian_adv/run_seeds.py",
+    "sha256": "7b2301526e7870e01d8eefe94dd54dcbb591e8aa5e751f37ae21445365dd4949",
+    "bytes": 15126
+  },
+  "bayesian_adv/tasks.py": {
+    "original": "ftn/projects/bayesian_adv/tasks.py",
+    "sha256": "aca3976e12cf4bc195740f96b0a84594aada01e8a6f983497ac6c5e5da0011dd",
+    "bytes": 9840
+  },
+  "bayesian_adv/test_overlap_regularizer.py": {
+    "original": "ftn/projects/bayesian_adv/test_overlap_regularizer.py",
+    "sha256": "498e8c2dd3c11bb50d8ca45bac0657cc83ff858a53b2bde81046bfa6aaf5c554",
+    "bytes": 5422
+  },
+  "bayesian_adv/utils.py": {
+    "original": "ftn/projects/bayesian_adv/utils.py",
+    "sha256": "f960ee2fcf3af2f382559ad9e88915545b0506bedc32ea79ca99fe6f47f057a8",
+    "bytes": 375
+  },
+  "bayesian_adv/viz.py": {
+    "original": "ftn/projects/bayesian_adv/viz.py",
+    "sha256": "b6d43f739970b8422aaf995d3f67092402310055fa87565aaf687f515baba248",
+    "bytes": 9555
+  },
+  "ftn/projects/bayesian_adv/tasks.py": {
+    "original": "ftn/projects/bayesian_adv/tasks.py",
+    "sha256": "aca3976e12cf4bc195740f96b0a84594aada01e8a6f983497ac6c5e5da0011dd",
+    "bytes": 9840
+  },
+  "ftn/projects/bayesian_adv/utils.py": {
+    "original": "ftn/projects/bayesian_adv/utils.py",
+    "sha256": "f960ee2fcf3af2f382559ad9e88915545b0506bedc32ea79ca99fe6f47f057a8",
+    "bytes": 375
+  },
+  "ftn/projects/bayesian_adv/input_conditioned.py": {
+    "original": "ftn/projects/bayesian_adv/input_conditioned.py",
+    "sha256": "d3dfe4abbaa2c3bd48ae6aa05e9dac8aba62d9b2539e53497021e7a8228e7ca3",
+    "bytes": 12097
+  },
+  "ftn/projects/bayesian_adv/test_overlap_regularizer.py": {
+    "original": "ftn/projects/bayesian_adv/test_overlap_regularizer.py",
+    "sha256": "498e8c2dd3c11bb50d8ca45bac0657cc83ff858a53b2bde81046bfa6aaf5c554",
+    "bytes": 5422
+  },
+  "ftn/projects/bayesian_adv/bayes_lora_rnn_ftn.py": {
+    "original": "ftn/projects/bayesian_adv/bayes_lora_rnn_ftn.py",
+    "sha256": "87f2f6b5d2e53888e6b91edc9c83691a7b79fe9f1148afcfa779f2bf61c8f913",
+    "bytes": 15983
+  },
+  "ftn/projects/bayesian_adv/overlap_regularizer.py": {
+    "original": "ftn/projects/bayesian_adv/overlap_regularizer.py",
+    "sha256": "3152db53d66762a572c81212f004a70bae231728dc451a53c28d2a8e1f72409d",
+    "bytes": 1955
+  },
+  "ftn/projects/bayesian_adv/bayes_reconfig.py": {
+    "original": "ftn/projects/bayesian_adv/bayes_reconfig.py",
+    "sha256": "38d61b45b310f0e8f341d88a8f5c1463d6e4c3bdd4ee9c6aef99824b440c4c88",
+    "bytes": 17131
+  },
+  "ftn/projects/bayesian_adv/run_experiments.py": {
+    "original": "ftn/projects/bayesian_adv/run_experiments.py",
+    "sha256": "5f418c1f8b3b58d07b95340a41f136d4a92ba4b8bf4b2eda7badbc2ace137cff",
+    "bytes": 32408
+  },
+  "ftn/projects/bayesian_adv/lora_ftn.py": {
+    "original": "ftn/projects/bayesian_adv/lora_ftn.py",
+    "sha256": "5b3f1df51a8e5bc85e8981a51eb96ecbfa13b79e7b4a239742acec28aafbfba6",
+    "bytes": 21922
+  },
+  "ftn/projects/bayesian_adv/analyze_sweep.py": {
+    "original": "ftn/projects/bayesian_adv/analyze_sweep.py",
+    "sha256": "82664e4893af50fd50c3b2a8ac7c6be403633c16c7f69013cf10f734184ef621",
+    "bytes": 25000
+  },
+  "ftn/projects/bayesian_adv/bayes_lora_ftn.py": {
+    "original": "ftn/projects/bayesian_adv/bayes_lora_ftn.py",
+    "sha256": "943f371ec182ab334e087a729a8e69f4b79e7763b3b8d489ca579ae3166bde48",
+    "bytes": 10117
+  },
+  "ftn/projects/bayesian_adv/bayes_stack_ftn.py": {
+    "original": "ftn/projects/bayesian_adv/bayes_stack_ftn.py",
+    "sha256": "d74feda26b6f9077ba7d93ce2580029dc8a483e93a7d2afbc540cafcfb522e3a",
+    "bytes": 10343
+  },
+  "ftn/projects/bayesian_adv/metrics.py": {
+    "original": "ftn/projects/bayesian_adv/metrics.py",
+    "sha256": "923f85f20f88e3614e8a8cb104909b2df9215b7410232511a9be0198b46a8d53",
+    "bytes": 9946
+  },
+  "ftn/projects/bayesian_adv/viz.py": {
+    "original": "ftn/projects/bayesian_adv/viz.py",
+    "sha256": "b6d43f739970b8422aaf995d3f67092402310055fa87565aaf687f515baba248",
+    "bytes": 9555
+  },
+  "ftn/projects/bayesian_adv/config.py": {
+    "original": "ftn/projects/bayesian_adv/config.py",
+    "sha256": "a4b71dda0b891a67e0c48aa68853b93f90357fb8900c4a31a0573a615cc82cb1",
+    "bytes": 39799
+  },
+  "ftn/projects/bayesian_adv/ftn.py": {
+    "original": "ftn/projects/bayesian_adv/ftn.py",
+    "sha256": "9a8988d70417bb86b5c0355029a36ff58d4f97c130b66b10dd857724bbb4eb8f",
+    "bytes": 25040
+  },
+  "ftn/projects/bayesian_adv/run_seeds.py": {
+    "original": "ftn/projects/bayesian_adv/run_seeds.py",
+    "sha256": "7b2301526e7870e01d8eefe94dd54dcbb591e8aa5e751f37ae21445365dd4949",
+    "bytes": 15126
+  }
+}

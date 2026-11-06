@@ -1,0 +1,134 @@
+import torch.nn as nn
+import torch
+
+class HMLCell(nn.Module):
+    """
+    One recurrent HML population.
+
+    Each neuron computes:
+        linear term
+        + low-rank multilinear interactions up to max_order
+        -> tanh
+    """
+
+    def __init__(self, hidden_dim, rank=4, max_order=2):
+        super().__init__()
+
+        H = hidden_dim
+        R = rank
+        P = max_order
+
+        self.H = H
+        self.R = R
+        self.P = P
+
+        # First-order path
+        self.linear = nn.Linear(H, H)
+
+        # Independent factor projections for each interaction order/factor.
+        #
+        # factors[p-1][q] is an H -> (H*R) projection:
+        # each output neuron owns R private projection vectors.
+        self.factors = nn.ModuleList([
+            nn.ModuleList([
+                nn.Linear(H, H * R, bias=False)
+                for _ in range(p)
+            ])
+            for p in range(2, P + 1)
+        ])
+
+        # Mix the R rank components back to one scalar per neuron.
+        self.rank_mix = nn.ParameterList([
+            nn.Parameter(torch.randn(H, R) * 0.01)
+            for _ in range(2, P + 1)
+        ])
+
+    def forward(self, z):
+        B = z.shape[0]
+
+        h = self.linear(z)
+
+        for order_idx, order in enumerate(range(2, self.P + 1)):
+            # [B,H,R] for every factor
+            projections = [
+                layer(z).view(B, self.H, self.R)
+                for layer in self.factors[order_idx]
+            ]
+
+            # Elementwise product gives rank-R order-p interactions
+            interaction = projections[0]
+            for q in projections[1:]:
+                interaction = interaction * q
+
+            # [B,H,R] -> [B,H]
+            interaction = (
+                interaction * self.rank_mix[order_idx]
+            ).sum(dim=-1)
+
+            h = h + interaction
+
+        return torch.tanh(h)
+
+
+#Then the HML-FTN itself is just the recurrent wrapper:
+
+class HMLFTN(nn.Module):
+    def __init__(
+        self,
+        input_dim,
+        hidden_dim,
+        output_dim,
+        depth,
+        rank=4,
+        max_order=2,
+    ):
+        super().__init__()
+
+        self.depth = depth
+
+        # Initial bounded latent population
+        self.input_proj = nn.Linear(input_dim, hidden_dim)
+
+        # Same population reused recurrently
+        self.cell = HMLCell(
+            hidden_dim,
+            rank=rank,
+            max_order=max_order,
+        )
+
+        # Linear skip/readout from every recurrence level
+        self.readouts = nn.ModuleList([
+            nn.Linear(hidden_dim, output_dim, bias=False)
+            for _ in range(depth + 1)
+        ])
+
+        self.output_bias = nn.Parameter(torch.zeros(output_dim))
+
+    def forward(self, x, masks):
+        """
+        masks[l]: FTN mask for recurrence level l, shape [H]
+                  or broadcast-compatible with [B,H].
+
+        There are depth+1 masks:
+            z0, z1, ..., z_depth
+        """
+
+        z = torch.tanh(self.input_proj(x))
+
+        y = self.output_bias
+
+        for l in range(self.depth + 1):
+            masked_z = z * masks[l]
+
+            # Every level has direct linear access to output
+            y = y + self.readouts[l](masked_z)
+
+            # Recurrently build higher-order features
+            if l < self.depth:
+                z = self.cell(masked_z)
+
+        return y
+
+ARCHITECTURE = "hml"
+HML_MAX_ORDER = 2
+HML_RANK = 4

@@ -228,7 +228,7 @@ class Default:
     ARCHITECTURE = "base"
 
     # ---- Data generator (tasks.DataGenSine) ----
-    N_TASK = 8
+    N_TASK = 12
     T = 256
 
     CLASSIFICATION = True
@@ -246,8 +246,30 @@ class Default:
     DOMAIN_DENSE_PROJECTION = False
     DOMAIN_PER_TASK_PROJECTION = False
 
+    # ---- Data sizes / schedule ----
+    TRAIN_DURATION = 500
+    N_EPOCHS = 1
+    N_EVAL_EPOCHS = 1
+
+    # ---- Backwards / prospective eval (forgetting monitor) ----
+    EVAL_BACKWARDS = True
+    EVAL_PROSPECTIVE = True
+    N_RETRO_EVAL_BATCHES = 30
+    EVAL_RECONFIG_STEPS = 30
+    EVAL_RECONFIG_LR = 0.3
+    EVAL_RECONFIG_SAMPLE_SIZE = None
+    EVAL_RECONFIG_TEMPERATURE = 1.0
+    EVAL_RECONFIG_RESTARTS = 1
+
+    # ---- Entropy tests (post-hoc OOD subspace probe) ----
+    ENTROPY_TESTS = True
+    ENTROPY_TEST_TRIALS = 10
+
+    # ---- Training ----
+    TRAIN_LR = 3e-4
+
     # ---- FTN backbone ----
-    SQUARE_DIM = 64
+    SQUARE_DIM = 48
     LAYERS = 8
     INNER_DIM = 8
     DROPOUT = 0.0
@@ -259,6 +281,7 @@ class Default:
     RECONFIG_LR = 0.3
     RECONFIG_SAMPLE_SIZE = T
     RECONFIG_NOISE_SCALE = 1.0
+
     # Training-search cost against the frozen mask at search entry. Cold eval
     # remains stateless. lambda=0 preserves the original search exactly.
     RECONFIG_OVERLAP_MODE = "bump"  # "bump" or "gated"
@@ -329,10 +352,6 @@ class Default:
     #          read-in / read-out edits.
     LORARNN_IO = "fixed"
 
-    # ---- Data sizes / schedule ----
-    TRAIN_DURATION = 500
-    N_EPOCHS = 1
-    N_EVAL_EPOCHS = 1
 
     # ---- Replay ----
     N_SAMPLE_PER_TASK = 100
@@ -341,22 +360,6 @@ class Default:
     REPLAY_OVERLAP_LOW = 0.2
     REPLAY_OVERLAP_HIGH = 0.8
 
-    # ---- Backwards / prospective eval (forgetting monitor) ----
-    EVAL_BACKWARDS = True
-    EVAL_PROSPECTIVE = True
-    N_RETRO_EVAL_BATCHES = 30
-    EVAL_RECONFIG_STEPS = 30
-    EVAL_RECONFIG_LR = 0.3
-    EVAL_RECONFIG_SAMPLE_SIZE = None
-    EVAL_RECONFIG_TEMPERATURE = 1.0
-    EVAL_RECONFIG_RESTARTS = 1
-
-    # ---- Entropy tests (post-hoc OOD subspace probe) ----
-    ENTROPY_TESTS = False
-    ENTROPY_TEST_TRIALS = 10
-
-    # ---- Training ----
-    TRAIN_LR = 3e-4
 
     # ---- Plotting / logging ----
     RENDER_STEPS = True
@@ -669,11 +672,11 @@ class BayesLoRA(Bayes):
     ARCHITECTURE = "bayes_lora"
 
     # RECONFIG_REACTIVE_SD=7
-    TRAIN_DURATION=1500
-    SQUARE_DIM=64
+    TRAIN_DURATION=500
+    SQUARE_DIM=48
     K=256
 
-    LORA_LAYERS = 8          # frozen backbone MLP depth
+    LORA_LAYERS = 4          # frozen backbone MLP depth
     LORA_WIDTH = 256          # frozen backbone MLP width
     LORA_WEIGHT_SCALE = 1.0  # fixed scale of the frozen backbone weights
     LORA_RANK = 4            # rank r of each LoRA atom
@@ -836,7 +839,7 @@ class InputConditioned(Default):
     # EVAL_RECONFIG_SAMPLE_SIZE = 4  # also bounds fallback search on router miss
 
     IC_ENABLED = True
-    IC_SUPPORT_SIZE = 4            # unlabeled inputs used to select a route
+    IC_SUPPORT_SIZE = 256            # unlabeled inputs used to select a route
     IC_AE_RANK = 2                 # rank of each linear reconstruction model
     IC_RECON_THRESHOLD = 0.10      # maximum normalized reconstruction error
     IC_MATCH_TOLERANCE = 1e-3      # prefer latest mask within this error of best
@@ -850,13 +853,13 @@ class InputConditioned(Default):
     IC_REPAIR_STEPS = 100
     IC_REPAIR_LR = 0.3
     IC_REPAIR_TEMPERATURE = 1.0
-    IC_REPAIR_RESTARTS = 3
+    IC_REPAIR_RESTARTS = 1
     IC_REPAIR_TAKE_BEST = True
     IC_REPAIR_MIN_IMPROVEMENT = 0.0
     IC_REPAIR_LOGIT_MAGNITUDE = 4.0
 
     IC_TRAIN_PRIOR = False         # apply retrieved logits at change points
-    IC_PRIOR_STEPS = 30            # posterior steps if train/eval refinement used
+    IC_PRIOR_STEPS = 10            # posterior steps if train/eval refinement used
 
     IC_PRIOR_KL = 1.0              # KL to retrieved logits if refined
     IC_EVAL_STRATEGY = "refine"    # direct hard mask, or "refine" with support y

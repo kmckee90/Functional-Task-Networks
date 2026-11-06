@@ -499,7 +499,7 @@ class Default:
     SEED = 123
 
     # ---- Data generator: shared (both TASK values) ----
-    N_TASK = 12      # number of continual-learning tasks
+    N_TASK = 3      # number of continual-learning tasks
     T = 256                  # samples generated per task batch
 
     # ---- Data generator: sine (TASK == "sine") ----
@@ -520,6 +520,27 @@ class Default:
     DOMAIN_SHIFT_STRIDE = 0
     DOMAIN_DENSE_PROJECTION = False
     DOMAIN_PER_TASK_PROJECTION = False
+
+    # Data sizes
+    TRAIN_DURATION = 500
+    N_EPOCHS = 1
+    N_EVAL_EPOCHS = 1
+
+
+    # Backwards eval (forgetting monitor)
+    EVAL_BACKWARDS = True
+    EVAL_PROSPECTIVE = True
+    N_RETRO_EVAL_BATCHES = 10
+    EVAL_RECONFIG_STEPS = 60
+    EVAL_RECONFIG_SAMPLE_SIZE = None
+
+    # Entropy tests (post-hoc OOD subspace probe; see ENTROPY_TESTS in glossary)
+    ENTROPY_TESTS = False
+    ENTROPY_TEST_TRIALS = 10
+
+    # Training hyperpars
+    TRAIN_LR = 3e-4
+
 
     # ---- Data generator: compose (TASK == "compose") ----
     # Each task is a distinct fixed length-COMP_STEPS operator composition
@@ -685,11 +706,6 @@ class Default:
     COMPOSE_INTERMEDIATE_N_TASKS = 3   # distinct primitive tasks to train on
                                        # (3 single operators when STEPS=1)
 
-    # Data sizes
-    TRAIN_DURATION = 500
-    N_EPOCHS = 1
-    N_EVAL_EPOCHS = 1
-
     N_SAMPLE_PER_TASK = 100
     N_REPLAY_SAMPLES = 2
     REPLAY_BATCH_SIZE = T
@@ -703,20 +719,6 @@ class Default:
     NOISE_PROBE_DISTRIBUTION = "gaussian"
     NOISE_PROBE_SCALE = 1.0
     NOISE_PROBE_BATCH = T
-
-    # Backwards eval (forgetting monitor)
-    EVAL_BACKWARDS = True
-    EVAL_PROSPECTIVE = True
-    N_RETRO_EVAL_BATCHES = 10
-    EVAL_RECONFIG_STEPS = 60
-    EVAL_RECONFIG_SAMPLE_SIZE = None
-
-    # Entropy tests (post-hoc OOD subspace probe; see ENTROPY_TESTS in glossary)
-    ENTROPY_TESTS = False
-    ENTROPY_TEST_TRIALS = 10
-
-    # Training hyperpars
-    TRAIN_LR = 3e-4
 
     # Plotting
     RENDER_STEPS = True

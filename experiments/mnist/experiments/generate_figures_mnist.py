@@ -1,0 +1,208 @@
+"""
+generate_figures_mnist.py — Build figures and tables for exp6 MNIST
+results from results/exp6_mnist_shared.json.
+
+Run after experiments/run_kt_exp_mnist.py finishes.
+    uv run python experiments/generate_figures_mnist.py
+
+Outputs:
+    figures/mnist_shared/exp6_headstart_per_task.pdf
+    figures/mnist_shared/exp6_perf_reconfig.pdf
+    figures/mnist_shared/exp6_perf_stored.pdf
+    figures/mnist_shared/exp6_summary.pdf
+    paper/neurips/tables/exp6_mnist.tex
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import numpy as np
+
+import plotting
+
+RES_PATH = "results/exp6_mnist_shared.json"
+FIG_DIR = "figures/mnist_shared"
+TABLES_DIR = "paper/neurips/tables"
+
+
+def load() -> dict | None:
+    if not os.path.exists(RES_PATH):
+        return None
+    with open(RES_PATH) as f:
+        return json.load(f)
+
+
+def render_headstart(data: dict) -> None:
+    runs = list(data["runs"].values())
+    if not runs:
+        return
+    os.makedirs(FIG_DIR, exist_ok=True)
+    n_tasks = max(len(r["head_start"]) for r in runs)
+    ys = np.full((len(runs), n_tasks), np.nan)
+    for ri, r in enumerate(runs):
+        for t, h in enumerate(r["head_start"]):
+            v = h.get("task_loss_with_mask")
+            if v is not None:
+                ys[ri, t] = float(v)
+    mean = np.nanmean(ys, axis=0)
+    std = np.nanstd(ys, axis=0)
+    fig, ax = plt.subplots(figsize=(4.0, 3.0))
+    xs = np.arange(1, n_tasks)
+    ax.errorbar(
+        xs, mean[1:], yerr=std[1:],
+        color="#e41a1c", marker="s", capsize=3, linewidth=1.5,
+    )
+    ax.set_xlabel("Task index")
+    ax.set_ylabel("Head-start loss")
+    ax.set_title(f"Shared-shuffle MNIST head-start ({len(runs)} seeds)")
+    ax.grid(True, alpha=0.3)
+    fig.tight_layout()
+    plotting.save(fig, os.path.join(FIG_DIR, "exp6_headstart_per_task.pdf"))
+
+
+def render_perf(data: dict, key: str, name: str) -> None:
+    runs = list(data["runs"].values())
+    if not runs:
+        return
+    os.makedirs(FIG_DIR, exist_ok=True)
+    # Pick seed=0 if available
+    r = next((r for r in runs if r["seed"] == 0), runs[0])
+    R = r[key]
+    plotting.plot_perf_matrix(
+        R,
+        title=f"{name} — MNIST shared-shuffle, AnnealSTE $S{{=}}30$, seed {r['seed']}",
+        out_path=os.path.join(FIG_DIR, f"exp6_perf_{name}.pdf"),
+    )
+
+
+def render_summary(data: dict) -> None:
+    agg = data.get("aggregated", {})
+    if not agg:
+        return
+    os.makedirs(FIG_DIR, exist_ok=True)
+    metrics = [
+        ("ACC $\\uparrow$", agg.get("summary_stored.ACC", {})),
+        ("FM $\\downarrow$", agg.get("summary_stored.FM", {})),
+        ("BWT $\\uparrow$", agg.get("summary_stored.BWT", {})),
+        ("$r_{\\mathrm{share}}\\uparrow$", agg.get("sharing_corr", {})),
+    ]
+    fig, axes = plt.subplots(1, len(metrics), figsize=(2.6 * len(metrics), 2.5))
+    for ax, (name, val) in zip(axes, metrics):
+        if not val:
+            continue
+        m = val.get("mean", float("nan"))
+        s = val.get("std", float("nan"))
+        ax.bar([0], [m], yerr=[s], capsize=4, color="#e41a1c", edgecolor="black")
+        ax.set_xticks([0])
+        ax.set_xticklabels(["MNIST"])
+        ax.set_title(name, fontsize=8)
+        ax.tick_params(labelsize=6)
+        ax.grid(True, alpha=0.3, axis="y")
+    fig.suptitle("Shared-shuffle MNIST (8 seeds, AnnealSTE $S{=}30$)", fontsize=9)
+    fig.tight_layout()
+    plotting.save(fig, os.path.join(FIG_DIR, "exp6_summary.pdf"))
+
+
+def render_table(data: dict) -> None:
+    runs = list(data["runs"].values())
+    if not runs:
+        return
+    os.makedirs(TABLES_DIR, exist_ok=True)
+
+    def stat(field_path):
+        vals = []
+        for r in runs:
+            cur = r
+            for k in field_path:
+                cur = cur[k]
+            if cur is None:
+                continue
+            vals.append(float(cur))
+        if not vals:
+            return float("nan"), float("nan")
+        return float(np.mean(vals)), float(np.std(vals))
+
+    acc_m, acc_s = stat(["summary_stored", "ACC"])
+    fm_m, fm_s = stat(["summary_stored", "FM"])
+    bwt_m, bwt_s = stat(["summary_stored", "BWT"])
+    rec_acc_m, rec_acc_s = stat(["summary_reconfig", "ACC"])
+    rec_fm_m, rec_fm_s = stat(["summary_reconfig", "FM"])
+    rec_bwt_m, rec_bwt_s = stat(["summary_reconfig", "BWT"])
+    sc_m, sc_s = stat(["sharing_corr"])
+    head_run_means = []
+    for r in runs:
+        vals = [
+            h["task_loss_with_mask"]
+            for h in r["head_start"][1:]
+            if h["task_loss_with_mask"] is not None
+        ]
+        head_run_means.append(np.mean(vals) if vals else np.nan)
+    hs_m = float(np.nanmean(head_run_means))
+    hs_s = float(np.nanstd(head_run_means))
+
+    out = os.path.join(TABLES_DIR, "exp6_mnist.tex")
+    with open(out, "w") as f:
+        f.write("% Auto-generated by experiments/generate_figures_mnist.py\n")
+        f.write("\\begin{table}[t]\n\\centering\n\\small\n")
+        f.write(
+            "\\caption{Shared-shuffle MNIST results with the default FTN "
+            "configuration (AnnealSTE configurer, $S{=}30$, $k{=}512$, "
+            "reconfig batch $256$, per-batch reconfig). Mean$\\pm$std over "
+            f"{len(runs)} seeds. Stored = per-task mask saved at training; "
+            "reconfig = mask re-derived from a fresh batch of the target task "
+            "at evaluation time.}\n"
+        )
+        f.write("\\label{tab:exp6_mnist}\n")
+        f.write("\\begin{tabular}{lccc}\n\\toprule\n")
+        f.write(
+            "Protocol & ACC $\\uparrow$ & FM $\\downarrow$ & BWT $\\uparrow$ \\\\\n"
+            "\\midrule\n"
+        )
+        f.write(
+            f"Stored & {acc_m:.3f}\\,$\\pm$\\,{acc_s:.3f} "
+            f"& {fm_m:.3f}\\,$\\pm$\\,{fm_s:.3f} "
+            f"& {bwt_m:+.3f}\\,$\\pm$\\,{bwt_s:.3f} \\\\\n"
+        )
+        f.write(
+            f"Reconfig & {rec_acc_m:.3f}\\,$\\pm$\\,{rec_acc_s:.3f} "
+            f"& {rec_fm_m:.3f}\\,$\\pm$\\,{rec_fm_s:.3f} "
+            f"& {rec_bwt_m:+.3f}\\,$\\pm$\\,{rec_bwt_s:.3f} \\\\\n"
+        )
+        f.write("\\bottomrule\n\\end{tabular}\\\\[0.5em]\n")
+        f.write(
+            "\\begin{tabular}{cc}\nHead-start $\\downarrow$ & "
+            "$r_{\\mathrm{share}}\\uparrow$ \\\\\n\\toprule\n"
+            f"{hs_m:.3f}\\,$\\pm$\\,{hs_s:.3f} & "
+            f"{sc_m:.3f}\\,$\\pm$\\,{sc_s:.3f} \\\\\n"
+            "\\bottomrule\n\\end{tabular}\n\\end{table}\n"
+        )
+    print(f"  Wrote: {out}")
+
+
+def main() -> None:
+    os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    print(f"Working directory: {os.getcwd()}")
+    data = load()
+    if data is None:
+        print("  [skip] no MNIST results")
+        return
+    print(f"  [exp6] {len(data['runs'])} runs")
+    render_headstart(data)
+    render_perf(data, "perf_matrix_stored", "stored")
+    render_perf(data, "perf_matrix_reconfig", "reconfig")
+    render_summary(data)
+    render_table(data)
+    print("Done.")
+
+
+if __name__ == "__main__":
+    main()

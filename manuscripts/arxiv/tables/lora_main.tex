@@ -1,0 +1,18 @@
+\begin{table}[t]
+\centering
+\small
+\caption{Qwen2.5 LoRA-bank experiment on an assembled six-task continual-classification stream (C-STANCE-A, Financial PhraseBank, TREC, dair-ai/emotion, AG News, DBpedia~14). Qwen2.5-1.5B-Instruct backbone with $H{=}128$ rank-$4$ LoRA atoms and $k{=}16$ active per forward pass, five seeds per method, matched per-step active-parameter budget, $100$ gradient steps per task. ACC: final mean accuracy across tasks. FM: mean forgetting. BWT: mean backward transfer. HS NLL: mean head-start answer-token NLL across tasks~2--6 (task~1 has no prior context). FTN-LoRA improves retention (higher ACC, lower FM) and is the only configuration with positive BWT in this suite; head-start NLL is uninformative on this suite (every method falls in a $\sim\!0.2$ NLL band, see \cref{app:lora_ablations}). The decisive random-per-batch-mask ablation isolates the configurer's contribution; full ablation table and the LoRA $B$ initialisation diagnostic are in \cref{app:lora_ablations}.}
+\label{tab:lora_main}
+\begin{tabular}{lcccc}
+\toprule
+Method & ACC $\uparrow$ & FM $\downarrow$ & BWT $\uparrow$ & HS NLL $\downarrow$ \\
+\midrule
+SeqLoRA & 0.417\,\scriptsize$\pm$0.131 & 0.550\,\scriptsize$\pm$0.197 & -0.465\,\scriptsize$\pm$0.174 & 1.37\,\scriptsize$\pm$0.16 \\
+SeqLoRA + ER & 0.750\,\scriptsize$\pm$0.132 & 0.145\,\scriptsize$\pm$0.112 & -0.090\,\scriptsize$\pm$0.129 & 1.37\,\scriptsize$\pm$0.22 \\
+Indep.\ LoRA (oracle) & 0.392\,\scriptsize$\pm$0.139 & 0.275\,\scriptsize$\pm$0.158 & -0.255\,\scriptsize$\pm$0.174 & 1.22 \\
+Indep.\ LoRA + Router & 0.642\,\scriptsize$\pm$0.159 & 0.150\,\scriptsize$\pm$0.126 & -0.105\,\scriptsize$\pm$0.112 & 1.26\,\scriptsize$\pm$0.17 \\
+FTN-LoRA, random per-batch masks & 0.854\,\scriptsize$\pm$0.118 & 0.120\,\scriptsize$\pm$0.074 & -0.075\,\scriptsize$\pm$0.115 & 1.38\,\scriptsize$\pm$0.18 \\
+FTN-LoRA & 0.833\,\scriptsize$\pm$0.101 & 0.085\,\scriptsize$\pm$0.086 & 0.190\,\scriptsize$\pm$0.101 & 1.42\,\scriptsize$\pm$0.25 \\
+\bottomrule
+\end{tabular}
+\end{table}

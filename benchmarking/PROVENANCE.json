@@ -1,0 +1,30 @@
+{
+  "AIM": {
+    "remote": "https://github.com/huang50213/AIM-Fewshot-Continual.git",
+    "commit": "89a7479b21d32b49e0789c6db922a37328ea95f5"
+  },
+  "CTrLBenchmark": {
+    "remote": "https://github.com/facebookresearch/CTrLBenchmark.git",
+    "commit": "06efd8649cecfab18d430ca2f366f42fb17e009b"
+  },
+  "MNTDP": {
+    "remote": "https://github.com/TomVeniat/MNTDP.git",
+    "commit": "13f5461a5e92198f516d0bd408a56c05b9128fd4"
+  },
+  "SPG": {
+    "remote": "https://github.com/UIC-Liu-Lab/SPG.git",
+    "commit": "fe5bc9b62a7a4c61259ed0ab7102c022acab17ed"
+  },
+  "SuperNetworks": {
+    "remote": "https://github.com/TomVeniat/SuperNetworks.git",
+    "commit": "5f12ea59dfe9c91e71a66d67f87875f0e086be85"
+  },
+  "core50": {
+    "remote": "https://github.com/vlomonaco/core50.git",
+    "commit": "bcecd910c990aa59360a839e82e3dec5c7deb674"
+  },
+  "mammoth": {
+    "remote": "https://github.com/aimagelab/mammoth.git",
+    "commit": "e75a491c69fd729edeb01431afb753d9157d9a81"
+  }
+}

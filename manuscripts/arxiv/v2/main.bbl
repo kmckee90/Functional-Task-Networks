@@ -1,4 +1,4 @@
-\begin{thebibliography}{57}
+\begin{thebibliography}{47}
 \providecommand{\natexlab}[1]{#1}
 \providecommand{\url}[1]{\texttt{#1}}
 \expandafter\ifx\csname urlstyle\endcsname\relax
@@ -128,14 +128,6 @@ Robbe L.~T. Goris, J.~Anthony Movshon, and Eero~P. Simoncelli.
 \newblock \emph{Nature Neuroscience}, 17\penalty0 (6):\penalty0 858--865, 2014.
 \newblock \doi{10.1038/nn.3711}.
 
-\bibitem[Hu et~al.(2022)Hu, Shen, Wallis, Allen-Zhu, Li, Wang, Wang, and
-  Chen]{hu2022lora}
-Edward~J. Hu, Yelong Shen, Phillip Wallis, Zeyuan Allen-Zhu, Yuanzhi Li, Shean
-  Wang, Lu~Wang, and Weizhu Chen.
-\newblock {LoRA}: Low-rank adaptation of large language models.
-\newblock In \emph{International Conference on Learning Representations
-  (ICLR)}, 2022.
-
 \bibitem[Jaeger(2001)]{jaeger2001echo}
 Herbert Jaeger.
 \newblock The ``echo state'' approach to analysing and training recurrent
@@ -178,21 +170,6 @@ Yann LeCun, L{\'e}on Bottou, Yoshua Bengio, and Patrick Haffner.
 \newblock \emph{Proceedings of the IEEE}, 86\penalty0 (11):\penalty0
   2278--2324, 1998.
 
-\bibitem[Lhoest et~al.(2021)Lhoest, Villanova~del Moral, Jernite, Thakur, von
-  Platen, Patil, Chaumond, Drame, Plu, Tunstall, et~al.]{lhoest2021datasets}
-Quentin Lhoest, Albert Villanova~del Moral, Yacine Jernite, Abhishek Thakur,
-  Patrick von Platen, Suraj Patil, Julien Chaumond, Mariama Drame, Julien Plu,
-  Lewis Tunstall, et~al.
-\newblock Datasets: A community library for natural language processing.
-\newblock In \emph{Proceedings of the 2021 Conference on Empirical Methods in
-  Natural Language Processing: System Demonstrations}, pages 175--184, 2021.
-
-\bibitem[Li and Roth(2002)]{li2002trec}
-Xin Li and Dan Roth.
-\newblock Learning question classifiers.
-\newblock In \emph{Proceedings of the 19th International Conference on
-  Computational Linguistics}, 2002.
-
 \bibitem[Lopez-Paz and Ranzato(2017)]{lopez2017gradient}
 David Lopez-Paz and Marc'Aurelio Ranzato.
 \newblock Gradient episodic memory for continual learning.
@@ -225,14 +202,6 @@ Arun Mallya and Svetlana Lazebnik.
 \newblock In \emph{IEEE Conference on Computer Vision and Pattern Recognition
   (CVPR)}, 2018.
 
-\bibitem[Malo et~al.(2014)Malo, Sinha, Korhonen, Wallenius, and
-  Takala]{malo2014finphrasebank}
-Pekka Malo, Ankur Sinha, Pekka Korhonen, Jyrki Wallenius, and Pyry Takala.
-\newblock Good debt or bad debt: Detecting semantic orientations in economic
-  texts.
-\newblock \emph{Journal of the Association for Information Science and
-  Technology}, 65\penalty0 (4):\penalty0 782--796, 2014.
-
 \bibitem[McCloskey and Cohen(1989)]{mccloskey1989catastrophic}
 Michael McCloskey and Neal~J Cohen.
 \newblock Catastrophic interference in connectionist networks: The sequential
@@ -247,15 +216,6 @@ Gianluigi Mongillo, Simon Rumpel, and Yonatan Loewenstein.
 \newblock \emph{Nature neuroscience}, 21\penalty0 (10):\penalty0 1463--1470,
   2018.
 
-\bibitem[Paszke et~al.(2019)Paszke, Gross, Massa, Lerer, Bradbury, Chanan,
-  Killeen, Lin, Gimelshein, Antiga, et~al.]{paszke2019pytorch}
-Adam Paszke, Sam Gross, Francisco Massa, Adam Lerer, James Bradbury, Gregory
-  Chanan, Trevor Killeen, Zeming Lin, Natalia Gimelshein, Luca Antiga, et~al.
-\newblock {PyTorch}: An imperative style, high-performance deep learning
-  library.
-\newblock In \emph{Advances in Neural Information Processing Systems},
-  volume~32, 2019.
-
 \bibitem[Poirazi and Papoutsi(2020)]{poirazi2020illuminating}
 Panayiota Poirazi and Athanasia Papoutsi.
 \newblock Illuminating dendritic function with computational models.
@@ -266,11 +226,6 @@ Panayiota Poirazi and Athanasia Papoutsi.
 Panayiota Poirazi, Terrence Brannon, and Bartlett~W. Mel.
 \newblock Pyramidal neuron as two-layer neural network.
 \newblock \emph{Neuron}, 37\penalty0 (6):\penalty0 989--999, 2003.
-
-\bibitem[{Qwen Team}(2024)]{qwen2_5_2024}
-{Qwen Team}.
-\newblock Qwen2.5 technical report.
-\newblock \emph{arXiv preprint arXiv:2412.15115}, 2024.
 
 \bibitem[Rahimi and Recht(2007)]{rahimi2007random}
 Ali Rahimi and Benjamin Recht.
@@ -300,14 +255,6 @@ Andrei~A Rusu, Neil~C Rabinowitz, Guillaume Desjardins, Hubert Soyer, James
   Kirkpatrick, Koray Kavukcuoglu, Razvan Pascanu, and Raia Hadsell.
 \newblock Progressive neural networks.
 \newblock \emph{arXiv preprint arXiv:1606.04671}, 2016.
-
-\bibitem[Saravia et~al.(2018)Saravia, Liu, Huang, Wu, and
-  Chen]{saravia2018emotion}
-Elvis Saravia, Hsien-Chi~Toby Liu, Yen-Hao Huang, Junlin Wu, and Yi-Shin Chen.
-\newblock {CARER}: Contextualized affect representations for emotion
-  recognition.
-\newblock In \emph{Proceedings of the 2018 Conference on Empirical Methods in
-  Natural Language Processing}, pages 3687--3697, 2018.
 
 \bibitem[Serra et~al.(2018)Serra, Suris, Miron, and
   Karatzoglou]{serra2018overcoming}
@@ -369,15 +316,6 @@ Zifeng Wang, Zizhao Zhang, Chen-Yu Lee, Han Zhang, Ruoxi Sun, Xiaoqi Ren,
 \newblock Learning to prompt for continual learning.
 \newblock In \emph{CVPR}, 2022{\natexlab{b}}.
 
-\bibitem[Wolf et~al.(2020)Wolf, Debut, Sanh, Chaumond, Delangue, Moi, Cistac,
-  Rault, Louf, Funtowicz, et~al.]{wolf2020transformers}
-Thomas Wolf, Lysandre Debut, Victor Sanh, Julien Chaumond, Clement Delangue,
-  Anthony Moi, Pierric Cistac, Tim Rault, R{\'e}mi Louf, Morgan Funtowicz,
-  et~al.
-\newblock Transformers: State-of-the-art natural language processing.
-\newblock In \emph{Proceedings of the 2020 Conference on Empirical Methods in
-  Natural Language Processing: System Demonstrations}, pages 38--45, 2020.
-
 \bibitem[Wortsman et~al.(2020)Wortsman, Ramanujan, Liu, Kembhavi, Rastegari,
   Yosinski, and Farhadi]{wortsman2020supermasks}
 Mitchell Wortsman, Vivek Ramanujan, Rosanne Liu, Aniruddha Kembhavi, Mohammad
@@ -399,17 +337,5 @@ Friedemann Zenke, Ben Poole, and Surya Ganguli.
 \newblock Continual learning through synaptic intelligence.
 \newblock In \emph{International Conference on Machine Learning}, pages
   3987--3995. PMLR, 2017.
-
-\bibitem[Zhang et~al.(2015)Zhang, Zhao, and LeCun]{zhang2015charcnn}
-Xiang Zhang, Junbo Zhao, and Yann LeCun.
-\newblock Character-level convolutional networks for text classification.
-\newblock In \emph{Advances in Neural Information Processing Systems},
-  volume~28, 2015.
-
-\bibitem[Zhao et~al.(2024)Zhao, Li, and Caragea]{zhao2024cstance}
-Chenye Zhao, Yingjie Li, and Cornelia Caragea.
-\newblock {C-STANCE}: A large dataset for {C}hinese zero-shot stance detection.
-\newblock In \emph{Proceedings of the 62nd Annual Meeting of the Association
-  for Computational Linguistics}, 2024.
 
 \end{thebibliography}

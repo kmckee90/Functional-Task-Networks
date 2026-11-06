@@ -57,3 +57,13 @@ nascent/proposal_githubio/
 **/evaluation_results/
 **/*.csv
 **/*.jsonl
+# Benchmark bulk storage must also be excluded when syncing the repository root.
+/benchmarking/data/
+/benchmarking/datasets/
+/benchmarking/cache/
+/benchmarking/envs/
+/benchmarking/tmp/
+
+# Restored manuscript MNIST data (runtime download, never source).
+/experiments/mnist/data/
+/experiments/mnist/paper/

@@ -1,0 +1,8 @@
+# The original tree had no lockfile; these are runtime dependencies, not a
+# reconstruction of the environment used to produce the manuscript numbers.
+torch
+torchvision
+numpy
+matplotlib
+tqdm
+Pillow

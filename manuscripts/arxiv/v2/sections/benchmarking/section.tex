@@ -1,0 +1,62 @@
+\section{Continual image classification with support-conditioned recall}\label{sec:benchmarking}
+We evaluate FTN on CORe50 new classes (NC) and TinyImageNet to examine retention beyond the controlled concept-shift experiments. Both streams introduce new classes while preserving their meanings. The experiments therefore test continual acquisition and support-conditioned recall with a pretrained visual representation; they do not test conflicting labeling rules. All results in this section use seed 0. Smoke tests and shortened timing runs are excluded.
+
+\subsection{Experimental setup}
+\paragraph{Data and inference protocol.}
+CORe50 NC contains 50 classes presented in nine blocks: ten classes in the first block and five in each subsequent block. The official held-out sessions provide 44,972 test images. A class-stratified 10\% training holdout supplies calibration support, leaving 107,897 examples eligible for weight updates. TinyImageNet uses ten blocks of twenty classes, a 10\% training holdout, and 1,000 test queries per block. FTN and the feature-based DER++ runs use frozen Google ImageNet-21k ViT-B/16 features. The FTN LoRA variants adapt the downstream feature-processing networks, rather than the ViT backbone.
+
+At evaluation, each learned block receives 256 class-balanced labeled support examples from the holdout. FTN searches a fresh mask for 60 steps in the root variants and 30 steps in the Bayesian variants, then fixes that mask for the block's queries. All 50 CORe50 or 200 TinyImageNet output classes remain available. Neither query labels nor an explicit task identifier enter mask search. However, the evaluator groups support and queries by learned block: this supplies distribution-specific context and should not be interpreted as unrestricted task-agnostic inference. Support examples are excluded from weight training.
+
+\paragraph{Models and optimization.}
+The six FTN configurations are Base, Reactive Low without replay, LoRA, LoRA Reactive Low without replay, Bayes, and BayesLoRA. These retain their native configuration and training duration. FTN Base stores $H=4096$ atoms and activates $K=256$. On CORe50 its active head contains 1,719,040 parameters, compared with 27,504,640 stored trainable parameters. The harness uses zero weight decay, resets Adam moments at training-mask reconfiguration, and restricts gradient and moment updates to the union of current and replay masks; the upstream encoder remains frozen.
+
+The CORe50 DER++ baselines use 256 atoms with the same per-atom MLP and readout as Base, matching its active head parameter count. Their replay capacities are 500 and 230,400 examples (the latter is denoted ``matched'' in the archive). They train for 50 epochs per block. L2P uses its native pretrained ViT prompt architecture and five epochs per block. These are not equal-training-budget comparisons. Neither baseline receives labeled evaluation support, and the active-parameter match applies only to FTN Base versus the two CORe50 DER++ heads.
+
+\paragraph{Metrics.}
+Let $a_{T,j}$ denote accuracy on block $j$ after the final training block $T$, and $n_j$ its number of test queries. We report
+\begin{equation}
+ A_{\mathrm{block}}=\frac{1}{T}\sum_{j=1}^{T}a_{T,j},\qquad
+ A_{\mathrm{overall}}=\frac{\sum_j n_j a_{T,j}}{\sum_j n_j}.
+\end{equation}
+The two differ on CORe50 because block query counts differ. These are final-checkpoint metrics, not averages over training phases. The TinyImageNet domain-support reevaluation uses saved final weights only and does not reconstruct a forgetting curve or backward-transfer matrix.
+
+\subsection{CORe50 results}
+\begin{table}[htbp]
+\centering\small
+\begin{tabular}{lrrr}\toprule
+Method & Block accuracy (\%) & Overall (\%) & Wall time (s)\\\midrule
+FTN Base &98.20&97.67&196.4\\
+FTN Reactive Low, no replay &98.66&98.63&38.2\\
+FTN LoRA &97.49&97.31&891.1\\
+FTN LoRA Reactive Low, no replay &97.57&97.39&67.7\\
+FTN Bayes &98.44&98.27&84.6\\
+FTN BayesLoRA &95.98&94.90&467.7\\\midrule
+DER++ (500; 256-atom head)&71.06&70.73&1445.3\\
+DER++ (230,400; 256-atom head)&86.94&87.74&2556.0\\
+L2P &69.32&72.00&2319.1\\\bottomrule
+\end{tabular}
+\caption{Completed CORe50 runs, seed 0. FTN uses block-specific labeled support; DER++ and L2P do not. Wall times are archived completed-run measurements under different training schedules, not normalized speed comparisons.}\label{tab:benchmarking_core50}
+\end{table}
+
+All six FTN variants achieve at least 95.98\% mean block accuracy (\cref{tab:benchmarking_core50}). Base exceeds the larger-buffer DER++ result by 11.26 percentage points on this measure, but the difference combines model, optimization, and inference-information effects. Reactive Low without replay has the highest observed accuracy, 98.66\%, compared with 98.20\% for Base. This result shows that replay is not necessary for high final recall in this particular fixed-label, frozen-feature setting; it does not isolate replay's causal effect because the reconfiguration policy also changes. Bayes reaches 98.44\%, whereas BayesLoRA reaches 95.98\%, indicating that the Bayesian configuration is not uniformly superior across downstream architectures.
+
+\subsection{TinyImageNet: sensitivity to support scope}
+The archive includes an earlier pooled-support evaluation and a reevaluation of the same final training weights with block-specific support. The latter verifies exact equality of model parameters before and after evaluation. Thus the change below reflects inference configuration rather than additional weight training.
+\begin{table}[htbp]
+\centering\small
+\begin{tabular}{lrrr}\toprule
+FTN variant & Pooled support (\%) & Block support (\%) & Gain (pp)\\\midrule
+Base&51.38&87.59&36.21\\
+Reactive Low, no replay&29.94&91.23&61.29\\
+LoRA&5.56&84.32&78.76\\
+LoRA Reactive Low, no replay&1.76&85.33&83.57\\
+Bayes&42.61&90.27&47.66\\
+BayesLoRA&2.05&77.34&75.29\\\bottomrule
+\end{tabular}
+\caption{TinyImageNet final mean block accuracy, seed 0. Gains are differences of the displayed percentages. Support scope changes between columns; the columns must not be treated as a training ablation.}\label{tab:benchmarking_tiny}
+\end{table}
+
+Block-specific support raises final accuracy for every configuration (\cref{tab:benchmarking_tiny}). The largest increase is 83.57 percentage points for LoRA Reactive Low without replay. Base reaches 87.59\%, but its first block remains substantially weaker (62.10\%) than blocks 2--10 (88.00--91.90\%). Reactive Low without replay reaches 91.23\% overall, with all blocks between 88.50\% and 93.50\%. The results demonstrate recoverable solutions in the final bank and a strong dependence on the support distribution used to retrieve them. They do not establish reliable recall from a support pool mixing arbitrary tasks.
+
+\paragraph{Scope of the comparison.}
+These single-seed results support the feasibility of FTN recall on standard visual class streams. They do not supply across-seed uncertainty or establish a statistically reliable ranking. The archived TinyImageNet DER++ feature heads have sixteen times Base's per-input active parameter count, unlike the matched CORe50 heads, and baseline inference omits labeled support. A controlled comparison would need to equalize support information, active capacity, and training budget. The present evidence should therefore complement, rather than replace, the manuscript's matched mechanism experiments.

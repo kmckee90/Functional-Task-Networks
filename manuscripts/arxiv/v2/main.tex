@@ -39,7 +39,7 @@
 
 \author[1]{Kevin L. McKee}
     %*Kevin L. McKee, Yicong Zheng, Zacharie Bugaud, Thomas Miconi}
-\affil[1]{Astera Institute}
+% \affil[1]{}
 
 \date{}
 
@@ -118,9 +118,9 @@ The principal idea behind FTN is to solve tasks using a \textbf{sparse, discrete
 Specifically, optimization of the router's logits is performed separately from optimization of the parameters of the processing units that are routed.
 Each of these design choices above, emphasized in bold, are critical.
 
-The exact implementation of FTN can vary to address the problem domain, but it necessarily involves a bank of processing units combined with an output decoder.
-For instance, for simple motor policies, each unit can be a narrow-but-deep multi-layer perceptron (MLP) with a scalar output, and the output policy can be decoded via linear combination of the population activity.
-Conversely, in Natural Language Processing (NLP), a sensible approach is to make each unit a Low-Rank Adapter (LoRA), and the combination function is a pretrained transformer, or Large Language Model (LLM).
+The implementation of FTN can vary to address the problem domain, but it necessarily involves a bank of processing units combined with an output decoder.
+For instance, for simple motor policies, each unit can be a narrow-but-deep multi-layer perceptron (MLP) with a scalar output, and the output policy can be decoded via linear combination of the population activity, illustrated in \Cref{fig:model_base}.
+Conversely, \Cref{fig:model_lora} shows how for Natural Language Processing (NLP) and other large-scale models, a sensible approach is to make each unit a Low-Rank Adapter (LoRA). The combination function is then the pretrained transformer such as a Large Language Model (LLM).
 
 \paragraph{Optimization-based routing}
 First, Mixture-of-Expert (MoE) models already route processing to model subspaces and can be made large, sparse, and discrete, but that does not solve catastrophic forgetting.
@@ -152,17 +152,35 @@ For instance, a model trained only on a variety of human faces does not learn th
 In that case, the only reasonable expectation is nearly disjoint feature spaces, each trained to convergence.
 Motor control presents a very different case: most tasks performed by a robotic arm share broad patterns of motor control and differ only in the final, precise trajectories of object manipulation.
 
-\paragraph{Large banks of features}
+\begin{figure}[t]
+\centering
+\begin{subfigure}[b]{0.48\textwidth}
+\centering
+\includegraphics[width=\linewidth]{model_base.png}
+\caption{Linear combination of $K$ gated MLPs}
+\label{fig:model_base}
+\end{subfigure}
+\hfill
+\begin{subfigure}[b]{0.48\textwidth}
+\centering
+\includegraphics[width=\linewidth]{model_lora.png}
+\caption{Rank-$K$ recombinant mixture of LoRAs}
+\label{fig:model_lora}
+\end{subfigure}
+\caption{Two possible architectures that implement continual learning via FTN. A large bank of processing units is discretely and sparsely gated into a combination function.}
+\label{fig:archs}
+\end{figure}
+
+\paragraph{Architecture}
 The most important reason to specify a large bank of features is simply to have a sufficient learning capacity for future tasks.
-%Second, for the above network selection principle to work well, it helps to have a large number of initial random features that can be used to produce non-trivial improvement on new tasks.
 However, a large bank of units also allows the same tasks to recruit and train a distribution of possible, composite solutions, a form of ensembling.
 The experiments to follow will show that learning large, distributed task representations gives the network many more ways to assemble solutions on new tasks.
 
-\paragraph{Small features}
+% \paragraph{Small features}
 In addition to using a large network, limiting the complexity of the features being combined can force them to diversify their learned functions, creating more atomic, compositional, and therefore transferable solutions.
-For instance, the processing units can be narrow-but-deep MLPs or rank-1 LoRAs.
+For instance, the processing units can be narrow-but-deep MLPs or rank-1 LoRAs \Cref{fig:model_lora}.
 
-\paragraph{Sparse, discrete routing masks}
+% \paragraph{Sparse, discrete routing masks}
 For continual learning to work without catastrophic forgetting, the router requires sparse, discrete routing masks.
 Foremost, binarizing the routing logits found by the optimizer gates the flow of gradients into the trainable features.
 Inactive units do not participate in the current task and their parameters remain fixed.
@@ -175,7 +193,7 @@ If all of the resulting networks are completely disjoint, the FTN can retain $N/
 
 \paragraph{Biological motivation.}
 FTN is motivated by several features of neocortical computation that suggest a route to sparse, reusable, and partially overlapping task representations. Sparsification via top-$k$ masking has previously served as an abstraction for the effects of inhibitory competition among neurons\citep{yang2019task,cichon2015branch,mongillo2018inhibitory,rolls2010attractor,khona2022attractor,amari1977dynamics,maass2000computational,douglas2004neuronal}. Our choice to use a large number of deep networks with low-dimensional output is based on the dendritic model of pyramidal neurons, which can be characterized as deep, multilayer networks\citep{poirazi2003pyramidal,poirazi2020illuminating,beniaguev2021single}.
-Alternatively, the LoRA formulation serves as a hypothesis about dendritic redundancy and compartmentalization.
+Alternatively, the LoRA formulation serves as a hypothesis about dendritic redundancy and compartmentalization, as many possible dendritic configurations can be selected via inhibitory networks. 
 
 FTN also draws on a statistical property of cortical representations: task-relevant activity is distributed across populations and partially redundant, rather than localized to single reliable units \citep{georgopoulos1986neuronal,averbeck2006neural,cohen2011measuring}, while individual cortical neurons are variable across trials and only partially reliable \citep{tolhurst1983statistical,softky1993highly,shadlen1998variable,faisal2008noise,churchland2010stimulus,goris2014partitioning}. Algorithmically, this motivates using a large population of small subnetworks whose contributions are individually weak but heterogeneous, and whose training histories differ across tasks. A new task can then be configured by selecting an assembly from many partially trained units, allowing useful computation before any further weight update. In this view, transfer arises not from retrieving a single stored expert, but from recombining a distributed population of imperfect, task-relevant components.
 
@@ -184,7 +202,7 @@ FTN also draws on a statistical property of cortical representations: task-relev
 
 %% where to put this?
 
-The first class of related models focus primarily osrtatusn retention of prior solutions. Parameter-isolation methods (PackNet \citep{mallya2018packnet}, HAT \citep{serra2018overcoming}, SupSup \citep{wortsman2020supermasks}) assign tasks to disjoint parameter subsets; regularizers (EWC \citep{kirkpatrick2017overcoming}, Synaptic Intelligence \citep{zenke2017continual}) penalize drift on parameters important for earlier tasks; replay methods (GEM/A-GEM \citep{lopez2017gradient,chaudhry2018efficient}, iCaRL \citep{rebuffi2017icarl}, DER++) use stored exemplars. These target retention; they have no explicit mechanism for forward transfer.
+The first class of related models focus primarily on retention of prior solutions. Parameter-isolation methods (PackNet \citep{mallya2018packnet}, HAT \citep{serra2018overcoming}, SupSup \citep{wortsman2020supermasks}) assign tasks to disjoint parameter subsets; regularizers (EWC \citep{kirkpatrick2017overcoming}, Synaptic Intelligence \citep{zenke2017continual}) penalize drift on parameters important for earlier tasks; replay methods (GEM/A-GEM \citep{lopez2017gradient,chaudhry2018efficient}, iCaRL \citep{rebuffi2017icarl}, DER++) use stored exemplars. These target retention; they have no explicit mechanism for forward transfer.
 Furthermore, methods like Elastic Weight Consolidation (EWC) and Synaptic Intelligence \citep{kirkpatrick2017overcoming,zenke2017continual} address domain shift but not concept shift. 
 Penalizing drift on parameters that \emph{need} to compute different functions on different tasks only blocks learning. 
 Shuffled experience replay similarly fails because two replayed labels for the same input contradict each other unless replay is routed through different subnetworks.
@@ -261,8 +279,13 @@ The MNIST suite~\citep{lecun1998mnist} spans concept and domain shift: \emph{sha
 
 \begin{figure}[!ht]
 \centering
-\includegraphics[width=0.85\textwidth]{tasks.png}
-\caption{Three example tasks from the correlated synthetic family: binary decision surface over the 2-D input $x$, points colored by class $y$. Tasks share latent components; boundaries share gross structure but differ in orientation and high-frequency interior, the concept overlap FTN's mask geometry is designed to recover.}
+\includegraphics[width=0.95\textwidth]{tasks.png}
+\caption{Visualizations of randomly chosen batches, model expectations, and corresponding routing masks during training of FTN on the synthetic classification tasks.
+Masks implemented a weak spatial cohesion bias for easier visual inspection of their structure.
+Rows: Examples from each of 3 orthogonal (column 1) and 3 correlated (column 2) data-generating functions being trained in sequence. 
+Each left-most pane shows the binary class-generating decision surface over 2 inputs.
+Each middle pane shows a random batch of data during training superimposed on the model's estimate of that decision  surface.
+The right-most pane shows the active routing mask (white pixels) superimposed on a colored exponential moving average (purple) of previous activations, show the distributed variation in the active mask.}
 \label{fig:tasks}
 \end{figure}
 
@@ -360,33 +383,33 @@ FTN (ours) & 0.960 & 0.023 & \textbf{0.562} & 0.954 & 0.024 & \textbf{1.616} & 0
 \label{tab:mnist_suite}
 \end{table}
 
-\subsection{Qwen2.5 LoRA-bank experiment}\label{sec:lora}
+% \subsection{Qwen2.5 LoRA-bank experiment}\label{sec:lora}
 
-We also instantiate the same routing mechanism as a bank of LoRA atoms \citep{hu2022lora} on a frozen Qwen2.5-1.5B-Instruct backbone \citep{qwen2_5_2024}. Each banked projection has $H=128$ rank-4 atoms and uses $k=16$ active atoms per forward pass, matching the active-parameter budget of the baselines. The six-task continual-classification stream is an assembled benchmark of public Hugging Face datasets covering Chinese and English text, six label-space sizes from $2$ to $14$, and five distinct domains: C-STANCE-A~\citep{zhao2024cstance} (Chinese stance), Financial PhraseBank~\citep{malo2014finphrasebank} (English finance sentiment), TREC~\citep{li2002trec} (English question type), dair-ai/emotion~\citep{saravia2018emotion}, AG News~\citep{zhang2015charcnn}, and DBpedia~14~\citep{zhang2015charcnn}. We assemble this task as a continual-classification probe of retention and backward transfer at LLM scale. We compare against the four matched-backbone baselines below plus one decisive ablation, \emph{FTN-LoRA, random per-batch masks}, which keeps FTN-LoRA's training pipeline (filtered replay, $B_0\sim\mathcal{N}(0,0.01)$, per-batch reconfiguration on the same step budget) but replaces the support-conditioned configurer with a fresh random $k$-of-$H$ mask each step. This isolates the configurer's contribution from the rest of the pipeline.
+% We also instantiate the same routing mechanism as a bank of LoRA atoms \citep{hu2022lora} on a frozen Qwen2.5-1.5B-Instruct backbone \citep{qwen2_5_2024}. Each banked projection has $H=128$ rank-4 atoms and uses $k=16$ active atoms per forward pass, matching the active-parameter budget of the baselines. The six-task continual-classification stream is an assembled benchmark of public Hugging Face datasets covering Chinese and English text, six label-space sizes from $2$ to $14$, and five distinct domains: C-STANCE-A~\citep{zhao2024cstance} (Chinese stance), Financial PhraseBank~\citep{malo2014finphrasebank} (English finance sentiment), TREC~\citep{li2002trec} (English question type), dair-ai/emotion~\citep{saravia2018emotion}, AG News~\citep{zhang2015charcnn}, and DBpedia~14~\citep{zhang2015charcnn}. We assemble this task as a continual-classification probe of retention and backward transfer at LLM scale. We compare against the four matched-backbone baselines below plus one decisive ablation, \emph{FTN-LoRA, random per-batch masks}, which keeps FTN-LoRA's training pipeline (filtered replay, $B_0\sim\mathcal{N}(0,0.01)$, per-batch reconfiguration on the same step budget) but replaces the support-conditioned configurer with a fresh random $k$-of-$H$ mask each step. This isolates the configurer's contribution from the rest of the pipeline.
 
-\begin{table}[t]
-\centering
-\small
-\setlength{\tabcolsep}{5pt}
-\caption{Qwen2.5 LoRA-bank experiment, five seeds per method. ACC is final mean accuracy; FM is mean forgetting; BWT is backward transfer; HS NLL is pre-update answer-token NLL.}
-\begin{tabular}{lcccc}
-\toprule
-Method & ACC$\uparrow$ & FM$\downarrow$ & BWT$\uparrow$ & HS NLL$\downarrow$ \\
-\midrule
-SeqLoRA & $0.42\pm0.13$ & $0.55\pm0.20$ & $-0.47\pm0.17$ & $1.37\pm0.16$ \\
-SeqLoRA+ER & $0.75\pm0.13$ & $0.15\pm0.11$ & $-0.09\pm0.13$ & $1.37\pm0.22$ \\
-Indep.\ LoRA (oracle) & $0.39\pm0.14$ & $0.28\pm0.16$ & $-0.26\pm0.17$ & $1.22\pm0.00$ \\
-Indep.\ LoRA+Router & $0.64\pm0.16$ & $0.15\pm0.13$ & $-0.11\pm0.11$ & $1.26\pm0.17$ \\
-FTN-LoRA, random per-batch masks & $\mathbf{0.85\pm0.12}$ & $\mathbf{0.12\pm0.07}$ & $-0.08\pm0.12$ & $1.38\pm0.18$ \\
-FTN-LoRA & $0.83\pm0.10$ & $0.09\pm0.09$ & $\mathbf{+0.19\pm0.10}$ & $1.42\pm0.25$ \\
-\bottomrule
-\end{tabular}
-\label{tab:lora_main}
-\end{table}
+% \begin{table}[t]
+% \centering
+% \small
+% \setlength{\tabcolsep}{5pt}
+% \caption{Qwen2.5 LoRA-bank experiment, five seeds per method. ACC is final mean accuracy; FM is mean forgetting; BWT is backward transfer; HS NLL is pre-update answer-token NLL.}
+% \begin{tabular}{lcccc}
+% \toprule
+% Method & ACC$\uparrow$ & FM$\downarrow$ & BWT$\uparrow$ & HS NLL$\downarrow$ \\
+% \midrule
+% SeqLoRA & $0.42\pm0.13$ & $0.55\pm0.20$ & $-0.47\pm0.17$ & $1.37\pm0.16$ \\
+% SeqLoRA+ER & $0.75\pm0.13$ & $0.15\pm0.11$ & $-0.09\pm0.13$ & $1.37\pm0.22$ \\
+% Indep.\ LoRA (oracle) & $0.39\pm0.14$ & $0.28\pm0.16$ & $-0.26\pm0.17$ & $1.22\pm0.00$ \\
+% Indep.\ LoRA+Router & $0.64\pm0.16$ & $0.15\pm0.13$ & $-0.11\pm0.11$ & $1.26\pm0.17$ \\
+% FTN-LoRA, random per-batch masks & $\mathbf{0.85\pm0.12}$ & $\mathbf{0.12\pm0.07}$ & $-0.08\pm0.12$ & $1.38\pm0.18$ \\
+% FTN-LoRA & $0.83\pm0.10$ & $0.09\pm0.09$ & $\mathbf{+0.19\pm0.10}$ & $1.42\pm0.25$ \\
+% \bottomrule
+% \end{tabular}
+% \label{tab:lora_main}
+% \end{table}
 
-FTN's \emph{training pipeline} (filtered replay, non-zero $B_0$, per-batch reconfiguration on a wide bank) accounts for almost all of the gap to the parameter-isolation comparators on retention: FTN-LoRA reaches ACC $0.83\pm0.10$ and FM $0.09\pm0.09$ against $0.39$--$0.75$ ACC and $0.15$--$0.55$ FM in the baselines, and the random-per-batch-mask ablation lands at the same retention level ($0.85\pm0.12$ / $0.12\pm0.07$). Taking into account the random-mask ablation, it is clear that the \emph{The support-conditioned mask configurer} accounts for the greatest transfer backward transfer: FTN-LoRA shows the only positive BWT in the table ($+0.19\pm0.10$), the random-mask ablation falls to $-0.08\pm0.12$, and the four matched-backbone baselines cluster between $-0.47$ and $-0.09$. The FTN-LoRA mean is more than one standard deviation above zero across five seeds and the random-mask mean is below zero, so the sign of BWT separates the two configurations across the seed budget.
+% FTN's \emph{training pipeline} (filtered replay, non-zero $B_0$, per-batch reconfiguration on a wide bank) accounts for almost all of the gap to the parameter-isolation comparators on retention: FTN-LoRA reaches ACC $0.83\pm0.10$ and FM $0.09\pm0.09$ against $0.39$--$0.75$ ACC and $0.15$--$0.55$ FM in the baselines, and the random-per-batch-mask ablation lands at the same retention level ($0.85\pm0.12$ / $0.12\pm0.07$). Taking into account the random-mask ablation, it is clear that the \emph{The support-conditioned mask configurer} accounts for the greatest transfer backward transfer: FTN-LoRA shows the only positive BWT in the table ($+0.19\pm0.10$), the random-mask ablation falls to $-0.08\pm0.12$, and the four matched-backbone baselines cluster between $-0.47$ and $-0.09$. The FTN-LoRA mean is more than one standard deviation above zero across five seeds and the random-mask mean is below zero, so the sign of BWT separates the two configurations across the seed budget.
 
-Head-start NLL appeared uninformative on this suite, as every method lands in the narrow band $1.22$--$1.42$, well within per-row standard deviations of $0.15$--$0.25$. Head-start can only vary across methods if prior-task adapters carry usable bias for the new task, and this six-task stream was selected for diversity rather than for known cross-task structure. The random-mask ablation shows that retention parity between FTN and random masks is the signature of domain-shift without concept-shift, matching Permuted MNIST and Rotated MNIST in the controlled suite. We therefore read the LoRA stream as a heterogeneous domain-shift sequence rather than a correlated-concept-shift regime where the configurer would be necessary even for retention. Further details about this experiment are documented in \cref{app:lora_ablations}.
+% Head-start NLL appeared uninformative on this suite, as every method lands in the narrow band $1.22$--$1.42$, well within per-row standard deviations of $0.15$--$0.25$. Head-start can only vary across methods if prior-task adapters carry usable bias for the new task, and this six-task stream was selected for diversity rather than for known cross-task structure. The random-mask ablation shows that retention parity between FTN and random masks is the signature of domain-shift without concept-shift, matching Permuted MNIST and Rotated MNIST in the controlled suite. We therefore read the LoRA stream as a heterogeneous domain-shift sequence rather than a correlated-concept-shift regime where the configurer would be necessary even for retention. Further details about this experiment are documented in \cref{app:lora_ablations}.
 
 % =====================================================================
 \section{Discussion}\label{sec:discussion}
@@ -430,34 +453,35 @@ We instantiate SupSup~\citep{wortsman2020supermasks} on the same parallel-MLP ba
 \paragraph{Progressive Networks baseline.}
 We instantiate Progressive Networks~\citep{rusu2016progressive} on the same parallel-MLP bank. Task $t$ owns a disjoint $k$-block ``column'' covering slots $[t\cdot k,\,(t+1)\cdot k)$. During training of task $t$: (i) the parallel-MLP weights for slots outside that range are \emph{frozen} (gradients zeroed before the optimizer step), so all prior columns are untouched; (ii) the active mask is the cumulative mask $m_t = \mathbb{1}\!\left[\,\mathrm{slot} < (t+1)\cdot k\,\right]$, so the per-task readout head $W_t$ takes input from the new column \emph{and} all previously trained frozen columns (the lateral channel); (iii) only $W_t$ and the new-column slot weights receive gradient. Per-task storage is the pair $(m_t, W_t)$ where $m_t$ is the cumulative mask. At evaluation the same support-set retrieval as SupSup is used: scan stored pairs, return the lowest-support-loss pair, evaluate held-out under it. Hyperparameters match FTN ($k=512$, Adam $\mathrm{lr}=3\times10^{-4}$, no replay). For task counts up to $\lfloor H/k \rfloor = 16$ no slot wraps; the four benchmarks here use 6, 10, 10, and 12 tasks respectively, so column allocation never collides. This adaptation preserves the two defining properties of Progressive Networks (frozen prior capacity and lateral access for forward transfer); the only deviations from \citet{rusu2016progressive} are that the columns are sub-blocks of a single backbone (rather than separately allocated networks) and that we use support-set retrieval at evaluation rather than task identity, since our protocol forbids task identity.
 
-\input{sections/lora_section.tex}
+% \input{sections/lora_section.tex}
 
-\section{FTN-LoRA implementation details}\label{app:lora_impl}
+% \section{FTN-LoRA implementation details}\label{app:lora_impl}
 
-\paragraph{Backbone and bank.}
-We use Qwen2.5-1.5B-Instruct~\citep{qwen2_5_2024} loaded in bfloat16 as the frozen backbone (28 transformer layers, hidden $1536$, intermediate $8960$). The LoRA bank wraps every $\{q,k,v,o\}$ projection inside attention and every $\{up, gate, down\}$ projection inside the MLP, for a total of $196$ banked linear layers. Each banked layer carries $H=128$ rank-$r=4$ atoms with $A_j\in\mathbb{R}^{\mathrm{in}\times r}$ and $B_j\in\mathbb{R}^{r\times\mathrm{out}}$ (standard LoRA initialization: $A$ Kaiming-uniform, $B$ zero). The forward through a banked linear is
-\[
-y = W_\mathrm{base}\,x \;+\; \tfrac{\alpha}{k}\sum_{j=1}^{H} m_j\,\bigl(B_j\,A_j^\top\,x\bigr),
-\]
-with $\alpha=16$ and dropout $p=0.05$ applied to the bank input. The implementation contracts both the per-atom and rank dimensions in a single einsum (\texttt{...kr,kro$\rightarrow$...o}) so the per-atom output dimension is never materialized; without this contraction the support-set inner loop's activation memory blows up at the large MLP intermediate dimension. Total bank parameter count is $\approx\!591$M ($\approx\!39\%$ of the backbone parameters).
+% \paragraph{Backbone and bank.}
+% We use Qwen2.5-1.5B-Instruct~\citep{qwen2_5_2024} loaded in bfloat16 as the frozen backbone (28 transformer layers, hidden $1536$, intermediate $8960$). The LoRA bank wraps every $\{q,k,v,o\}$ projection inside attention and every $\{up, gate, down\}$ projection inside the MLP, for a total of $196$ banked linear layers. Each banked layer carries $H=128$ rank-$r=4$ atoms with $A_j\in\mathbb{R}^{\mathrm{in}\times r}$ and $B_j\in\mathbb{R}^{r\times\mathrm{out}}$ (standard LoRA initialization: $A$ Kaiming-uniform, $B$ zero). The forward through a banked linear is
+% \[
+% y = W_\mathrm{base}\,x \;+\; \tfrac{\alpha}{k}\sum_{j=1}^{H} m_j\,\bigl(B_j\,A_j^\top\,x\bigr),
+% \]
+% with $\alpha=16$ and dropout $p=0.05$ applied to the bank input. The implementation contracts both the per-atom and rank dimensions in a single einsum (\texttt{...kr,kro$\rightarrow$...o}) so the per-atom output dimension is never materialized; without this contraction the support-set inner loop's activation memory blows up at the large MLP intermediate dimension. Total bank parameter count is $\approx\!591$M ($\approx\!39\%$ of the backbone parameters).
 
-\paragraph{Mask configurer.}
-The same AnnealSTE configurer from \cref{app:impl} is used at the LoRA bank's slot dimension. Inner-loop count $S=3$ (vs.\ $S=30$ for the MLP suite); at the LLM scale each inner-loop forward through the model is much more expensive, and we found three iterations sufficient on the support batch. Logit learning rate is $0.5$ with SGD, zero initialization. During the inner loop we set \texttt{requires\_grad=False} on the bank and disable gradient checkpointing on the backbone (we do not need bank-weight or backbone-activation gradients; only the gradient with respect to the mask logits). This keeps the configurer's peak memory comparable to one ordinary forward.
+% \paragraph{Mask configurer.}
+% The same AnnealSTE configurer from \cref{app:impl} is used at the LoRA bank's slot dimension. Inner-loop count $S=3$ (vs.\ $S=30$ for the MLP suite); at the LLM scale each inner-loop forward through the model is much more expensive, and we found three iterations sufficient on the support batch. Logit learning rate is $0.5$ with SGD, zero initialization. During the inner loop we set \texttt{requires\_grad=False} on the bank and disable gradient checkpointing on the backbone (we do not need bank-weight or backbone-activation gradients; only the gradient with respect to the mask logits). This keeps the configurer's peak memory comparable to one ordinary forward.
 
-\paragraph{Continual-learning loop.}
-Each task is trained for $S{=}100$ gradient steps at batch size $4$ (no gradient accumulation), sequence length $384$, AdamW with $\mathrm{lr}=2{\times}10^{-4}$ and no weight decay on the bank. For FTN-LoRA, every training step runs the configurer on a fresh $4$-example support sub-batch from the current task to obtain the active mask, then takes a single gradient step on the query batch through the active atoms. The mask-overlap-filtered replay buffer holds $200$ $(x,y,m)$ triples; on every $10$-th step a random current-task example is added with its current mask, and on every step a replay sample is drawn whose stored mask has fractional overlap $\rho\in(0.1,\,0.7]$ with the current mask. Gradients on the query and replay batches are summed before the AdamW step. SeqLoRA + ER uses a uniform-random buffer of the same capacity and a single replay sample per step.
+% \paragraph{Continual-learning loop.}
+% Each task is trained for $S{=}100$ gradient steps at batch size $4$ (no gradient accumulation), sequence length $384$, AdamW with $\mathrm{lr}=2{\times}10^{-4}$ and no weight decay on the bank. For FTN-LoRA, every training step runs the configurer on a fresh $4$-example support sub-batch from the current task to obtain the active mask, then takes a single gradient step on the query batch through the active atoms. The mask-overlap-filtered replay buffer holds $200$ $(x,y,m)$ triples; on every $10$-th step a random current-task example is added with its current mask, and on every step a replay sample is drawn whose stored mask has fractional overlap $\rho\in(0.1,\,0.7]$ with the current mask. Gradients on the query and replay batches are summed before the AdamW step. SeqLoRA + ER uses a uniform-random buffer of the same capacity and a single replay sample per step.
 
-\paragraph{Task suite and prompt format.}
-Six tasks are presented in canonical order: \textbf{C-STANCE-A}~\citep{zhao2024cstance} (Chinese stance detection, three-class: Support / Against / Neutral), \textbf{Financial PhraseBank}~\citep{malo2014finphrasebank} (English finance sentiment, three-class), \textbf{TREC}~\citep{li2002trec} (English question type, six-class), \textbf{dair-ai/emotion}~\citep{saravia2018emotion} (English emotion, six-class), \textbf{AG News}~\citep{zhang2015charcnn} (English topic, four-class), \textbf{DBpedia~14}~\citep{zhang2015charcnn} (English ontology, fourteen-class). The suite is selected to span heterogeneity along language (Chinese and English), label-space size ($2$ to $14$ classes), and domain (social-media stance, finance, question-type taxonomy, emotion lexicon, news topic, ontology). It is an assembled continual-classification benchmark, not a replication of any prior named benchmark. Per task we use $400$ training examples, $100$ evaluation examples, and a fixed $16$-example labeled support set; train and eval are stratified across labels for class-balanced sampling. Every example is wrapped in the Qwen2.5 chat template with a fixed system message and the loss is masked to the answer tokens (the prompt receives no gradient signal).
+% \paragraph{Task suite and prompt format.}
+% Six tasks are presented in canonical order: \textbf{C-STANCE-A}~\citep{zhao2024cstance} (Chinese stance detection, three-class: Support / Against / Neutral), \textbf{Financial PhraseBank}~\citep{malo2014finphrasebank} (English finance sentiment, three-class), \textbf{TREC}~\citep{li2002trec} (English question type, six-class), \textbf{dair-ai/emotion}~\citep{saravia2018emotion} (English emotion, six-class), \textbf{AG News}~\citep{zhang2015charcnn} (English topic, four-class), \textbf{DBpedia~14}~\citep{zhang2015charcnn} (English ontology, fourteen-class). The suite is selected to span heterogeneity along language (Chinese and English), label-space size ($2$ to $14$ classes), and domain (social-media stance, finance, question-type taxonomy, emotion lexicon, news topic, ontology). It is an assembled continual-classification benchmark, not a replication of any prior named benchmark. Per task we use $400$ training examples, $100$ evaluation examples, and a fixed $16$-example labeled support set; train and eval are stratified across labels for class-balanced sampling. Every example is wrapped in the Qwen2.5 chat template with a fixed system message and the loss is masked to the answer tokens (the prompt receives no gradient signal).
 
-\paragraph{Metrics.}
-We report final accuracy (ACC), forgetting measure (FM), and backward transfer (BWT) on the lower-triangular performance matrix $R[i,j]$ with the same definitions as \cref{sec:experiments}. Accuracy is the exact-match accuracy on the first answer token; head-start NLL is the answer-token negative log likelihood on a held-out batch, computed with the configurer's selected mask (or the method's eval-time mask for retrieval baselines) before any gradient update on the new task. We use $64$ held-out examples for head-start. Five seeds per method; the controlled MLP results in \cref{sec:experiments} (5--8 seeds across the same comparator family) provide the broader reliability claim, and the LoRA per-method standard deviations (\cref{tab:lora_main}) are accordingly indicative rather than tight confidence intervals.
+% \paragraph{Metrics.}
+% We report final accuracy (ACC), forgetting measure (FM), and backward transfer (BWT) on the lower-triangular performance matrix $R[i,j]$ with the same definitions as \cref{sec:experiments}. Accuracy is the exact-match accuracy on the first answer token; head-start NLL is the answer-token negative log likelihood on a held-out batch, computed with the configurer's selected mask (or the method's eval-time mask for retrieval baselines) before any gradient update on the new task. We use $64$ held-out examples for head-start. Five seeds per method; the controlled MLP results in \cref{sec:experiments} (5--8 seeds across the same comparator family) provide the broader reliability claim, and the LoRA per-method standard deviations (\cref{tab:lora_main}) are accordingly indicative rather than tight confidence intervals.
 
-\paragraph{Compute footprint.}
-Each method completes the six-task sequence in $4$--$8$ minutes (non-FTN methods) or $25$--$30$ minutes (FTN-LoRA family, which adds $S=3$ inner-loop forward/backward passes through the model per training step) on a single 80\,GiB H100. Eight methods $\times$ one seed therefore fit on eight GPUs in parallel.
+% \paragraph{Compute footprint.}
+% Each method completes the six-task sequence in $4$--$8$ minutes (non-FTN methods) or $25$--$30$ minutes (FTN-LoRA family, which adds $S=3$ inner-loop forward/backward passes through the model per training step) on a single 80\,GiB H100. Eight methods $\times$ one seed therefore fit on eight GPUs in parallel.
 
-\paragraph{Datasets, libraries, and licenses.}
-The MNIST suite~\citep{lecun1998mnist} is used under its standard academic terms (CC BY-SA 3.0). The LoRA-bank experiment uses six public Hugging Face datasets, loaded via the \texttt{datasets} library~\citep{lhoest2021datasets}: C-STANCE-A~\citep{zhao2024cstance} (MIT), Financial PhraseBank~\citep{malo2014finphrasebank} (CC BY-NC-SA 3.0), TREC~\citep{li2002trec} (no explicit license; standard academic use), dair-ai/emotion~\citep{saravia2018emotion} (CC BY 4.0; research-only redistribution), AG News~\citep{zhang2015charcnn} (custom, academic non-commercial), and DBpedia~14~\citep{zhang2015charcnn} (CC BY-SA 3.0). The Qwen2.5-1.5B-Instruct backbone~\citep{qwen2_5_2024} is used as released under the Qwen Research License with the bank's training restricted to the LoRA atoms (the backbone is frozen). Code is built on PyTorch~\citep{paszke2019pytorch} (BSD-3-Clause) and Hugging Face Transformers~\citep{wolf2020transformers} (Apache 2.0). All assets are used within their respective licenses; no scraping or non-public data is involved.
+% \paragraph{Datasets, libraries, and licenses.}
+% The MNIST suite~\citep{lecun1998mnist} is used under its standard academic terms (CC BY-SA 3.0).
+%  The LoRA-bank experiment uses six public Hugging Face datasets, loaded via the \texttt{datasets} library~\citep{lhoest2021datasets}: C-STANCE-A~\citep{zhao2024cstance} (MIT), Financial PhraseBank~\citep{malo2014finphrasebank} (CC BY-NC-SA 3.0), TREC~\citep{li2002trec} (no explicit license; standard academic use), dair-ai/emotion~\citep{saravia2018emotion} (CC BY 4.0; research-only redistribution), AG News~\citep{zhang2015charcnn} (custom, academic non-commercial), and DBpedia~14~\citep{zhang2015charcnn} (CC BY-SA 3.0). The Qwen2.5-1.5B-Instruct backbone~\citep{qwen2_5_2024} is used as released under the Qwen Research License with the bank's training restricted to the LoRA atoms (the backbone is frozen). Code is built on PyTorch~\citep{paszke2019pytorch} (BSD-3-Clause) and Hugging Face Transformers~\citep{wolf2020transformers} (Apache 2.0). All assets are used within their respective licenses; no scraping or non-public data is involved.
 
 \section{Per-task performance matrix snapshots}\label{app:perf}
 We include the lower-triangular performance matrices $R$ at the default configuration on both task families.
@@ -560,7 +584,6 @@ The support size used by the configurer affects transfer more than retention (\c
 \caption{Head-start loss, FM, BWT, and sharing fidelity versus support-set size on the correlated synthetic family over 8 seeds. The per-task head-start curve shows how forward transfer evolves as the bank fills out across tasks. Detailed tables are in \cref{app:ablation_tables}.}
 \label{fig:exp5}
 \end{figure}
-
 
 
 \section{Primary configurer sweep}\label{app:primary_sweep}

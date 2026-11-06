@@ -499,7 +499,7 @@ class Default:
     SEED = 123
 
     # ---- Data generator: shared (both TASK values) ----
-    N_TASK = 3      # number of continual-learning tasks
+    N_TASK = 16      # number of continual-learning tasks
     T = 256                  # samples generated per task batch
 
     # ---- Data generator: sine (TASK == "sine") ----
@@ -522,7 +522,7 @@ class Default:
     DOMAIN_PER_TASK_PROJECTION = False
 
     # Data sizes
-    TRAIN_DURATION = 500
+    TRAIN_DURATION = 2000
     N_EPOCHS = 1
     N_EVAL_EPOCHS = 1
 
@@ -1976,3 +1976,30 @@ class SpatialPermuteRandomCenter(Default):
     SPATIAL_PERMUTE = True
     SPATIAL_PERMUTE_INIT = "random_blobs"
     SPATIAL_PERMUTE_CENTER = 0.25
+
+
+class PAPER_SETTINGS(Default):
+    TRAIN_DURATION=2000
+    N_TASK=16
+    RENDER_STEPS=False
+
+class PAPER_MLP(Default):
+    RECONFIG_STEPS=0
+    SQUARE_DIM=16
+    K=256
+    RECONFIG_EVERY=0
+    RECONFIG_REACTIVE=False
+
+class PAPER_MLP(Default):
+    RECONFIG_STEPS=0
+    SQUARE_DIM=16
+    K=256
+    RECONFIG_EVERY=0
+    RECONFIG_REACTIVE=False
+
+
+class PAPER_FTN_BASE(Default):
+    ARCHITECTURE="base"
+
+class PAPER_FTN_BASE(LoRA):
+    ARCHITECTURE="lora"

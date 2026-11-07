@@ -1978,9 +1978,10 @@ class SpatialPermuteRandomCenter(Default):
     SPATIAL_PERMUTE_CENTER = 0.25
 
 class PAPER_SETTINGS(Default):
-    TRAIN_DURATION=2000
+    TRAIN_DURATION=500
     N_TASK=16
     RENDER_STEPS=False
+    RECONFIG_EVERY=4
 
 class PAPER_MLP(Default):
     RECONFIG_STEPS=1

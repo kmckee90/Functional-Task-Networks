@@ -1977,18 +1977,10 @@ class SpatialPermuteRandomCenter(Default):
     SPATIAL_PERMUTE_INIT = "random_blobs"
     SPATIAL_PERMUTE_CENTER = 0.25
 
-
 class PAPER_SETTINGS(Default):
     TRAIN_DURATION=2000
     N_TASK=16
     RENDER_STEPS=False
-
-class PAPER_MLP(Default):
-    RECONFIG_STEPS=0
-    SQUARE_DIM=16
-    K=256
-    RECONFIG_EVERY=0
-    RECONFIG_REACTIVE=False
 
 class PAPER_MLP(Default):
     RECONFIG_STEPS=1
@@ -1997,9 +1989,8 @@ class PAPER_MLP(Default):
     RECONFIG_EVERY=0
     RECONFIG_REACTIVE=False
 
-
 class PAPER_FTN_BASE(Default):
     ARCHITECTURE="base"
 
-class PAPER_FTN_BASE(LoRA):
+class PAPER_FTN_LORA(LoRA):
     ARCHITECTURE="lora"
